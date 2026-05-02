@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+
+members = [
+  "crates/doc-model",
+  "crates/math-render",
+  "crates/arxiv-render",
+  "crates/block-reader",
+  "crates/ui-theme",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "AGPL-3.0"
+
+[workspace.lints.rust]
+unused_parens = "allow"
+
+[workspace.lints.clippy]
+needless_return = "allow"
+implicit_saturating_sub = "allow"
+single_component_path_imports = "allow"

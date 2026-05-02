@@ -1,0 +1,22 @@
+[package]
+name = "arxiv-render"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "arxiv_render"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arxiv-render"
+path = "src/main.rs"
+
+[dependencies]
+doc-model = { path = "../doc-model" }
+math-render = { path = "../math-render" }
+flate2 = "1"
+tar = "0.4"
+reqwest = { version = "0.12", features = ["blocking"] }
+textwrap = "0.16"
+serde_json = "1"
+tempfile = "3"

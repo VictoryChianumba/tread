@@ -1,0 +1,9 @@
+{
+  "name": "arxiv-math-render",
+  "version": "1.0.0",
+  "description": "KaTeX math sidecar for arxiv-reader",
+  "main": "math_render.js",
+  "dependencies": {
+    "katex": "^0.16.0"
+  }
+}
