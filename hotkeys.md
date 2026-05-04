@@ -103,7 +103,7 @@ Highlights persist across sessions and survive terminal resize (stored at block-
 
 ## Cross-references and citations
 
-Section/figure/table refs and bibliography citations render in the link colour with an underline. Place the cursor on one and:
+Section/figure/table refs and bibliography citations render with an underline (same treatment as external URLs). Phrases like "Table 3" and "Section 6.2" are uniformly styled — the prefix word is included, not just the number. Place the cursor on one and:
 
 | Key | Action |
 |---|---|

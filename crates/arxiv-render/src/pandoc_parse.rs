@@ -719,6 +719,53 @@ fn extract_caption_text(cap: &Value) -> String {
 
 // ── Inline walkers ────────────────────────────────────────────────────────────
 
+/// LaTeX prefix words that typically introduce a `\ref{...}` and should
+/// share its link styling — so "Table 3", "Figure 4", "Section 6.1"
+/// render as cohesive linked phrases instead of "(prose) (linked-number)".
+/// Case-insensitive match; trailing dot on abbreviations matched.
+const REF_PREFIX_WORDS: &[&str] = &[
+    "table", "tab.", "tab",
+    "figure", "fig.", "fig",
+    "section", "sec.", "sec",
+    "equation", "eq.", "eq",
+    "algorithm", "alg.", "alg",
+    "theorem", "thm.", "thm",
+    "lemma", "lem.",
+    "chapter", "chap.",
+    "appendix", "app.",
+    "definition", "def.",
+    "proposition", "prop.",
+    "corollary", "cor.",
+];
+
+/// Walk backward through `out` from the tail.  If the most recent prose
+/// is whitespace followed by a span whose stripped text exactly matches
+/// a `REF_PREFIX_WORDS` entry (case-insensitive), set `link_target` on
+/// both that span and the whitespace span so a phrase like "Table 3"
+/// gets uniform link styling.
+fn extend_link_back_to_prefix(out: &mut [InlineSpan], target: &LinkTarget) {
+    if out.is_empty() { return; }
+    let mut idx = out.len();
+    // Skip an optional trailing whitespace span.
+    if idx > 0 && out[idx - 1].text.trim().is_empty() {
+        idx -= 1;
+    }
+    if idx == 0 { return; }
+    let candidate = &out[idx - 1];
+    let trimmed = candidate.text.trim().to_ascii_lowercase();
+    if !REF_PREFIX_WORDS.contains(&trimmed.as_str()) {
+        return;
+    }
+    // Both the candidate and any whitespace span between it and the
+    // forthcoming link get the link target.
+    if out[idx - 1].link_target.is_none() {
+        out[idx - 1].link_target = Some(target.clone());
+    }
+    if idx < out.len() && out[idx].link_target.is_none() {
+        out[idx].link_target = Some(target.clone());
+    }
+}
+
 fn walk_inlines_text(inlines: &[Value]) -> String {
     walk_inlines_spans(inlines)
         .into_iter()
@@ -844,6 +891,17 @@ fn walk_inlines_spans(inlines: &[Value]) -> Vec<InlineSpan> {
                     .strip_prefix('#')
                     .filter(|a| !a.is_empty())
                     .map(|a| LinkTarget::Internal(a.to_string()));
+
+                // For internal refs, papers typically write "Table~\ref{X}",
+                // and Pandoc emits ["Table", " ", Link("3")].  Without
+                // back-propagation, only "3" is styled — "Table 3" looks
+                // half-linked.  Walk backward through whitespace and into
+                // the previous prose span; if it ends with a known ref
+                // prefix word, extend the link styling to cover it.
+                if let Some(target) = &internal {
+                    extend_link_back_to_prefix(&mut out, target);
+                }
+
                 if let Some(inner) = c[1].as_array() {
                     for mut span in walk_inlines_spans(inner) {
                         if span.url.is_none() {
@@ -872,27 +930,33 @@ fn walk_inlines_spans(inlines: &[Value]) -> Vec<InlineSpan> {
 
             "Cite" => {
                 // c = [citations, fallback_inlines]
-                // Citations is an array of citation objects each with a
-                // `citationId` field — the BibTeX cite-key.  We tag the
-                // emitted spans with `LinkTarget::Citation(key)` for
-                // jump-to-bib / popup behaviour.  When multiple keys share
-                // one rendered region (e.g. `[1, 2]`), we use the first
-                // key — granularity beyond that requires per-citation
-                // span splitting which Pandoc doesn't expose directly.
-                let key: Option<String> = c[0].as_array()
-                    .and_then(|cs| cs.first())
-                    .and_then(|cit| cit["citationId"].as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string());
-                if let Some(inner) = c[1].as_array() {
-                    for mut span in walk_inlines_spans(inner) {
-                        if span.link_target.is_none() {
-                            if let Some(k) = &key {
-                                span.link_target = Some(LinkTarget::Citation(k.clone()));
-                            }
-                        }
-                        out.push(span);
+                // Without `--citeproc`, Pandoc leaves the fallback as raw
+                // LaTeX (e.g. RawInline "\\citep{X}") which we'd render as
+                // nothing — citations would silently disappear.  Instead
+                // we render the cite-keys ourselves: `[key]` or
+                // `[key1, key2]` for multi-cite, styled as a link to the
+                // bibliography.  `LinkTarget::Citation` carries the
+                // *first* key; the popup/jump uses that one.
+                let keys: Vec<String> = c[0]
+                    .as_array()
+                    .map(|cs| {
+                        cs.iter()
+                            .filter_map(|cit| cit["citationId"].as_str().map(|s| s.to_string()))
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if keys.is_empty() {
+                    // No citation keys — fall back to the inner inlines
+                    // (RawInline most likely; produces nothing visible
+                    // but won't crash).
+                    if let Some(inner) = c[1].as_array() {
+                        out.extend(walk_inlines_spans(inner));
                     }
+                } else {
+                    let primary = keys[0].clone();
+                    let rendered = format!("[{}]", keys.join(", "));
+                    out.push(InlineSpan::citation(rendered, primary));
                 }
             }
 

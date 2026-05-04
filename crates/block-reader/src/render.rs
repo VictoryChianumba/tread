@@ -288,9 +288,8 @@ fn render_visual_line<'a>(
             style = style.add_modifier(Modifier::UNDERLINED);
           }
           if s.link_target.is_some() {
-            // Internal refs / citations get the link foreground colour
-            // and underline so they're visibly clickable.
-            style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
+            // Underline-only — see note in `apply_styled_cursor`.
+            style = style.add_modifier(Modifier::UNDERLINED);
           }
           Span::styled(s.text.clone(), style)
         }).collect();
@@ -415,7 +414,11 @@ fn overlay_highlights_styled(
     if let Some((r, g, b)) = ispan.color { style = style.fg(Color::Rgb(r, g, b)); }
     if ispan.url.is_some() { style = style.add_modifier(Modifier::UNDERLINED); }
     if ispan.link_target.is_some() {
-      style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
+      // Underline-only — same visual treatment as external URLs.  We
+      // tried tinting with a dedicated `link_fg` colour but it read as
+      // distracting; underline alone is enough to mark interactive
+      // text without bright shifts in body prose.
+      style = style.add_modifier(Modifier::UNDERLINED);
     }
 
     // Cut points within this span (in absolute vl-byte coords).
@@ -556,7 +559,11 @@ fn apply_styled_cursor(
     if let Some((r, g, b)) = ispan.color { style = style.fg(Color::Rgb(r, g, b)); }
     if ispan.url.is_some() { style = style.add_modifier(Modifier::UNDERLINED); }
     if ispan.link_target.is_some() {
-      style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
+      // Underline-only — same visual treatment as external URLs.  We
+      // tried tinting with a dedicated `link_fg` colour but it read as
+      // distracting; underline alone is enough to mark interactive
+      // text without bright shifts in body prose.
+      style = style.add_modifier(Modifier::UNDERLINED);
     }
 
     if !cursor_painted && safe_col >= span_start && safe_col < span_end {
