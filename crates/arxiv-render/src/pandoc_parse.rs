@@ -205,10 +205,12 @@ fn extract_author_names(author_meta: &Value) -> Vec<String> {
 /// without a prefix. Mirrors the legacy parser convention at `parse.rs:805`.
 struct SectionCounters {
     sec: [u32; 3],
+    table: u32,
+    figure: u32,
 }
 
 impl SectionCounters {
-    fn new() -> Self { Self { sec: [0; 3] } }
+    fn new() -> Self { Self { sec: [0; 3], table: 0, figure: 0 } }
 
     /// Increment the counter at `level` (1–3) and reset deeper levels.
     /// Returns the formatted prefix string, e.g. "2", "2.1", "2.1.3".
@@ -221,6 +223,18 @@ impl SectionCounters {
             2 => format!("{}.{}", self.sec[0], self.sec[1]),
             _ => format!("{}.{}.{}", self.sec[0], self.sec[1], self.sec[2]),
         }
+    }
+
+    /// Increment table counter, return new number for the caption.
+    fn bump_table(&mut self) -> u32 {
+        self.table += 1;
+        self.table
+    }
+
+    /// Increment figure counter, return new number for the caption.
+    fn bump_figure(&mut self) -> u32 {
+        self.figure += 1;
+        self.figure
     }
 }
 
@@ -335,7 +349,7 @@ fn walk_blocks(
                 }
             }
 
-            "Table" => out.extend(parse_table(c, specs)),
+            "Table" => out.extend(parse_table(c, specs, counters)),
 
             "Div" => {
                 // c = [attr, [blocks]].  attr.id may carry a label
@@ -356,8 +370,12 @@ fn walk_blocks(
             "Figure" => {
                 // c = [attr, caption, [blocks]]
                 let cap = extract_caption_text(&c[1]);
+                let n = counters.bump_figure();
                 if !cap.is_empty() {
-                    out.push(Block::Line(format!("[Figure: {cap}]")));
+                    out.push(Block::Line(format!("[Figure {n}: {cap}]")));
+                    out.push(Block::Blank);
+                } else {
+                    out.push(Block::Line(format!("[Figure {n}]")));
                     out.push(Block::Blank);
                 }
             }
@@ -458,7 +476,7 @@ fn list_item_blocks(
 
 // ── Table parsing ─────────────────────────────────────────────────────────────
 
-fn parse_table(c: &Value, specs: &mut Vec<TableSpec>) -> Vec<Block> {
+fn parse_table(c: &Value, specs: &mut Vec<TableSpec>, counters: &mut SectionCounters) -> Vec<Block> {
     // Pandoc 3.x: c = [attr, caption, colspec, head, [bodies…], foot]
     let mut out = Vec::new();
 
@@ -502,12 +520,15 @@ fn parse_table(c: &Value, specs: &mut Vec<TableSpec>) -> Vec<Block> {
     let head_size = head_rows.len();
     let total_rows = head_size + data_rows.len();
 
+    // Bump the table counter regardless of caption presence so numbering
+    // stays consistent even for caption-less tables.
+    let n = counters.bump_table();
     // Caption goes ABOVE the table (academic convention for tables;
-    // figures are the opposite, caption below).  Emitted as the first
-    // block so the whole [Caption, Rule, Matrix, ...] group can be lifted
-    // as a unit by future placement passes.
+    // figures are the opposite, caption below).  Format: "[Table N: …]".
     if !caption.is_empty() {
-        out.push(Block::Line(format!("[Table: {caption}]")));
+        out.push(Block::Line(format!("[Table {n}: {caption}]")));
+    } else {
+        out.push(Block::Line(format!("[Table {n}]")));
     }
 
     if !head_rows.is_empty() {

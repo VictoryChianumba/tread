@@ -127,13 +127,20 @@ fn identify_groups(blocks: &[Block]) -> Vec<GroupRange> {
     }
     let mut start = i;
     // Capture preceding caption line (placed above the table since the
-    // caption-above convention).
+    // caption-above convention).  Newer caption format is "[Table N:".
     if start > 0 {
       if let Block::Line(s) = &blocks[start - 1] {
-        if s.starts_with("[Table:") {
+        if s.starts_with("[Table") {
           start -= 1;
         }
       }
+    }
+    // Capture any preceding `Block::Anchor` (the table's `\label`
+    // marker emitted from a Pandoc Div with id="tab:X") so it travels
+    // with the lifted table — without this, references to the table
+    // resolve to whatever block the orphaned anchor ends up next to.
+    while start > 0 && matches!(blocks[start - 1], Block::Anchor(_)) {
+      start -= 1;
     }
     // Walk forward through Rule/Matrix sequence.
     let mut end = i;
@@ -191,19 +198,34 @@ fn block_prose_text(block: &Block) -> String {
 
 /// Normalise prose text into the same shape as the PDF anchor phrase:
 /// lowercase ASCII letters separated by single spaces, dropping digits,
-/// punctuation, math, and accented forms.  The anchor phrase produced by
-/// `pdf_anchors::first_n_words` already uses this representation, so a
-/// `normalised.contains(phrase)` check is the matching criterion.
+/// punctuation, math, accented forms, and any content within `[...]`
+/// brackets (citations, ref-tags).  The PDF-anchor side rendered numeric
+/// citations as digits which were already dropped — but the LaTeX side
+/// renders citations as `[cite-key]` whose alphabetic key would otherwise
+/// interrupt the anchor phrase match.  Stripping bracket groups makes
+/// both sides converge to the same alpha-only form.
 fn normalise(text: &str) -> String {
   let mut out = String::with_capacity(text.len());
   let mut prev_space = true;
+  let mut depth: i32 = 0;
   for ch in text.chars() {
-    if ch.is_ascii_alphabetic() {
-      out.push(ch.to_ascii_lowercase());
-      prev_space = false;
-    } else if !prev_space {
-      out.push(' ');
-      prev_space = true;
+    match ch {
+      '[' => {
+        depth += 1;
+        if !prev_space { out.push(' '); prev_space = true; }
+      }
+      ']' if depth > 0 => {
+        depth -= 1;
+        if !prev_space { out.push(' '); prev_space = true; }
+      }
+      _ if depth > 0 => { /* inside brackets — skip */ }
+      c if c.is_ascii_alphabetic() => {
+        out.push(c.to_ascii_lowercase());
+        prev_space = false;
+      }
+      _ => {
+        if !prev_space { out.push(' '); prev_space = true; }
+      }
     }
   }
   if out.ends_with(' ') {

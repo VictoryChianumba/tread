@@ -14,6 +14,7 @@ use crossterm::{
   terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use doc_model::Block;
+use std::collections::HashMap;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use commands::{CmdCtx, CommandResult};
@@ -27,17 +28,19 @@ pub fn run(
   blocks: Vec<Block>,
   meta: Option<PaperMeta>,
   progress_key: Option<String>,
+  bibitems: HashMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
   // Resolve theme via the new config layer: respect override, else follow
   // trench's theme, else fall back to the built-in dark default.
   let theme = config::resolve_theme();
-  run_with_theme(blocks, meta, progress_key, theme)
+  run_with_theme(blocks, meta, progress_key, bibitems, theme)
 }
 
 pub fn run_with_theme(
   blocks: Vec<Block>,
   meta: Option<PaperMeta>,
   progress_key: Option<String>,
+  bibitems: HashMap<String, String>,
   theme: Theme,
 ) -> Result<(), Box<dyn std::error::Error>> {
   enable_raw_mode()?;
@@ -54,7 +57,7 @@ pub fn run_with_theme(
   let mut terminal = Terminal::new(backend)?;
 
   let size = terminal.size()?;
-  let mut reader = Reader::new(blocks, size.width as usize, size.height as usize);
+  let mut reader = Reader::new_with_bibitems(blocks, size.width as usize, size.height as usize, bibitems);
   reader.meta = meta;
 
   // Restore reading progress and bookmarks.

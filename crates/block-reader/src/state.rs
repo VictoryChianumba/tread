@@ -135,10 +135,25 @@ pub struct Reader {
 
 impl Reader {
   pub fn new(blocks: Vec<Block>, width: usize, height: usize) -> Self {
+    Self::new_with_bibitems(blocks, width, height, HashMap::new())
+  }
+
+  pub fn new_with_bibitems(
+    blocks: Vec<Block>,
+    width: usize,
+    height: usize,
+    bibitems: HashMap<String, String>,
+  ) -> Self {
     let cw = content_width_for(width, false);
     let visual_lines = build_visual_lines(&blocks, cw);
     let sections = build_sections(&visual_lines);
-    let (label_lines, bib_entries, bib_entry_lines) = build_link_indexes(&blocks, &visual_lines);
+    let (label_lines, mut bib_entries, bib_entry_lines) = build_link_indexes(&blocks, &visual_lines);
+    // Pre-scanned bibitems from source override anything we picked up via
+    // Block::Anchor("ref-…") — Pandoc's bibliography Paras don't carry
+    // cite-keys, so this is the authoritative source.
+    for (k, v) in bibitems {
+      bib_entries.insert(k, v);
+    }
     Self {
       blocks,
       visual_lines,

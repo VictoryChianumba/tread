@@ -4,5 +4,5 @@ pub mod parse;
 pub mod pdf_anchors;
 pub mod placement;
 
-pub use parse::to_blocks;
+pub use parse::{extract_bibitems, to_blocks};
 pub use placement::lift_tables;

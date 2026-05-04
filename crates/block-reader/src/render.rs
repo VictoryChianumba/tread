@@ -210,15 +210,16 @@ fn render_visual_line<'a>(
     }
 
     VisualLineKind::MatrixLine { is_header, .. } => {
-      // Cell content uses the body text colour (bold on headers); the
-      // box-drawing chars (│ ┬ ┼ ┴ ├ ┤ ┌ ┐ └ ┘ ─) are repainted with the
-      // dimmer `t.rule` colour so vertical rules visually match horizontal
-      // ones. Without this split, ratatui paints the whole line with the
-      // cell style and the verticals look brighter (and bold on headers).
+      // Cell content inherits the terminal's default foreground (matches
+      // prose).  Setting `.fg(t.text)` explicitly was making cells dimmer
+      // than surrounding prose because `t.text` is slightly off-white
+      // while terminal defaults are typically pure white.  Box-drawing
+      // chars (│ ┬ ┼ ┴ ├ ┤ ┌ ┐ └ ┘ ─) keep `t.rule` so vertical rules
+      // visually match horizontal ones without overwhelming the cells.
       let cell_style = if *is_header {
-        base_style.fg(t.text).add_modifier(Modifier::BOLD)
+        base_style.add_modifier(Modifier::BOLD)
       } else {
-        base_style.fg(t.text)
+        base_style
       };
       let rule_style = base_style.fg(t.rule);
       // When the cursor is on this row, walk char-by-char and emit each
@@ -288,8 +289,7 @@ fn render_visual_line<'a>(
             style = style.add_modifier(Modifier::UNDERLINED);
           }
           if s.link_target.is_some() {
-            // Underline-only — see note in `apply_styled_cursor`.
-            style = style.add_modifier(Modifier::UNDERLINED);
+            style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
           }
           Span::styled(s.text.clone(), style)
         }).collect();
@@ -414,11 +414,11 @@ fn overlay_highlights_styled(
     if let Some((r, g, b)) = ispan.color { style = style.fg(Color::Rgb(r, g, b)); }
     if ispan.url.is_some() { style = style.add_modifier(Modifier::UNDERLINED); }
     if ispan.link_target.is_some() {
-      // Underline-only — same visual treatment as external URLs.  We
-      // tried tinting with a dedicated `link_fg` colour but it read as
-      // distracting; underline alone is enough to mark interactive
-      // text without bright shifts in body prose.
-      style = style.add_modifier(Modifier::UNDERLINED);
+      // Refs / citations get `t.link_fg` + underline so they're visibly
+      // clickable in body prose.  Combined with the prefix-word
+      // back-extension in pandoc_parse, phrases like "Table 3" /
+      // "Section 6.2" colour uniformly across the whole label.
+      style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
     }
 
     // Cut points within this span (in absolute vl-byte coords).
@@ -559,11 +559,11 @@ fn apply_styled_cursor(
     if let Some((r, g, b)) = ispan.color { style = style.fg(Color::Rgb(r, g, b)); }
     if ispan.url.is_some() { style = style.add_modifier(Modifier::UNDERLINED); }
     if ispan.link_target.is_some() {
-      // Underline-only — same visual treatment as external URLs.  We
-      // tried tinting with a dedicated `link_fg` colour but it read as
-      // distracting; underline alone is enough to mark interactive
-      // text without bright shifts in body prose.
-      style = style.add_modifier(Modifier::UNDERLINED);
+      // Refs / citations get `t.link_fg` + underline so they're visibly
+      // clickable in body prose.  Combined with the prefix-word
+      // back-extension in pandoc_parse, phrases like "Table 3" /
+      // "Section 6.2" colour uniformly across the whole label.
+      style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
     }
 
     if !cursor_painted && safe_col >= span_start && safe_col < span_end {

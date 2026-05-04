@@ -27,6 +27,12 @@ fn main() {
 
   eprintln!("found {} .tex file(s); parsing ...", sources.len());
 
+  // Pre-scan source for `\bibitem{key}` entries so citations can pop up
+  // their bib record on `K`/`Shift+Enter` even when Pandoc's AST doesn't
+  // carry cite-keys down to the rendered bibliography paragraphs.
+  let bibitems = arxiv_render::extract_bibitems(&sources);
+  eprintln!("parsed {} bibitem entries from source", bibitems.len());
+
   let blocks = parse::to_blocks(sources);
 
   // Best-effort PDF anchor extraction.  Tables are floats — their source
@@ -50,7 +56,7 @@ fn main() {
 
   eprintln!("{} blocks — launching reader ...", blocks.len());
 
-  if let Err(e) = block_reader::run(blocks, None, Some(id)) {
+  if let Err(e) = block_reader::run(blocks, None, Some(id), bibitems) {
     eprintln!("reader error: {e}");
     std::process::exit(1);
   }

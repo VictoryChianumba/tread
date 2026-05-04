@@ -93,6 +93,92 @@ const TABULAR_ENVS: &[&str] = &[
   "tabular", "tabular*", "longtable", "tabularx", "tabulary", "array",
 ];
 
+/// Pre-scan all source files for `\bibitem{key}…` entries.  Pandoc's
+/// AST surfaces bibliography paragraphs but doesn't carry cite-keys
+/// down to them, so we scrape them ourselves.  Used to populate the
+/// reader's bib-entry popups.
+pub fn extract_bibitems(sources: &[(String, String)]) -> HashMap<String, String> {
+  let mut out = HashMap::new();
+  for (_, content) in sources {
+    let bytes = content.as_bytes();
+    let mut i = 0;
+    while i + 8 < bytes.len() {
+      if &bytes[i..i + 8] != b"\\bibitem" {
+        i += 1;
+        continue;
+      }
+      let mut j = i + 8;
+      // Optional [label] argument.
+      if j < bytes.len() && bytes[j] == b'[' {
+        if let Some(close) = (j..bytes.len()).find(|&k| bytes[k] == b']') {
+          j = close + 1;
+        }
+      }
+      if j >= bytes.len() || bytes[j] != b'{' {
+        i = j;
+        continue;
+      }
+      let key_start = j + 1;
+      let key_end = match (key_start..bytes.len()).find(|&k| bytes[k] == b'}') {
+        Some(p) => p,
+        None => break,
+      };
+      let key = match std::str::from_utf8(&bytes[key_start..key_end]) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => { i = key_end + 1; continue; }
+      };
+      let entry_start = key_end + 1;
+      // Entry runs until next \bibitem, \end{thebibliography}, or EOF.
+      let entry_end = (entry_start..bytes.len())
+        .find(|&k| {
+          bytes[k..].starts_with(b"\\bibitem")
+            || bytes[k..].starts_with(b"\\end{thebibliography}")
+        })
+        .unwrap_or(bytes.len());
+      let raw = &content[entry_start..entry_end];
+      let cleaned = clean_bibitem_text(raw);
+      if !key.is_empty() && !cleaned.is_empty() {
+        out.insert(key, cleaned);
+      }
+      i = entry_end;
+    }
+  }
+  out
+}
+
+/// Strip LaTeX commands and collapse whitespace from a bibitem entry.
+fn clean_bibitem_text(raw: &str) -> String {
+  let mut out = String::with_capacity(raw.len());
+  let mut chars = raw.chars().peekable();
+  while let Some(c) = chars.next() {
+    match c {
+      '\\' => {
+        // Skip a command name and any immediate brace group.
+        while let Some(&next) = chars.peek() {
+          if next.is_ascii_alphabetic() || next == '*' { chars.next(); } else { break; }
+        }
+        // Skip a single brace group following the command (e.g. \em{...}).
+        if let Some(&'{') = chars.peek() {
+          chars.next();
+          let mut depth = 1;
+          for inner in chars.by_ref() {
+            match inner {
+              '{' => depth += 1,
+              '}' => { depth -= 1; if depth == 0 { break; } }
+              _ => out.push(inner),
+            }
+          }
+        }
+      }
+      '{' | '}' | '~' => { out.push(' '); }
+      '\n' => { out.push(' '); }
+      _ => out.push(c),
+    }
+  }
+  // Collapse whitespace runs.
+  out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Convert a set of `.tex` source files into a semantic block document.
 pub fn to_blocks(sources: Vec<(String, String)>) -> Vec<Block> {
   // Try Pandoc first — better LaTeX coverage, handles multi-file \input{}, etc.
