@@ -108,8 +108,7 @@ Section/figure/table refs and bibliography citations render with an underline (s
 | Key | Action |
 |---|---|
 | `Enter` | Jump to the labeled element (one line above so it's fully visible). Cite jumps to the bib entry. `Ctrl+O` rewinds. |
-| `K` | Popup the bib entry text without leaving your reading position. Citation-only. |
-| `Shift+Enter` | Same as `K`, on terminals that support the kitty keyboard protocol (Kitty, WezTerm, Ghostty). On terminals without protocol support, this falls through to `Enter`. |
+| `Shift+Enter` | Popup the bib entry text without leaving your reading position. Citation-only. Requires the kitty keyboard protocol (Kitty, WezTerm, Ghostty, iTerm2 3.5+); on terminals without protocol support, falls through to `Enter`. |
 
 Internal refs that point to elements we don't index yet (e.g. equation labels) are silent no-ops on `Enter`.
 

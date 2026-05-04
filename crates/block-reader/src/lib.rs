@@ -260,7 +260,8 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
     KeyCode::Char('(') => { let n = take_count(reader); for _ in 0..n { reader.nav_sentence_back(); } reader.remember_column(); }
     // Cross-reference / citation actions.  `Enter` jumps to the link
     // target under the cursor (no-op if not on a link); `Shift+Enter`
-    // and `K` show a citation popup instead of jumping.
+    // shows a citation popup instead of jumping.  Shift+Enter requires
+    // the kitty keyboard protocol — opted into in `run_with_theme`.
     KeyCode::Enter if mods.contains(KeyModifiers::SHIFT) => {
       reader.count_buf.clear();
       popup_citation_at_cursor(reader);
@@ -268,10 +269,6 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
     KeyCode::Enter => {
       reader.count_buf.clear();
       follow_link_at_cursor(reader);
-    }
-    KeyCode::Char('K') => {
-      reader.count_buf.clear();
-      popup_citation_at_cursor(reader);
     }
     // Remove highlight under cursor — eXcise.
     KeyCode::Char('X') => {
