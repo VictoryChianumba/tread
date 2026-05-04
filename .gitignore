@@ -2,3 +2,8 @@ target/
 node_modules/
 __pycache__/
 *.pyc
+
+# Local-only working notes — not for the public repo.
+todo.md
+claude.md
+CLAUDE.md

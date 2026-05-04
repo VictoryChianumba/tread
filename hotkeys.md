@@ -1,0 +1,168 @@
+# Hotkeys
+
+`tread` follows vim conventions. Bindings are organized by mode below, with deviations from vim's defaults flagged.
+
+## Movement (Normal mode)
+
+### Single-line motion
+
+| Key | Action |
+|---|---|
+| `h` / `←` | Cursor left (wraps to end of previous line at column 0) |
+| `l` / `→` | Cursor right (wraps to start of next line at end of line) |
+| `0` | Jump to byte 0 of the current line |
+| `^` | Jump to first non-whitespace char |
+| `$` | Jump to last char of the current line |
+
+### Word motion
+
+| Key | Action |
+|---|---|
+| `w` / `W` | Forward to next word start (small / BIG word). Wraps across lines. |
+| `b` / `B` | Backward to previous word start |
+| `e` / `E` | Forward to current/next word end |
+| `ge` / `gE` | Backward to previous word end |
+
+Small word: alphanumeric + `_`. BIG word: any non-whitespace run.
+
+### Line / page / document
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | One line down (preserves desired column across short lines) |
+| `k` / `↑` | One line up |
+| `gg` | Jump to top of document |
+| `G` | Jump to bottom (or `<N>G` to line N) |
+| `Ctrl+D` / `Ctrl+U` | Half-page down / up |
+| `PageDown` / `PageUp` | Full page |
+| `H` | Top of visible screen |
+| `M` | Middle of visible screen |
+| `L` | Bottom of visible screen |
+| `z` | Center the cursor's line |
+
+### Paragraph / section / sentence
+
+| Key | Action |
+|---|---|
+| `}` | Next paragraph |
+| `{` | Previous paragraph |
+| `]` | Next section header |
+| `[` | Previous section header |
+| `)` | Next sentence (cross-line) |
+| `(` | Previous sentence |
+| `Ctrl+O` | Back to previous position (unwinds jumps) |
+
+### Find / search
+
+| Key | Action |
+|---|---|
+| `f<char>` | Forward to next occurrence of `<char>` on this line |
+| `F<char>` | Backward to previous occurrence |
+| `t<char>` | Forward, land *before* the match |
+| `T<char>` | Backward, land *after* the match |
+| `%` | Jump between matching brackets `()` `[]` `{}` |
+| `*` | Search forward for the word under the cursor |
+| `/` | Open search bar (Enter to confirm, Esc to cancel) |
+| `n` / `N` | Next / previous search match |
+
+### Counts
+
+| Pattern | Effect |
+|---|---|
+| `<N><motion>` | Repeat motion N times — e.g. `5j`, `3w`, `10G`, `2)` |
+
+## Marks (vim-style)
+
+| Key | Action |
+|---|---|
+| `m<letter>` | Set mark `<letter>` at current line (a–z) |
+| `'<letter>` | Jump to mark `<letter>` |
+| `` `<letter> `` | Same as `'<letter>` (vim distinguishes; we don't) |
+
+Marks persist across sessions per arXiv ID.
+
+## Visual mode
+
+| Key | Action |
+|---|---|
+| `v` | Enter character-visual mode |
+| `V` | Enter line-visual mode |
+| `j` / `k` / `h` / `l` / `w` / `b` / `e` | Extend selection |
+| `y` | Yank selection to clipboard via OSC 52 |
+| `H` | Commit selection as a persistent highlight |
+| `Esc` / `v` / `V` | Cancel visual mode |
+
+## Highlights
+
+| Key | Mode | Action |
+|---|---|---|
+| `H` | Visual | Commit current selection as a highlight (one per block touched) |
+| `X` | Normal | Remove the highlight whose range contains the cursor |
+
+Highlights persist across sessions and survive terminal resize (stored at block-byte offsets, not visual-line offsets).
+
+## Other
+
+| Key | Action |
+|---|---|
+| `\` | Toggle TOC side panel |
+| `?` | Toggle help overlay |
+| `m` / `q` / `Esc` | Quit (Esc / q work outside Command/Visual/Search) |
+| `y` | Yank current line to clipboard (OSC 52) |
+
+## Command mode
+
+Press `:` to open the command bar. Type, then `Enter` to execute or `Esc` to cancel. Backspace at column 0 also exits.
+
+### Built-in commands
+
+| Command | Aliases | Action |
+|---|---|---|
+| `:quit` | `:q`, `:exit` | Quit |
+| `:<N>` | — | Jump to line N (1-indexed) |
+| `:goto <N|N.M|text>` | `:g` | Jump to section by number (`3.2`) or case-insensitive substring of header text |
+| `:abstract` | — | Jump to the Abstract section |
+| `:references` | `:bib`, `:r` | Jump to References / Bibliography |
+| `:set theme=<id>` | — | Change theme (see [Themes](#themes) below) |
+| `:marks` | — | Popup listing all set marks with their lines and snippets |
+| `:delmarks <letter>` | `:dm` | Delete one or more marks |
+| `:highlights` | `:hl` | Popup listing all highlights in this paper |
+| `:about` | — | Popup with paper metadata (title, authors, arXiv ID, URL) |
+| `:url` | `:link` | Copy `https://arxiv.org/abs/<id>` to clipboard |
+| `:cite` | `:bibtex` | Copy a minimal BibTeX entry to clipboard |
+| `:open` | — | Open the arXiv abstract URL in the system browser |
+| `:back` | `:bk` | Same as `Ctrl+O` |
+| `:help` | `:h` | Open help overlay |
+| `:toc` | `:tree` | Toggle TOC panel |
+| `:placement` | — | Diagnostic popup showing each parsed Matrix table's block index and caption |
+
+### Themes
+
+Pass any `<id>` from this list to `:set theme=<id>`:
+
+`dark`, `light`, `amoled`, `solarized-dark`, `solarized-light`, `gruvbox-dark`, `nord`, `tokyo-night`, `catppuccin-mocha`, `powder-blue`, `powder-sage`, `powder-lavender`, `powder-rose`, `powder-mint`, `powder-sand`, `powder-slate`.
+
+Special value: **`:set theme=trench`** — sync with whatever theme the trench feed UI is using. This is the default if no override has been set.
+
+The chosen theme persists across sessions in `~/.config/trench/block_reader.json`.
+
+## Status bar indicators
+
+The bottom row shows `<line>/<total>  <pct>%` plus, when relevant:
+
+- `[1/3]` — current search match index of N total
+- `VISUAL` / `VISUAL LINE` — active visual mode
+- `f_`, `t_`, `m_`, `'_`, `g_` — awaiting the next keystroke for a multi-key motion
+- `5_` — count prefix in progress (e.g. you've typed `5` waiting for a motion)
+- A red error message — the most recent `:` command failed; clears on next keystroke
+
+## Modes at a glance
+
+```
+Normal ──:──> Command ──Enter──> dispatch + back to Normal
+Normal ──/──> Search  ──Enter──> match navigation
+Normal ──v──> Visual  ──Esc/v──> back to Normal
+Normal ──f──> AwaitingChar ──<char>──> jump + back to Normal
+Normal ──m──> AwaitingMarkName ──<letter>──> set + back to Normal
+Normal ──g──> AwaitingG ──{g,e,E}──> motion + back to Normal
+```
