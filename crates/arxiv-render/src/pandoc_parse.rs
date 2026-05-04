@@ -5,7 +5,7 @@
 // path first; if Pandoc is unavailable or returns nothing, it falls back to the
 // hand-rolled parser.
 
-use doc_model::{Block, InlineSpan};
+use doc_model::{Block, InlineSpan, LinkTarget};
 use serde_json::Value;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -253,6 +253,13 @@ fn walk_blocks(
                 let unnumbered = c[1][1].as_array().map_or(false, |classes| {
                     classes.iter().any(|cl| cl.as_str() == Some("unnumbered"))
                 });
+                // attr.id is the LaTeX label (or Pandoc-generated slug).
+                // Emit an Anchor so reader can resolve `\ref{}` jumps.
+                if let Some(id) = c[1][0].as_str() {
+                    if !id.is_empty() {
+                        out.push(Block::Anchor(id.to_string()));
+                    }
+                }
                 if let Some(inlines) = c[2].as_array() {
                     let raw = walk_inlines_text(inlines);
                     if !raw.is_empty() {
@@ -331,7 +338,16 @@ fn walk_blocks(
             "Table" => out.extend(parse_table(c, specs)),
 
             "Div" => {
-                // c = [attr, [blocks]]
+                // c = [attr, [blocks]].  attr.id may carry a label
+                // (e.g. table/figure/equation envs in newer Pandoc); emit
+                // an Anchor so reader can resolve refs.  Bib entry divs
+                // (id starts with "ref-") are picked up here too — the
+                // reader's bib-entries collector keys off these ids.
+                if let Some(id) = c[0][0].as_str() {
+                    if !id.is_empty() {
+                        out.push(Block::Anchor(id.to_string()));
+                    }
+                }
                 if let Some(inner) = c[1].as_array() {
                     out.extend(walk_blocks(inner, list_depth, specs, counters));
                 }
@@ -815,18 +831,26 @@ fn walk_inlines_spans(inlines: &[Value]) -> Vec<InlineSpan> {
 
             "Link" => {
                 // c = [attr, inlines, [url, title]]
-                // Only carry external URLs — internal #anchor refs have no meaning in a terminal
-                // and embedding OSC 8 sequences in ratatui Spans corrupts cell-width accounting.
+                // External URLs surface as OSC 8 hyperlinks via `span.url`.
+                // Internal `#anchor` refs become `LinkTarget::Internal(anchor)`
+                // for jump-to-line by `Enter` in the reader.
                 let raw_url = c[2][0].as_str().unwrap_or("");
                 let url = if raw_url.starts_with("http://") || raw_url.starts_with("https://") {
                     Some(raw_url.to_string())
                 } else {
                     None
                 };
+                let internal: Option<LinkTarget> = raw_url
+                    .strip_prefix('#')
+                    .filter(|a| !a.is_empty())
+                    .map(|a| LinkTarget::Internal(a.to_string()));
                 if let Some(inner) = c[1].as_array() {
                     for mut span in walk_inlines_spans(inner) {
                         if span.url.is_none() {
                             span.url = url.clone();
+                        }
+                        if span.link_target.is_none() {
+                            span.link_target = internal.clone();
                         }
                         out.push(span);
                     }
@@ -848,8 +872,27 @@ fn walk_inlines_spans(inlines: &[Value]) -> Vec<InlineSpan> {
 
             "Cite" => {
                 // c = [citations, fallback_inlines]
+                // Citations is an array of citation objects each with a
+                // `citationId` field — the BibTeX cite-key.  We tag the
+                // emitted spans with `LinkTarget::Citation(key)` for
+                // jump-to-bib / popup behaviour.  When multiple keys share
+                // one rendered region (e.g. `[1, 2]`), we use the first
+                // key — granularity beyond that requires per-citation
+                // span splitting which Pandoc doesn't expose directly.
+                let key: Option<String> = c[0].as_array()
+                    .and_then(|cs| cs.first())
+                    .and_then(|cit| cit["citationId"].as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
                 if let Some(inner) = c[1].as_array() {
-                    out.extend(walk_inlines_spans(inner));
+                    for mut span in walk_inlines_spans(inner) {
+                        if span.link_target.is_none() {
+                            if let Some(k) = &key {
+                                span.link_target = Some(LinkTarget::Citation(k.clone()));
+                            }
+                        }
+                        out.push(span);
+                    }
                 }
             }
 

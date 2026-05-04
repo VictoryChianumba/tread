@@ -276,6 +276,7 @@ pub struct Theme {
   pub search_match_bg: Color,
   pub search_match_fg: Color,
   pub bg_highlight: Color,
+  pub link_fg: Color,
 }
 
 impl Theme {
@@ -309,6 +310,7 @@ impl Theme {
       search_match_bg: Color::Yellow,
       search_match_fg: Color::Black,
       bg_highlight: Color::Rgb(80, 60, 0),
+      link_fg: Color::Rgb(120, 195, 220),
     }
   }
 
@@ -342,6 +344,7 @@ impl Theme {
       search_match_bg: Color::Rgb(255, 225, 90),
       search_match_fg: Color::Black,
       bg_highlight: Color::Rgb(255, 240, 180),
+      link_fg: Color::Rgb(40, 90, 170),
     }
   }
 
@@ -375,6 +378,7 @@ impl Theme {
       search_match_bg: Color::Yellow,
       search_match_fg: Color::Black,
       bg_highlight: Color::Rgb(80, 60, 0),
+      link_fg: Color::Rgb(120, 195, 220),
     }
   }
 
@@ -408,6 +412,7 @@ impl Theme {
       search_match_bg: Color::Rgb(181, 137, 0),
       search_match_fg: Color::Rgb(0, 43, 54),
       bg_highlight: Color::Rgb(80, 60, 0),
+      link_fg: Color::Rgb(120, 195, 220),
     }
   }
 
@@ -441,6 +446,7 @@ impl Theme {
       search_match_bg: Color::Rgb(253, 203, 110),
       search_match_fg: Color::Rgb(0, 43, 54),
       bg_highlight: Color::Rgb(255, 240, 180),
+      link_fg: Color::Rgb(40, 90, 170),
     }
   }
 
@@ -474,6 +480,7 @@ impl Theme {
       search_match_bg: Color::Rgb(250, 189, 47),
       search_match_fg: Color::Rgb(40, 40, 40),
       bg_highlight: Color::Rgb(80, 60, 0),
+      link_fg: Color::Rgb(120, 195, 220),
     }
   }
 
@@ -507,6 +514,7 @@ impl Theme {
       search_match_bg: Color::Rgb(235, 203, 139),
       search_match_fg: Color::Rgb(46, 52, 64),
       bg_highlight: Color::Rgb(80, 60, 0),
+      link_fg: Color::Rgb(120, 195, 220),
     }
   }
 
@@ -540,6 +548,7 @@ impl Theme {
       search_match_bg: Color::Rgb(224, 175, 104),
       search_match_fg: Color::Rgb(26, 27, 38),
       bg_highlight: Color::Rgb(80, 60, 0),
+      link_fg: Color::Rgb(120, 195, 220),
     }
   }
 
@@ -573,6 +582,7 @@ impl Theme {
       search_match_bg: Color::Rgb(249, 226, 175),
       search_match_fg: Color::Rgb(30, 30, 46),
       bg_highlight: Color::Rgb(80, 60, 0),
+      link_fg: Color::Rgb(120, 195, 220),
     }
   }
 
@@ -734,6 +744,7 @@ fn powder(
     search_match_bg: Color::Rgb(246, 217, 133),
     search_match_fg: text,
     bg_highlight: Color::Rgb(255, 240, 180),
+    link_fg: Color::Rgb(40, 90, 170),
   }
 }
 

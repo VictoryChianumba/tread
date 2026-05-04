@@ -285,10 +285,14 @@ fn render_visual_line<'a>(
           if s.url.is_some() {
             // Mark external URLs with underline. Embedding raw OSC 8 sequences in ratatui
             // Spans corrupts cell-width accounting; ratatui counts escape bytes as columns.
-            Span::styled(s.text.clone(), style.add_modifier(Modifier::UNDERLINED))
-          } else {
-            Span::styled(s.text.clone(), style)
+            style = style.add_modifier(Modifier::UNDERLINED);
           }
+          if s.link_target.is_some() {
+            // Internal refs / citations get the link foreground colour
+            // and underline so they're visibly clickable.
+            style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
+          }
+          Span::styled(s.text.clone(), style)
         }).collect();
         Line::from(ratatui_spans)
       }
@@ -410,6 +414,9 @@ fn overlay_highlights_styled(
     if ispan.monospace   { style = style.fg(t.mono); }
     if let Some((r, g, b)) = ispan.color { style = style.fg(Color::Rgb(r, g, b)); }
     if ispan.url.is_some() { style = style.add_modifier(Modifier::UNDERLINED); }
+    if ispan.link_target.is_some() {
+      style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
+    }
 
     // Cut points within this span (in absolute vl-byte coords).
     let mut cuts: Vec<usize> = vec![span_start, span_end];
@@ -548,6 +555,9 @@ fn apply_styled_cursor(
     if ispan.monospace   { style = style.fg(t.mono); }
     if let Some((r, g, b)) = ispan.color { style = style.fg(Color::Rgb(r, g, b)); }
     if ispan.url.is_some() { style = style.add_modifier(Modifier::UNDERLINED); }
+    if ispan.link_target.is_some() {
+      style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
+    }
 
     if !cursor_painted && safe_col >= span_start && safe_col < span_end {
       let local = snap_to_char_boundary(&ispan.text, safe_col - span_start);
@@ -835,6 +845,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
     ("/  n  N",       "search / next / prev",    "m{a} '{a}","set/jump named mark"),
     ("yy",            "yank current line (OSC 52)","\\",      "toggle TOC"),
     ("yi/ya<obj>",    "yank inner / around obj",  "X",        "remove highlight"),
+    ("Enter",         "follow link / citation",   "K",        "popup citation entry"),
     (":",             "command mode (see below)", "Ctrl+O",   "go back"),
     ("?",             "this help",                "q / Esc",  "quit"),
   ];

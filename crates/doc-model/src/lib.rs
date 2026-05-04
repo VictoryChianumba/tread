@@ -1,6 +1,20 @@
+/// Internal jump target carried on an `InlineSpan` to make refs/citations
+/// interactive in the reader.  The reader resolves these to line indices
+/// at runtime via its `label_lines` / `bib_entries_lines` maps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkTarget {
+  /// LaTeX label / Pandoc anchor id — e.g. `"sec:method"`, `"eq:elbo"`,
+  /// `"tab:variations"`.  `Enter` jumps to (the line *before*) the
+  /// labeled element.
+  Internal(String),
+  /// BibTeX cite-key — e.g. `"vaswani"`.  `Enter` jumps to the bib
+  /// entry; `K` / `Shift+Enter` shows the entry in a popup.
+  Citation(String),
+}
+
 /// Inline styled run within a paragraph line.
 /// `color` uses raw RGB rather than a ratatui type — doc-model has no UI dependency.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct InlineSpan {
   pub text: String,
   pub bold: bool,
@@ -10,6 +24,7 @@ pub struct InlineSpan {
   pub monospace: bool,
   pub color: Option<(u8, u8, u8)>,
   pub url: Option<String>,
+  pub link_target: Option<LinkTarget>,
 }
 
 impl InlineSpan {
@@ -23,6 +38,23 @@ impl InlineSpan {
       monospace: false,
       color: None,
       url: None,
+      link_target: None,
+    }
+  }
+
+  /// Internal cross-reference span — `\ref{...}` / `\eqref{...}`.
+  pub fn internal_link(text: impl Into<String>, label: impl Into<String>) -> Self {
+    Self {
+      link_target: Some(LinkTarget::Internal(label.into())),
+      ..Self::plain(text)
+    }
+  }
+
+  /// Citation span — `\cite{...}`.
+  pub fn citation(text: impl Into<String>, key: impl Into<String>) -> Self {
+    Self {
+      link_target: Some(LinkTarget::Citation(key.into())),
+      ..Self::plain(text)
     }
   }
 
@@ -73,6 +105,11 @@ pub enum Block {
   Rule,
   /// A block quote: \begin{quote}, \begin{quotation}, \begin{epigraph}.
   Quote(Vec<InlineSpan>),
+  /// Invisible label marker.  Produced by parsers when they encounter a
+  /// `\label{X}` (or Pandoc `attr.id`) so the reader can resolve
+  /// `\ref{X}` jumps at runtime.  Emits no visual line; the reader
+  /// associates the label with the *next* visible line's index.
+  Anchor(String),
 }
 
 /// A single screen row, fully expanded from a Block.
@@ -313,6 +350,9 @@ pub fn build_visual_lines(blocks: &[Block], terminal_width: usize) -> Vec<Visual
 
       // Rule and Matrix are handled above via the table-group path.
       Block::Rule | Block::Matrix { .. } => {}
+      // Anchors are invisible — they tag the next visible block for
+      // label-to-line resolution by the reader.
+      Block::Anchor(_) => {}
     }
 
     i += 1;
@@ -704,6 +744,7 @@ fn wrap_spans(spans: &[InlineSpan], width: usize) -> Vec<(Vec<InlineSpan>, Strin
     monospace: bool,
     color: Option<(u8, u8, u8)>,
     url: Option<String>,
+    link_target: Option<LinkTarget>,
   }
 
   let mut words: Vec<Word> = Vec::new();
@@ -719,6 +760,7 @@ fn wrap_spans(spans: &[InlineSpan], width: usize) -> Vec<(Vec<InlineSpan>, Strin
           monospace: span.monospace,
           color: span.color,
           url: span.url.clone(),
+          link_target: span.link_target.clone(),
         });
       }
     }
@@ -757,6 +799,7 @@ fn wrap_spans(spans: &[InlineSpan], width: usize) -> Vec<(Vec<InlineSpan>, Strin
         && last.monospace == word.monospace
         && last.color == word.color
         && last.url == word.url
+        && last.link_target == word.link_target
     });
 
     if coalesce {
@@ -771,6 +814,7 @@ fn wrap_spans(spans: &[InlineSpan], width: usize) -> Vec<(Vec<InlineSpan>, Strin
         monospace: word.monospace,
         color: word.color,
         url: word.url.clone(),
+        link_target: word.link_target.clone(),
       });
     }
   }

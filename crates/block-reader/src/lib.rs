@@ -9,7 +9,7 @@ mod state;
 mod text_objects;
 
 use crossterm::{
-  event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind},
+  event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
   execute,
   terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -43,6 +43,13 @@ pub fn run_with_theme(
   enable_raw_mode()?;
   let mut stdout = io::stdout();
   execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+  // Opt into the kitty keyboard protocol so Shift+Enter (and other
+  // modified specials) are distinguishable from plain Enter.  Terminals
+  // that don't speak the protocol silently ignore the push; on those,
+  // `K` is the universal fallback for the citation-popup binding.
+  let _ = execute!(stdout, PushKeyboardEnhancementFlags(
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+  ));
   let backend = CrosstermBackend::new(stdout);
   let mut terminal = Terminal::new(backend)?;
 
@@ -76,6 +83,9 @@ pub fn run_with_theme(
     highlights::save(key, &reader.highlights);
   }
 
+  // Balance the keyboard-enhancement push.  Ignored on terminals
+  // that didn't accept it.
+  let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
   disable_raw_mode()?;
   execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
   terminal.show_cursor()?;
@@ -245,6 +255,21 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
     // Sentence motion — `)` next, `(` previous.  Cross-line.
     KeyCode::Char(')') => { let n = take_count(reader); for _ in 0..n { reader.nav_sentence_forward(); } reader.remember_column(); }
     KeyCode::Char('(') => { let n = take_count(reader); for _ in 0..n { reader.nav_sentence_back(); } reader.remember_column(); }
+    // Cross-reference / citation actions.  `Enter` jumps to the link
+    // target under the cursor (no-op if not on a link); `Shift+Enter`
+    // and `K` show a citation popup instead of jumping.
+    KeyCode::Enter if mods.contains(KeyModifiers::SHIFT) => {
+      reader.count_buf.clear();
+      popup_citation_at_cursor(reader);
+    }
+    KeyCode::Enter => {
+      reader.count_buf.clear();
+      follow_link_at_cursor(reader);
+    }
+    KeyCode::Char('K') => {
+      reader.count_buf.clear();
+      popup_citation_at_cursor(reader);
+    }
     // Remove highlight under cursor — eXcise.
     KeyCode::Char('X') => {
       reader.count_buf.clear();
@@ -441,6 +466,96 @@ fn handle_awaiting_text_object(reader: &mut Reader, code: KeyCode, op: Operator,
     }
   }
   reader.mode = Mode::Normal;
+}
+
+/// Resolve the `LinkTarget` (if any) under the cursor by scanning the
+/// current visual line's `StyledProse` spans for the one containing
+/// `cursor_x`.  Returns `None` for non-styled lines, non-prose blocks,
+/// or when the cursor doesn't sit on a linked span.
+fn link_at_cursor(reader: &Reader) -> Option<doc_model::LinkTarget> {
+  let vl = reader.visual_lines.get(reader.current_line())?;
+  let spans = match &vl.kind {
+    doc_model::VisualLineKind::StyledProse(s) => s,
+    _ => return None,
+  };
+  let mut byte = 0usize;
+  for span in spans {
+    let next = byte + span.text.len();
+    if reader.cursor_x >= byte && reader.cursor_x < next {
+      return span.link_target.clone();
+    }
+    byte = next;
+  }
+  None
+}
+
+/// Enter dispatch: jump to whatever the cursor is sitting on.  No-op if
+/// nothing is there.  Pushes onto the back-nav stack so `Ctrl+O` rewinds.
+fn follow_link_at_cursor(reader: &mut Reader) {
+  let Some(target) = link_at_cursor(reader) else { return };
+  let line = match &target {
+    doc_model::LinkTarget::Internal(label) => reader.label_lines.get(label).copied(),
+    doc_model::LinkTarget::Citation(key) => reader.bib_entry_lines.get(key).copied(),
+  };
+  let Some(line) = line else { return };
+  // Land one line before the labeled element so it's fully visible
+  // below the cursor (vim convention for jumps).  Clamp at 0.
+  let target_line = line.saturating_sub(1);
+  reader.push_nav_mark();
+  jump_to_line_for_link(reader, target_line);
+}
+
+/// `K` / `Shift+Enter`: show the citation entry in a popup.  Only acts
+/// on `LinkTarget::Citation`; `Internal` targets are silently ignored
+/// (Enter is the right key for those).
+fn popup_citation_at_cursor(reader: &mut Reader) {
+  let Some(target) = link_at_cursor(reader) else { return };
+  let key = match target {
+    doc_model::LinkTarget::Citation(k) => k,
+    _ => return,
+  };
+  let entry = reader.bib_entries.get(&key).cloned()
+    .unwrap_or_else(|| "(no entry available)".to_string());
+  // Wrap to ~60 chars for readability in the popup.
+  let lines: Vec<String> = wrap_for_popup(&entry, 60);
+  reader.popup = Some(state::PopupContent {
+    title: format!("[{key}]"),
+    lines,
+  });
+}
+
+fn jump_to_line_for_link(reader: &mut Reader, line: usize) {
+  let total = reader.total_lines();
+  if total == 0 { return; }
+  let line = line.min(total - 1);
+  let ch = reader.content_height();
+  if line >= reader.offset && line < reader.offset + ch {
+    reader.cursor_y = line - reader.offset;
+  } else {
+    reader.offset = line;
+    reader.cursor_y = 0;
+  }
+  reader.cursor_x = 0;
+  reader.desired_column = 0;
+}
+
+fn wrap_for_popup(text: &str, width: usize) -> Vec<String> {
+  let mut out = Vec::new();
+  let mut line = String::new();
+  for word in text.split_whitespace() {
+    if line.is_empty() {
+      line.push_str(word);
+    } else if line.chars().count() + 1 + word.chars().count() <= width {
+      line.push(' ');
+      line.push_str(word);
+    } else {
+      out.push(std::mem::take(&mut line));
+      line.push_str(word);
+    }
+  }
+  if !line.is_empty() { out.push(line); }
+  if out.is_empty() { out.push(String::new()); }
+  out
 }
 
 fn handle_awaiting_g(reader: &mut Reader, code: KeyCode) {

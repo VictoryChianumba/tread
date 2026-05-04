@@ -97,6 +97,19 @@ pub struct Reader {
   /// Persistent character-range highlights.  Stored at block-byte
   /// granularity so they survive resize.  Loaded on entry, saved on exit.
   pub highlights: HighlightSet,
+  /// Resolution map for `\ref{X}` jumps: label → first visual-line index
+  /// of the labeled element.  Built from `Block::Anchor` markers in
+  /// `Reader::new`.  For ref-targets we want the line *before* the
+  /// labeled element when possible (so the equation/figure/table is
+  /// fully visible after the jump); see `follow_link_target`.
+  pub label_lines: HashMap<String, usize>,
+  /// Bibliography entry text by cite-key.  Pandoc bib divs use
+  /// `id="ref-<key>"`; we capture the rendered entry text for popup
+  /// display by `:K` / `Shift+Enter` on a citation.
+  pub bib_entries: HashMap<String, String>,
+  /// Bibliography entry first-VL index by cite-key.  `Enter` on a
+  /// citation jumps here (line *before* the entry).
+  pub bib_entry_lines: HashMap<String, usize>,
   /// Effective byte column of the cursor on the current line.  Always
   /// represents the rendered position — horizontal motions write here.
   pub cursor_x: usize,
@@ -125,10 +138,14 @@ impl Reader {
     let cw = content_width_for(width, false);
     let visual_lines = build_visual_lines(&blocks, cw);
     let sections = build_sections(&visual_lines);
+    let (label_lines, bib_entries, bib_entry_lines) = build_link_indexes(&blocks, &visual_lines);
     Self {
       blocks,
       visual_lines,
       sections,
+      label_lines,
+      bib_entries,
+      bib_entry_lines,
       toc_visible: false,
       help_visible: false,
       offset: 0,
@@ -165,6 +182,10 @@ impl Reader {
     let cw = self.content_width();
     self.visual_lines = build_visual_lines(&self.blocks, cw);
     self.sections = build_sections(&self.visual_lines);
+    let (ll, be, bel) = build_link_indexes(&self.blocks, &self.visual_lines);
+    self.label_lines = ll;
+    self.bib_entries = be;
+    self.bib_entry_lines = bel;
     self.clamp_position();
   }
 
@@ -308,4 +329,70 @@ fn build_sections(visual_lines: &[VisualLine]) -> Vec<(usize, u8, String)> {
       }
     })
     .collect()
+}
+
+/// Build the cross-reference resolution maps from `Block::Anchor`
+/// markers and bibliography div ids.  Returns `(label_lines,
+/// bib_entries, bib_entry_lines)`.
+///
+/// - `label_lines`: each Anchor associates with the first VL of the
+///   *next* visible block.  For ref-targets we want the equation /
+///   figure / table fully visible, so callers (`follow_link_target`)
+///   subtract one when jumping.
+/// - `bib_entries`: keys are cite-keys (Pandoc strips the `ref-`
+///   prefix); value is the joined text of the entry block.
+/// - `bib_entry_lines`: same keys, value is the first VL index of the
+///   entry — used by `Enter` (jump-to-bib).
+fn build_link_indexes(
+  blocks: &[Block],
+  visual_lines: &[VisualLine],
+) -> (HashMap<String, usize>, HashMap<String, String>, HashMap<String, usize>) {
+  // Map block_idx → first VL with that block_idx.  O(n) once.
+  let mut block_to_vl: HashMap<usize, usize> = HashMap::new();
+  for (vl_idx, vl) in visual_lines.iter().enumerate() {
+    block_to_vl.entry(vl.block_idx).or_insert(vl_idx);
+  }
+
+  let mut label_lines = HashMap::new();
+  let mut bib_entries = HashMap::new();
+  let mut bib_entry_lines = HashMap::new();
+
+  for (bi, block) in blocks.iter().enumerate() {
+    if let Block::Anchor(label) = block {
+      // Walk forward from bi+1 to find the next visible block.
+      let target_block = (bi + 1..blocks.len()).find(|&j| {
+        !matches!(blocks[j], Block::Anchor(_) | Block::Blank)
+      });
+      let target_vl = target_block.and_then(|j| block_to_vl.get(&j).copied());
+      if let Some(vl) = target_vl {
+        // Pandoc bib divs have id="ref-<key>".  Strip the prefix and
+        // also capture the entry text for popup display.
+        if let Some(key) = label.strip_prefix("ref-") {
+          bib_entry_lines.insert(key.to_string(), vl);
+          if let Some(j) = target_block {
+            let entry_text = block_text(&blocks[j]);
+            if !entry_text.is_empty() {
+              bib_entries.insert(key.to_string(), entry_text);
+            }
+          }
+        } else {
+          label_lines.insert(label.clone(), vl);
+        }
+      }
+    }
+  }
+  (label_lines, bib_entries, bib_entry_lines)
+}
+
+/// Extract the rendered text of a block for bib-entry popup display.
+/// Strips inline styling — popup is plain text only.
+fn block_text(block: &Block) -> String {
+  match block {
+    Block::Line(s) => s.clone(),
+    Block::StyledLine(spans) => spans.iter().map(|s| s.text.as_str()).collect(),
+    Block::Header { text, .. } => text.clone(),
+    Block::ListItem { content, .. } => content.iter().map(|s| s.text.as_str()).collect(),
+    Block::Quote(spans) => spans.iter().map(|s| s.text.as_str()).collect(),
+    _ => String::new(),
+  }
 }

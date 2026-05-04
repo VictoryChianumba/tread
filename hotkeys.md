@@ -101,6 +101,18 @@ Marks persist across sessions per arXiv ID.
 
 Highlights persist across sessions and survive terminal resize (stored at block-byte offsets, not visual-line offsets).
 
+## Cross-references and citations
+
+Section/figure/table refs and bibliography citations render in the link colour with an underline. Place the cursor on one and:
+
+| Key | Action |
+|---|---|
+| `Enter` | Jump to the labeled element (one line above so it's fully visible). Cite jumps to the bib entry. `Ctrl+O` rewinds. |
+| `K` | Popup the bib entry text without leaving your reading position. Citation-only. |
+| `Shift+Enter` | Same as `K`, on terminals that support the kitty keyboard protocol (Kitty, WezTerm, Ghostty). On terminals without protocol support, this falls through to `Enter`. |
+
+Internal refs that point to elements we don't index yet (e.g. equation labels) are silent no-ops on `Enter`.
+
 ## Other
 
 | Key | Action |
