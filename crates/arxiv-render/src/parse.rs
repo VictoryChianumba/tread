@@ -93,6 +93,59 @@ const TABULAR_ENVS: &[&str] = &[
   "tabular", "tabular*", "longtable", "tabularx", "tabulary", "array",
 ];
 
+/// Pre-scan sources for `\bibitem{key}…` entries, preserving source order.
+/// Used to assign sequential `[N]` citation numbers and to synthesize a
+/// numbered bibliography that replaces Pandoc's structureless rendering.
+pub fn extract_bibitems_ordered(sources: &[(String, String)]) -> Vec<(String, String)> {
+  let mut out: Vec<(String, String)> = Vec::new();
+  for (_, content) in sources {
+    let bytes = content.as_bytes();
+    let mut i = 0;
+    while i + 8 < bytes.len() {
+      if &bytes[i..i + 8] != b"\\bibitem" {
+        i += 1;
+        continue;
+      }
+      let mut j = i + 8;
+      if j < bytes.len() && bytes[j] == b'[' {
+        if let Some(close) = (j..bytes.len()).find(|&k| bytes[k] == b']') {
+          j = close + 1;
+        }
+      }
+      if j >= bytes.len() || bytes[j] != b'{' {
+        i = j;
+        continue;
+      }
+      let key_start = j + 1;
+      let key_end = match (key_start..bytes.len()).find(|&k| bytes[k] == b'}') {
+        Some(p) => p,
+        None => break,
+      };
+      let key = match std::str::from_utf8(&bytes[key_start..key_end]) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => { i = key_end + 1; continue; }
+      };
+      let entry_start = key_end + 1;
+      let entry_end = (entry_start..bytes.len())
+        .find(|&k| {
+          bytes[k..].starts_with(b"\\bibitem")
+            || bytes[k..].starts_with(b"\\end{thebibliography}")
+        })
+        .unwrap_or(bytes.len());
+      let raw = &content[entry_start..entry_end];
+      let cleaned = clean_bibitem_text(raw);
+      if !key.is_empty() && !cleaned.is_empty() {
+        // Skip duplicates — same key in multiple files keeps first occurrence.
+        if !out.iter().any(|(k, _)| k == &key) {
+          out.push((key, cleaned));
+        }
+      }
+      i = entry_end;
+    }
+  }
+  out
+}
+
 /// Pre-scan all source files for `\bibitem{key}…` entries.  Pandoc's
 /// AST surfaces bibliography paragraphs but doesn't carry cite-keys
 /// down to them, so we scrape them ourselves.  Used to populate the

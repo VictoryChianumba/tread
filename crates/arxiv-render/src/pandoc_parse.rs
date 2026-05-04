@@ -8,6 +8,27 @@
 use doc_model::{Block, InlineSpan, LinkTarget};
 use serde_json::Value;
 
+// ── Cross-cutting state for Cite / bibliography rendering ────────────────────
+
+// `walk_inlines_spans` is called from many sites and threading two
+// parameters down into all of them would be churn for no benefit; the
+// state only matters during a single `try_pandoc` invocation.  Stored
+// thread-locals; the scope guard clears them on exit.
+thread_local! {
+    static CITE_NUMBERS: std::cell::RefCell<std::collections::HashMap<String, usize>>
+        = std::cell::RefCell::new(std::collections::HashMap::new());
+    static BIBITEMS_ORDERED: std::cell::RefCell<Vec<(String, String)>>
+        = std::cell::RefCell::new(Vec::new());
+}
+
+struct CiteScopeGuard;
+impl Drop for CiteScopeGuard {
+    fn drop(&mut self) {
+        CITE_NUMBERS.with(|c| c.borrow_mut().clear());
+        BIBITEMS_ORDERED.with(|b| b.borrow_mut().clear());
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub fn try_pandoc(sources: &[(String, String)]) -> Result<Vec<Block>, String> {
@@ -62,6 +83,22 @@ pub fn try_pandoc(sources: &[(String, String)]) -> Result<Vec<Block>, String> {
         .iter()
         .flat_map(|(_, content)| extract_tabular_specs(content))
         .collect();
+
+    // Pre-extract bibitems in source order.  Used both to assign
+    // sequential `[N]` numbers to citations (Cite arm consults
+    // `CITE_NUMBERS`) and to synthesize a numbered bibliography
+    // (Div arm with class="thebibliography" replaces inner content).
+    // Threaded via thread-locals to avoid plumbing through every walker
+    // signature; cleared on scope exit.
+    let bibitems_ordered = crate::parse::extract_bibitems_ordered(sources);
+    let cite_numbers: std::collections::HashMap<String, usize> = bibitems_ordered
+        .iter()
+        .enumerate()
+        .map(|(i, (k, _))| (k.clone(), i + 1))
+        .collect();
+    CITE_NUMBERS.with(|c| *c.borrow_mut() = cite_numbers);
+    BIBITEMS_ORDERED.with(|b| *b.borrow_mut() = bibitems_ordered);
+    let _scope_guard = CiteScopeGuard;
 
     let mut blocks = Vec::new();
     if let Some(meta) = ast.get("meta") {
@@ -355,12 +392,24 @@ fn walk_blocks(
                 // c = [attr, [blocks]].  attr.id may carry a label
                 // (e.g. table/figure/equation envs in newer Pandoc); emit
                 // an Anchor so reader can resolve refs.  Bib entry divs
-                // (id starts with "ref-") are picked up here too — the
-                // reader's bib-entries collector keys off these ids.
+                // (id starts with "ref-") are picked up here too.
                 if let Some(id) = c[0][0].as_str() {
                     if !id.is_empty() {
                         out.push(Block::Anchor(id.to_string()));
                     }
+                }
+                // Special-case `\begin{thebibliography}` divs: Pandoc
+                // emits the inner Paras as plain prose without
+                // cite-keys, which means citations can't jump or popup.
+                // We replace the inner content with a synthesized
+                // numbered bibliography pulled from the source-extracted
+                // bibitem map.
+                let is_thebib = c[0][1].as_array().map_or(false, |classes| {
+                    classes.iter().any(|cl| cl.as_str() == Some("thebibliography"))
+                });
+                if is_thebib {
+                    out.extend(synthesize_bibliography());
+                    continue;
                 }
                 if let Some(inner) = c[1].as_array() {
                     out.extend(walk_blocks(inner, list_depth, specs, counters));
@@ -740,6 +789,31 @@ fn extract_caption_text(cap: &Value) -> String {
 
 // ── Inline walkers ────────────────────────────────────────────────────────────
 
+/// Build the rendered bibliography block sequence from the
+/// pre-extracted source-order bibitems.  Replaces Pandoc's
+/// `thebibliography` Div content so each entry is numbered and carries
+/// a `Block::Anchor("ref-<key>")` for `Enter`-jumping.
+fn synthesize_bibliography() -> Vec<Block> {
+    BIBITEMS_ORDERED.with(|b| {
+        let bibs = b.borrow();
+        let mut out: Vec<Block> = Vec::new();
+        if bibs.is_empty() {
+            return out;
+        }
+        for (i, (key, entry)) in bibs.iter().enumerate() {
+            let n = i + 1;
+            // Anchor first so reader's label_lines maps `ref-<key>` to
+            // the entry's first VL.
+            out.push(Block::Anchor(format!("ref-{key}")));
+            // Render as `[N]  <entry text>`.  StyledLine wraps to width.
+            let line_text = format!("[{n}]  {entry}");
+            out.push(Block::StyledLine(vec![InlineSpan::plain(line_text)]));
+            out.push(Block::Blank);
+        }
+        out
+    })
+}
+
 /// LaTeX prefix words that typically introduce a `\ref{...}` and should
 /// share its link styling — so "Table 3", "Figure 4", "Section 6.1"
 /// render as cohesive linked phrases instead of "(prose) (linked-number)".
@@ -951,13 +1025,11 @@ fn walk_inlines_spans(inlines: &[Value]) -> Vec<InlineSpan> {
 
             "Cite" => {
                 // c = [citations, fallback_inlines]
-                // Without `--citeproc`, Pandoc leaves the fallback as raw
-                // LaTeX (e.g. RawInline "\\citep{X}") which we'd render as
-                // nothing — citations would silently disappear.  Instead
-                // we render the cite-keys ourselves: `[key]` or
-                // `[key1, key2]` for multi-cite, styled as a link to the
-                // bibliography.  `LinkTarget::Citation` carries the
-                // *first* key; the popup/jump uses that one.
+                // Render as numeric `[N]` (or `[N, M, ...]` for multi-cite)
+                // using the bibitem source-order map established in
+                // `try_pandoc`.  If a key isn't in the map (cite to a
+                // missing bibitem), we fall back to the cite-key in
+                // brackets so the citation is still visible.
                 let keys: Vec<String> = c[0]
                     .as_array()
                     .map(|cs| {
@@ -968,15 +1040,21 @@ fn walk_inlines_spans(inlines: &[Value]) -> Vec<InlineSpan> {
                     })
                     .unwrap_or_default();
                 if keys.is_empty() {
-                    // No citation keys — fall back to the inner inlines
-                    // (RawInline most likely; produces nothing visible
-                    // but won't crash).
                     if let Some(inner) = c[1].as_array() {
                         out.extend(walk_inlines_spans(inner));
                     }
                 } else {
                     let primary = keys[0].clone();
-                    let rendered = format!("[{}]", keys.join(", "));
+                    let rendered = CITE_NUMBERS.with(|cn| {
+                        let map = cn.borrow();
+                        let parts: Vec<String> = keys.iter().map(|k| {
+                            match map.get(k) {
+                                Some(n) => n.to_string(),
+                                None => k.clone(),
+                            }
+                        }).collect();
+                        format!("[{}]", parts.join(", "))
+                    });
                     out.push(InlineSpan::citation(rendered, primary));
                 }
             }
