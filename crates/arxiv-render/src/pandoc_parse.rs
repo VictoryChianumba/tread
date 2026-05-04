@@ -290,8 +290,9 @@ fn walk_blocks(
         match t {
             "Para" | "Plain" => {
                 if let Some(inlines) = c.as_array() {
-                    if let Some(b) = para_to_block(inlines) {
-                        out.push(b);
+                    let blocks = para_to_block(inlines);
+                    if !blocks.is_empty() {
+                        out.extend(blocks);
                         out.push(Block::Blank);
                     }
                 }
@@ -418,6 +419,14 @@ fn walk_blocks(
 
             "Figure" => {
                 // c = [attr, caption, [blocks]]
+                // Pandoc's Figure node carries the LaTeX `\label{}` at
+                // attr.id (c[0][0]).  Emit an Anchor before the caption
+                // so `\ref{fig:X}` resolves at runtime.
+                if let Some(id) = c[0][0].as_str() {
+                    if !id.is_empty() {
+                        out.push(Block::Anchor(id.to_string()));
+                    }
+                }
                 let cap = extract_caption_text(&c[1]);
                 let n = counters.bump_figure();
                 if !cap.is_empty() {
@@ -453,7 +462,7 @@ fn walk_blocks(
 
 // ── Para → Block ──────────────────────────────────────────────────────────────
 
-fn para_to_block(inlines: &[Value]) -> Option<Block> {
+fn para_to_block(inlines: &[Value]) -> Vec<Block> {
     // Check for a lone DisplayMath inline (possibly surrounded by whitespace).
     let meaningful: Vec<&Value> = inlines
         .iter()
@@ -466,20 +475,49 @@ fn para_to_block(inlines: &[Value]) -> Option<Block> {
             && node["c"][0]["t"].as_str() == Some("DisplayMath")
         {
             let latex = node["c"][1].as_str().unwrap_or("");
+            // Pandoc keeps `\label{}` inside the raw math source — it's
+            // never lifted to attr.  Scan for it so `\ref{eq:X}` resolves.
+            let mut blocks: Vec<Block> = Vec::new();
+            if let Some(label) = extract_math_label(latex) {
+                blocks.push(Block::Anchor(label));
+            }
             let rendered = render_math(latex);
             let lines: Vec<String> = rendered.lines().map(|l| l.to_string()).collect();
-            return Some(Block::DisplayMath { lines, num: None });
+            blocks.push(Block::DisplayMath { lines, num: None });
+            return blocks;
         }
     }
 
     let spans = walk_inlines_spans(inlines);
     if spans.is_empty() {
-        return Some(Block::Blank);
+        return vec![Block::Blank];
     }
 
     // Always use StyledLine so build_visual_lines wraps the text to terminal_width.
     // Block::Line assumes the producer already wrapped it; Pandoc gives us full paragraphs.
-    Some(Block::StyledLine(spans))
+    vec![Block::StyledLine(spans)]
+}
+
+/// Scan a display-math LaTeX source for the first `\label{X}`.  Used to
+/// emit a `Block::Anchor` so `\ref{eq:X}` resolves at runtime —
+/// Pandoc doesn't lift math labels to `attr.id`.
+fn extract_math_label(math_src: &str) -> Option<String> {
+    let bytes = math_src.as_bytes();
+    let mut i = 0;
+    while i + 7 <= bytes.len() {
+        if !bytes[i..].starts_with(b"\\label{") {
+            i += 1;
+            continue;
+        }
+        let key_start = i + 7;
+        let key_end = (key_start..bytes.len()).find(|&k| bytes[k] == b'}')?;
+        let label = math_src.get(key_start..key_end)?.trim();
+        if !label.is_empty() {
+            return Some(label.to_string());
+        }
+        i = key_end + 1;
+    }
+    None
 }
 
 // ── List item helper ──────────────────────────────────────────────────────────
@@ -1598,6 +1636,49 @@ pub(crate) fn parse_column_spec(spec: &str) -> Option<(usize, Vec<usize>)> {
         }
     }
     Some((col_count, rules))
+}
+
+#[cfg(test)]
+mod math_label_tests {
+    use super::extract_math_label;
+
+    #[test]
+    fn finds_label_in_equation() {
+        let src = r"\begin{equation}\label{eq:elbo} x = y \end{equation}";
+        assert_eq!(extract_math_label(src).as_deref(), Some("eq:elbo"));
+    }
+
+    #[test]
+    fn finds_label_when_indented() {
+        let src = "\\begin{equation}\n  \\label{eq:foo}\n  x = y\n\\end{equation}";
+        assert_eq!(extract_math_label(src).as_deref(), Some("eq:foo"));
+    }
+
+    #[test]
+    fn returns_first_label_in_align() {
+        // Multi-equation align: take the first label (v1 simplification).
+        let src = r"\begin{align} a &= b \label{eq:one} \\ c &= d \label{eq:two} \end{align}";
+        assert_eq!(extract_math_label(src).as_deref(), Some("eq:one"));
+    }
+
+    #[test]
+    fn no_label_returns_none() {
+        let src = r"\begin{equation} x = y \end{equation}";
+        assert!(extract_math_label(src).is_none());
+    }
+
+    #[test]
+    fn empty_label_returns_none() {
+        let src = r"\begin{equation}\label{} x = y \end{equation}";
+        assert!(extract_math_label(src).is_none());
+    }
+
+    #[test]
+    fn handles_label_at_end_without_brace() {
+        // Truncated input — must not panic / over-index.
+        let src = r"\label{eq:x";
+        assert!(extract_math_label(src).is_none());
+    }
 }
 
 #[cfg(test)]
