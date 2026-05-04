@@ -332,6 +332,14 @@ fn render_visual_line<'a>(
       Line::styled(text.clone(), Style::default().fg(t.rule))
     }
 
+    VisualLineKind::Image { .. } => {
+      // Stage 2 of pixel-graphics: data-model only — Block::Image emits
+      // a Prose placeholder line via build_visual_lines, so this arm is
+      // only reached in stage 5+ when image VLs are emitted directly.
+      // For now, just paint a blank row so ratatui has something to draw.
+      Line::styled(text.clone(), base_style)
+    }
+
     VisualLineKind::Quote { .. } => {
       let quote_style = base_style
         .fg(t.text_dim)

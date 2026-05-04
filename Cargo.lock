@@ -60,6 +60,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "doc-model",
+ "kitty-graphics",
  "ratatui",
  "serde",
  "serde_json",
@@ -775,6 +776,10 @@ dependencies = [
  "once_cell",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "kitty-graphics"
+version = "0.1.0"
 
 [[package]]
 name = "latex2mathml"

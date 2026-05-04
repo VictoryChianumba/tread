@@ -15,6 +15,11 @@ fn main() {
     }
   };
 
+  // Stage 1 of pixel-graphics work: detect terminal capability up front.
+  // For now we just log the result; later stages gate image rendering on it.
+  let kitty_capability = kitty_graphics::detect();
+  eprintln!("kitty graphics: {:?}", kitty_capability);
+
   eprintln!("fetching source for arXiv:{id} ...");
 
   let sources = match fetch::fetch_source(&id) {
@@ -54,7 +59,8 @@ fn main() {
   };
   let blocks = placement::lift_tables(blocks, &anchors);
 
-  eprintln!("{} blocks — launching reader ...", blocks.len());
+  let image_count = blocks.iter().filter(|b| matches!(b, doc_model::Block::Image { .. })).count();
+  eprintln!("{} blocks ({} images) — launching reader ...", blocks.len(), image_count);
 
   if let Err(e) = block_reader::run(blocks, None, Some(id), bibitems) {
     eprintln!("reader error: {e}");

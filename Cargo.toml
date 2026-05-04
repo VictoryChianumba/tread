@@ -6,6 +6,7 @@ members = [
   "crates/math-render",
   "crates/arxiv-render",
   "crates/block-reader",
+  "crates/kitty-graphics",
   "crates/ui-theme",
 ]
 

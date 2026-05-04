@@ -110,6 +110,12 @@ pub enum Block {
   /// `\ref{X}` jumps at runtime.  Emits no visual line; the reader
   /// associates the label with the *next* visible line's index.
   Anchor(String),
+  /// An image figure (referenced via LaTeX `\includegraphics{}`).
+  /// `path` is relative to the paper's source root.  `alt` is the
+  /// image's alt text (LaTeX optional argument or empty).  `kitty_id`
+  /// is a sequential id assigned by the parser; the renderer uses it
+  /// as the Kitty graphics protocol image identifier.
+  Image { path: std::path::PathBuf, alt: String, kitty_id: u32 },
 }
 
 /// A single screen row, fully expanded from a Block.
@@ -152,6 +158,11 @@ pub enum VisualLineKind {
   Rule,
   /// A block quote; text = plain concatenation of spans.
   Quote { is_continuation: bool },
+  /// One row of an inline image figure.  `kitty_id` identifies the
+  /// image to the Kitty graphics protocol.  `rows` is the total number
+  /// of rows the image occupies (this VL is one of them).  `is_first`
+  /// flags the row where the renderer should emit the placement escape.
+  Image { kitty_id: u32, rows: u16, is_first: bool },
 }
 
 /// Expand a block list into the flat visual line table.
@@ -353,6 +364,26 @@ pub fn build_visual_lines(blocks: &[Block], terminal_width: usize) -> Vec<Visual
       // Anchors are invisible — they tag the next visible block for
       // label-to-line resolution by the reader.
       Block::Anchor(_) => {}
+      Block::Image { alt, kitty_id, .. } => {
+        // Stage 2 (data-model only): emit a single placeholder VL with
+        // the existing `[Image: alt]` text.  Stage 5 of the pixel-graphics
+        // work will replace this with N rows of `VisualLineKind::Image`
+        // once the protocol-emission path is live.
+        let text = if alt.is_empty() {
+          format!("[Image #{kitty_id}]")
+        } else {
+          format!("[Image: {alt}]")
+        };
+        let len = text.len();
+        out.push(VisualLine {
+          block_idx,
+          line_in_block: 0,
+          text,
+          kind: VisualLineKind::Prose,
+          block_byte_start: 0,
+          block_byte_end: len,
+        });
+      }
     }
 
     i += 1;

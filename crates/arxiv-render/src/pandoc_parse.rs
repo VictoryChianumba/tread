@@ -244,10 +244,18 @@ struct SectionCounters {
     sec: [u32; 3],
     table: u32,
     figure: u32,
+    kitty_id: u32,
 }
 
 impl SectionCounters {
-    fn new() -> Self { Self { sec: [0; 3], table: 0, figure: 0 } }
+    fn new() -> Self { Self { sec: [0; 3], table: 0, figure: 0, kitty_id: 0 } }
+
+    /// Allocate the next Kitty graphics protocol image id.  Starts at 1
+    /// because some Kitty implementations reject id=0.
+    fn next_kitty_id(&mut self) -> u32 {
+        self.kitty_id += 1;
+        self.kitty_id
+    }
 
     /// Increment the counter at `level` (1–3) and reset deeper levels.
     /// Returns the formatted prefix string, e.g. "2", "2.1", "2.1.3".
@@ -429,13 +437,25 @@ fn walk_blocks(
                 }
                 let cap = extract_caption_text(&c[1]);
                 let n = counters.bump_figure();
-                if !cap.is_empty() {
+                let image_src = c[2].as_array().and_then(|blocks| find_image_src(blocks));
+                let alt = if cap.is_empty() {
+                    format!("Figure {n}")
+                } else {
+                    format!("Figure {n}: {cap}")
+                };
+                if let Some(src) = image_src {
+                    let kitty_id = counters.next_kitty_id();
+                    out.push(Block::Image {
+                        path: std::path::PathBuf::from(src),
+                        alt,
+                        kitty_id,
+                    });
+                } else if !cap.is_empty() {
                     out.push(Block::Line(format!("[Figure {n}: {cap}]")));
-                    out.push(Block::Blank);
                 } else {
                     out.push(Block::Line(format!("[Figure {n}]")));
-                    out.push(Block::Blank);
                 }
+                out.push(Block::Blank);
             }
 
             "LineBlock" => {
@@ -826,6 +846,39 @@ fn extract_caption_text(cap: &Value) -> String {
 }
 
 // ── Inline walkers ────────────────────────────────────────────────────────────
+
+/// Recursively walk a Pandoc AST node array looking for the first
+/// Image inline node.  Returns its `src` string (the path Pandoc
+/// extracted from `\includegraphics{...}`).  Used by the Figure arm
+/// to find the image inside `c[2]` (figure content blocks).
+fn find_image_src(nodes: &[Value]) -> Option<String> {
+    for node in nodes {
+        if node["t"].as_str() == Some("Image") {
+            // c = [attr, alt_inlines, [src, title]]
+            if let Some(src) = node["c"][2][0].as_str() {
+                if !src.is_empty() {
+                    return Some(src.to_string());
+                }
+            }
+        }
+        // Recurse into child arrays — Pandoc nests Image inside Plain,
+        // Para, Div, etc.  The child structure varies per node type so
+        // we walk every array-valued field.
+        if let Some(arr) = node["c"].as_array() {
+            if let Some(found) = find_image_src(arr) {
+                return Some(found);
+            }
+        }
+        if node.is_array() {
+            if let Some(arr) = node.as_array() {
+                if let Some(found) = find_image_src(arr) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
 
 /// Build the rendered bibliography block sequence from the
 /// pre-extracted source-order bibitems.  Replaces Pandoc's

@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 doc-model = { path = "../doc-model" }
 arxiv-render = { path = "../arxiv-render" }
+kitty-graphics = { path = "../kitty-graphics" }
 ratatui = "0.29"
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
