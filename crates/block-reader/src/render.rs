@@ -852,7 +852,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
     ("/  n  N",       "search / next / prev",    "m{a} '{a}","set/jump named mark"),
     ("yy",            "yank current line (OSC 52)","\\",      "toggle TOC"),
     ("yi/ya<obj>",    "yank inner / around obj",  "X",        "remove highlight"),
-    ("Enter",         "follow link / citation",   "Shift+Ent", "popup citation entry"),
+    ("Enter",         "follow link / citation",   "K",        "popup citation entry"),
     (":",             "command mode (see below)", "Ctrl+O",   "go back"),
     ("?",             "this help",                "q / Esc",  "quit"),
   ];
