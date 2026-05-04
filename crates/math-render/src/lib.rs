@@ -6,6 +6,16 @@ pub enum MathInput<'a> {
   MathMl(&'a str),
 }
 
+/// Render inline math to a compact single-line Unicode string.
+///
+/// Always uses `strip_latex` — tui_math's vertical layout (fractions, large
+/// subscripts) is correct for display blocks but breaks inline prose embedding
+/// because `split_whitespace` fragments the multi-line output into separate words.
+pub fn render_inline(latex: &str) -> String {
+  let preprocessed = preprocess(latex);
+  strip_latex(&preprocessed)
+}
+
 /// Render math to a Unicode string suitable for terminal display.
 ///
 /// Pipeline:

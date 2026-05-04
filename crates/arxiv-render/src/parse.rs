@@ -696,6 +696,11 @@ fn process_body(
             let (body_text, adv) = read_until_end(&text, i, &env);
             i += adv;
             flush_builder(&mut builder, &mut list_item_pending, &mut out);
+            // Caption goes ABOVE the table (academic convention for tables;
+            // figures place caption below, handled in the CAPTION_ENVS arm).
+            if let Some(cap) = extract_caption(&body_text) {
+              out.push(Block::Line(format!("[Table: {}]", cap)));
+            }
             for tab_env in TABULAR_ENVS {
               if let Some(tab_body) = extract_env(&body_text, tab_env) {
                 // Pre-expand zero-arg custom macros so that e.g. \dmodel → d_{\text{model}}
@@ -705,9 +710,7 @@ fn process_body(
                 break;
               }
             }
-            if let Some(cap) = extract_caption(&body_text) {
-              out.push(Block::Line(format!("[Table: {}]", cap)));
-            }
+            out.push(Block::Blank);
             continue;
           }
 
@@ -717,6 +720,7 @@ fn process_body(
             flush_builder(&mut builder, &mut list_item_pending, &mut out);
             if let Some(cap) = extract_caption(&body_text) {
               out.push(Block::Line(format!("[Figure: {}]", cap)));
+              out.push(Block::Blank);
             }
             continue;
           }
@@ -1909,7 +1913,7 @@ fn parse_tabular(body: &str) -> Vec<Block> {
   for raw_row in cleaned.split(r"\\") {
     let (had_rule, data_text) = peel_row_prefix(raw_row);
     if had_rule && !current_rows.is_empty() {
-      blocks.push(Block::Matrix { rows: std::mem::take(&mut current_rows) });
+      blocks.push(Block::Matrix { rows: std::mem::take(&mut current_rows), vertical_rules: Vec::new() });
     }
     if had_rule {
       blocks.push(Block::Rule);
@@ -1928,7 +1932,7 @@ fn parse_tabular(body: &str) -> Vec<Block> {
     }
   }
   if !current_rows.is_empty() {
-    blocks.push(Block::Matrix { rows: current_rows });
+    blocks.push(Block::Matrix { rows: current_rows, vertical_rules: Vec::new() });
   }
   blocks
 }

@@ -1,4 +1,7 @@
 mod bookmarks;
+mod commands;
+mod config;
+mod highlights;
 mod nav;
 mod progress;
 mod render;
@@ -12,7 +15,8 @@ use crossterm::{
 use doc_model::Block;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use state::{Mode, Reader};
+use commands::{CmdCtx, CommandResult};
+use state::{FindKind, Mode, Reader};
 use std::io;
 use ui_theme::Theme;
 
@@ -23,15 +27,17 @@ pub fn run(
   meta: Option<PaperMeta>,
   progress_key: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-  let theme = ui_theme::ThemeId::Dark.theme();
-  run_with_theme(blocks, meta, progress_key, &theme)
+  // Resolve theme via the new config layer: respect override, else follow
+  // trench's theme, else fall back to the built-in dark default.
+  let theme = config::resolve_theme();
+  run_with_theme(blocks, meta, progress_key, theme)
 }
 
 pub fn run_with_theme(
   blocks: Vec<Block>,
   meta: Option<PaperMeta>,
   progress_key: Option<String>,
-  theme: &Theme,
+  theme: Theme,
 ) -> Result<(), Box<dyn std::error::Error>> {
   enable_raw_mode()?;
   let mut stdout = io::stdout();
@@ -50,17 +56,23 @@ pub fn run_with_theme(
       let max_offset = reader.total_lines().saturating_sub(1);
       reader.offset = p.offset.min(max_offset);
     }
-    reader.bookmarks = bookmarks::load(key).marks;
+    reader.bookmarks = bookmarks::load(key).named;
+    reader.highlights = highlights::load(key);
   }
 
-  let result = event_loop(&mut terminal, &mut reader, theme);
+  let ctx = CmdCtx { arxiv_id: progress_key.clone() };
+  let result = event_loop(&mut terminal, &mut reader, theme, ctx);
 
   // Persist reading progress and bookmarks on clean exit.
   if let Some(ref key) = progress_key {
     let mut map = progress::load();
     map.insert(key.clone(), progress::ReaderProgress { offset: reader.offset });
     progress::save(&map);
-    bookmarks::save(key, &bookmarks::BookmarkSet { marks: reader.bookmarks.clone() });
+    bookmarks::save(key, &bookmarks::BookmarkSet {
+      marks: Vec::new(),
+      named: reader.bookmarks.clone(),
+    });
+    highlights::save(key, &reader.highlights);
   }
 
   disable_raw_mode()?;
@@ -73,21 +85,41 @@ pub fn run_with_theme(
 fn event_loop(
   terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
   reader: &mut Reader,
-  theme: &Theme,
+  mut theme: Theme,
+  ctx: CmdCtx,
 ) -> Result<(), Box<dyn std::error::Error>> {
   loop {
-    terminal.draw(|f| render::draw(f, reader, theme))?;
+    terminal.draw(|f| render::draw(f, reader, &theme))?;
 
     match event::read()? {
-      Event::Key(key) => match reader.mode {
-        Mode::Normal => {
-          if handle_normal(reader, key.code, key.modifiers) {
-            break;
-          }
+      Event::Key(key) => {
+        // Any keystroke clears the previous command's error and dismisses
+        // any open popup so it doesn't linger across input.
+        reader.cmd_error = None;
+        if reader.popup.is_some() {
+          reader.popup = None;
+          continue;
         }
-        Mode::Search => handle_search(reader, key.code),
-        Mode::Visual { .. } => handle_visual(reader, key.code),
-      },
+        match reader.mode {
+          Mode::Normal => {
+            if handle_normal(reader, key.code, key.modifiers) {
+              break;
+            }
+          }
+          Mode::Search => handle_search(reader, key.code),
+          Mode::Visual { .. } => handle_visual(reader, key.code),
+          Mode::AwaitingChar { kind } => handle_awaiting_char(reader, key.code, kind),
+          Mode::AwaitingMarkName { for_set } => handle_awaiting_mark_name(reader, key.code, for_set),
+          Mode::AwaitingG => handle_awaiting_g(reader, key.code),
+          Mode::Command => match handle_command(reader, key.code, &ctx) {
+            CommandResult::Continue => {}
+            CommandResult::Quit => break,
+            CommandResult::ChangeTheme(new) => theme = new,
+            CommandResult::OpenHelp => reader.help_visible = true,
+            CommandResult::Error(msg) => reader.cmd_error = Some(msg),
+          },
+        }
+      }
       Event::Mouse(mouse) => match mouse.kind {
         MouseEventKind::ScrollDown => { for _ in 0..3 { reader.nav_down(); } }
         MouseEventKind::ScrollUp   => { for _ in 0..3 { reader.nav_up(); } }
@@ -140,7 +172,7 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
     }
     KeyCode::Char('g') => {
       reader.count_buf.clear();
-      reader.nav_top();
+      reader.mode = Mode::AwaitingG;
     }
     KeyCode::Char('G') => {
       if reader.count_buf.is_empty() {
@@ -182,13 +214,43 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
     KeyCode::Char('L') => { reader.count_buf.clear(); reader.jump_screen_bottom(); }
     KeyCode::Char('z') => { reader.count_buf.clear(); reader.center_cursor(); }
     KeyCode::Char('h') | KeyCode::Left => {
-      reader.count_buf.clear();
-      reader.cursor_x = reader.cursor_x.saturating_sub(1);
+      let n = take_count(reader);
+      for _ in 0..n { reader.nav_left(); }
     }
     KeyCode::Char('l') | KeyCode::Right => {
+      let n = take_count(reader);
+      for _ in 0..n { reader.nav_right(); }
+    }
+    // Word motions — `w`/`W` forward, `b`/`B` back, `e`/`E` to word-end.
+    KeyCode::Char('w') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_forward(false); } reader.remember_column(); }
+    KeyCode::Char('W') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_forward(true); } reader.remember_column(); }
+    KeyCode::Char('b') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_back(false); } reader.remember_column(); }
+    KeyCode::Char('B') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_back(true); } reader.remember_column(); }
+    KeyCode::Char('e') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_end(false); } reader.remember_column(); }
+    KeyCode::Char('E') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_end(true); } reader.remember_column(); }
+    // Line edges — `0` to byte 0, `^` to first non-blank, `$` to last char.
+    KeyCode::Char('0') => { reader.count_buf.clear(); reader.nav_line_start(); reader.remember_column(); }
+    KeyCode::Char('^') => { reader.count_buf.clear(); reader.nav_line_first_nonblank(); reader.remember_column(); }
+    KeyCode::Char('$') => { reader.count_buf.clear(); reader.nav_line_end(); reader.remember_column(); }
+    // Find char on current line — enters AwaitingChar mode for the next keystroke.
+    KeyCode::Char('f') => { reader.count_buf.clear(); reader.mode = Mode::AwaitingChar { kind: FindKind::F }; }
+    KeyCode::Char('F') => { reader.count_buf.clear(); reader.mode = Mode::AwaitingChar { kind: FindKind::ShiftF }; }
+    KeyCode::Char('t') => { reader.count_buf.clear(); reader.mode = Mode::AwaitingChar { kind: FindKind::T }; }
+    KeyCode::Char('T') => { reader.count_buf.clear(); reader.mode = Mode::AwaitingChar { kind: FindKind::ShiftT }; }
+    // Matching brace — `%` jumps between paired brackets on the current line.
+    KeyCode::Char('%') => { reader.count_buf.clear(); reader.nav_match_brace(); reader.remember_column(); }
+    // Sentence motion — `)` next, `(` previous.  Cross-line.
+    KeyCode::Char(')') => { let n = take_count(reader); for _ in 0..n { reader.nav_sentence_forward(); } reader.remember_column(); }
+    KeyCode::Char('(') => { let n = take_count(reader); for _ in 0..n { reader.nav_sentence_back(); } reader.remember_column(); }
+    // Remove highlight under cursor — eXcise.
+    KeyCode::Char('X') => {
       reader.count_buf.clear();
       if let Some(vl) = reader.visual_lines.get(reader.current_line()) {
-        reader.cursor_x = (reader.cursor_x + 1).min(vl.text.len().saturating_sub(1));
+        if vl.block_byte_end > vl.block_byte_start {
+          let local = reader.cursor_x.min(vl.block_byte_end - vl.block_byte_start - 1);
+          let byte_in_block = vl.block_byte_start + local;
+          reader.highlights.remove_at(vl.block_idx, byte_in_block);
+        }
       }
     }
     KeyCode::Char('*') => {
@@ -202,6 +264,12 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
           reader.jump_to_match(idx);
         }
       }
+    }
+    KeyCode::Char(':') => {
+      reader.count_buf.clear();
+      reader.cmd_buf.clear();
+      reader.cmd_error = None;
+      reader.mode = Mode::Command;
     }
     KeyCode::Char('/') => {
       reader.count_buf.clear();
@@ -223,7 +291,8 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
       let n = take_count(reader);
       for _ in 0..n { reader.jump_prev_section(); }
     }
-    KeyCode::Char('t') => {
+    // TOC moved off `t` to free the key for vim's `t<char>` find motion.
+    KeyCode::Char('\\') => {
       reader.count_buf.clear();
       reader.toggle_toc();
     }
@@ -237,15 +306,11 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
     }
     KeyCode::Char('m') => {
       reader.count_buf.clear();
-      reader.toggle_bookmark();
+      reader.mode = Mode::AwaitingMarkName { for_set: true };
     }
-    KeyCode::Char('\'') => {
+    KeyCode::Char('\'') | KeyCode::Char('`') => {
       reader.count_buf.clear();
-      reader.next_bookmark();
-    }
-    KeyCode::Char('`') => {
-      reader.count_buf.clear();
-      reader.prev_bookmark();
+      reader.mode = Mode::AwaitingMarkName { for_set: false };
     }
     KeyCode::Char('y') => {
       reader.count_buf.clear();
@@ -287,6 +352,70 @@ fn handle_search(reader: &mut Reader, code: KeyCode) {
   }
 }
 
+fn handle_awaiting_char(reader: &mut Reader, code: KeyCode, kind: FindKind) {
+  // One-shot: any keystroke ends AwaitingChar.  A Char(c) performs the find;
+  // anything else (Esc, arrow keys, etc.) is a quiet cancel.
+  if let KeyCode::Char(c) = code {
+    if let Some(idx) = reader.find_char_in_line(c, kind) {
+      reader.cursor_x = idx;
+      reader.remember_column();
+    }
+  }
+  reader.mode = Mode::Normal;
+}
+
+fn handle_command(reader: &mut Reader, code: KeyCode, ctx: &CmdCtx) -> CommandResult {
+  match code {
+    KeyCode::Esc => {
+      reader.cmd_buf.clear();
+      reader.mode = Mode::Normal;
+      CommandResult::Continue
+    }
+    KeyCode::Enter => {
+      let line = std::mem::take(&mut reader.cmd_buf);
+      reader.mode = Mode::Normal;
+      commands::execute(reader, ctx, &line)
+    }
+    KeyCode::Backspace => {
+      if reader.cmd_buf.pop().is_none() {
+        // Empty buffer: backspace exits command mode (matches search bar UX).
+        reader.mode = Mode::Normal;
+      }
+      CommandResult::Continue
+    }
+    KeyCode::Char(c) => {
+      reader.cmd_buf.push(c);
+      CommandResult::Continue
+    }
+    _ => CommandResult::Continue,
+  }
+}
+
+fn handle_awaiting_g(reader: &mut Reader, code: KeyCode) {
+  // `gg` → top of doc; `ge` / `gE` → backward word-end.  Any other key cancels.
+  match code {
+    KeyCode::Char('g') => { reader.nav_top(); }
+    KeyCode::Char('e') => { reader.nav_word_end_back(false); reader.remember_column(); }
+    KeyCode::Char('E') => { reader.nav_word_end_back(true); reader.remember_column(); }
+    _ => {}
+  }
+  reader.mode = Mode::Normal;
+}
+
+fn handle_awaiting_mark_name(reader: &mut Reader, code: KeyCode, for_set: bool) {
+  // One-shot: a letter `Char(c)` either sets or jumps; anything else cancels.
+  if let KeyCode::Char(c) = code {
+    if c.is_ascii_alphabetic() {
+      if for_set {
+        reader.set_mark(c);
+      } else {
+        reader.jump_to_mark(c);
+      }
+    }
+  }
+  reader.mode = Mode::Normal;
+}
+
 fn handle_visual(reader: &mut Reader, code: KeyCode) {
   match code {
     KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('V') => {
@@ -294,21 +423,100 @@ fn handle_visual(reader: &mut Reader, code: KeyCode) {
     }
     KeyCode::Char('j') | KeyCode::Down => reader.nav_down(),
     KeyCode::Char('k') | KeyCode::Up => reader.nav_up(),
-    KeyCode::Char('h') | KeyCode::Left => {
-      reader.cursor_x = reader.cursor_x.saturating_sub(1);
-    }
-    KeyCode::Char('l') | KeyCode::Right => {
-      if let Some(vl) = reader.visual_lines.get(reader.current_line()) {
-        reader.cursor_x = (reader.cursor_x + 1).min(vl.text.len().saturating_sub(1));
-      }
-    }
+    KeyCode::Char('h') | KeyCode::Left => reader.nav_left(),
+    KeyCode::Char('l') | KeyCode::Right => reader.nav_right(),
     KeyCode::Char('y') => {
       let text = yank_selection(reader);
       osc52_yank(&text);
       reader.mode = Mode::Normal;
     }
+    KeyCode::Char('H') => {
+      commit_selection_as_highlights(reader);
+      reader.mode = Mode::Normal;
+    }
     _ => {}
   }
+}
+
+/// Convert the current visual selection into one or more `Highlight`
+/// entries (one per *block* the selection touches), and add them to
+/// `reader.highlights`.  No-op for empty char-visual selections.  Save
+/// to disk happens on clean exit alongside bookmarks.
+fn commit_selection_as_highlights(reader: &mut Reader) {
+  use crate::highlights::Highlight;
+
+  let cur = reader.current_line();
+  let anchor = reader.visual_anchor;
+  let (lo, hi) = (cur.min(anchor), cur.max(anchor));
+  let is_line_mode = matches!(reader.mode, Mode::Visual { line_mode: true });
+  let ax = reader.visual_anchor_x;
+  let cx = reader.cursor_x;
+
+  // Empty char-visual selection: anchor and cursor identical → no-op.
+  if !is_line_mode && lo == hi && ax == cx {
+    return;
+  }
+
+  // Normalize first/last column endpoints based on which end is the anchor.
+  let (start_x, end_x_incl) = if anchor <= cur { (ax, cx) } else { (cx, ax) };
+
+  // Walk VLs lo..=hi, building per-VL byte ranges within their parent
+  // block, and merging consecutive same-block runs into one highlight.
+  let mut current: Option<(usize, usize, usize)> = None; // (block_idx, byte_start, byte_end)
+  for i in lo..=hi {
+    let Some(vl) = reader.visual_lines.get(i) else { continue };
+    // Skip non-text blocks (Matrix, Rule, Blank) — they have zero byte range.
+    if vl.block_byte_end == vl.block_byte_start { continue; }
+
+    let local_start = if !is_line_mode && i == lo { start_x.min(vl.text.len()) } else { 0 };
+    let local_end_excl = if !is_line_mode && i == hi {
+      next_char_boundary(&vl.text, end_x_incl)
+    } else {
+      vl.text.len()
+    };
+    let local_start = snap_back_to_boundary(&vl.text, local_start);
+    let local_end_excl = local_end_excl.min(vl.text.len());
+
+    let byte_start = vl.block_byte_start + local_start;
+    let byte_end = vl.block_byte_start + local_end_excl;
+    if byte_end <= byte_start { continue; }
+
+    match &mut current {
+      Some((blk, _, end)) if *blk == vl.block_idx => {
+        *end = byte_end;
+      }
+      _ => {
+        if let Some((blk, s, e)) = current.take() {
+          reader.highlights.add(Highlight { block_idx: blk, byte_start: s, byte_end: e });
+        }
+        current = Some((vl.block_idx, byte_start, byte_end));
+      }
+    }
+  }
+  if let Some((blk, s, e)) = current {
+    reader.highlights.add(Highlight { block_idx: blk, byte_start: s, byte_end: e });
+  }
+}
+
+/// Snap `byte_idx` down to the nearest UTF-8 char boundary at or before it.
+fn snap_back_to_boundary(text: &str, byte_idx: usize) -> usize {
+  let mut i = byte_idx.min(text.len());
+  while i > 0 && !text.is_char_boundary(i) {
+    i -= 1;
+  }
+  i
+}
+
+/// Return the byte position immediately *after* the codepoint that starts
+/// at (or contains) `byte_idx`.  Used to compute exclusive end positions
+/// in selections.
+fn next_char_boundary(text: &str, byte_idx: usize) -> usize {
+  let start = snap_back_to_boundary(text, byte_idx);
+  let mut i = start + 1;
+  while i < text.len() && !text.is_char_boundary(i) {
+    i += 1;
+  }
+  i.min(text.len())
 }
 
 fn yank_selection(reader: &Reader) -> String {
@@ -344,7 +552,7 @@ fn yank_selection(reader: &Reader) -> String {
   }
 }
 
-fn osc52_yank(text: &str) {
+pub(crate) fn osc52_yank(text: &str) {
   use std::io::Write;
   let encoded = base64_encode(text.as_bytes());
   let _ = std::io::stdout().write_all(format!("\x1b]52;c;{encoded}\x07").as_bytes());

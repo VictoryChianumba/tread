@@ -1,0 +1,21 @@
+# Benchmark papers for testing the LaTeX → Block rendering pipeline.
+# Each line is an arXiv ID passed directly to block-reader.
+# Format: cargo run -p block-reader -- <id>
+
+# Attention Is All You Need — equations, matrices, tables, references, ML formatting
+1706.03762
+
+# GPT-3: Language Models are Few-Shot Learners — heavily multi-file \input{} structure,
+# good stress test for cross-file resolution (50+ source files)
+2005.14165
+
+# Differential Algebra and Mathematical Physics — dense multiline equations,
+# symbolic notation, differential operators
+1707.09763
+
+# Computing Diffusion Geometry — modern geometry paper, math notation + figures
+2602.06006
+
+# Tensor Product Attention Is All You Need — modern ML architecture, transformer-style
+# math. ICML 2025 paper; no arXiv ID in source link (add if found)
+# https://icml.cc/media/icml-2025/Slides/51827.pdf

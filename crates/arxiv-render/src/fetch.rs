@@ -3,6 +3,7 @@ use std::io::Read;
 use tar::Archive;
 
 const MAX_SOURCE_BYTES: usize = 50 * 1024 * 1024; // 50 MB
+const MAX_PDF_BYTES: usize = 30 * 1024 * 1024; // 30 MB — typical paper PDFs are 1–5 MB
 const TIMEOUT_SECS: u64 = 30;
 
 /// Download the arXiv e-print source tarball for `id` and return all `.tex`
@@ -38,6 +39,38 @@ pub fn fetch_source(id: &str) -> Result<Vec<(String, String)>, String> {
   bytes.extend_from_slice(&reader);
 
   extract_tex_files(&bytes)
+}
+
+/// Download the rendered PDF for `id` and return its raw bytes.  Used for
+/// table-placement anchor extraction — `pdftotext` reads the PDF and yields
+/// prose in rendered reading order, with each `Table N:` caption appearing
+/// next to the paragraph it visually follows in the typeset paper.
+///
+/// Returns `Err` on network failure, non-2xx status, or oversize response.
+pub fn fetch_pdf(id: &str) -> Result<Vec<u8>, String> {
+  let url = format!("https://arxiv.org/pdf/{id}");
+
+  let client = reqwest::blocking::Client::builder()
+    .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
+    .build()
+    .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+  let resp = client
+    .get(&url)
+    .send()
+    .map_err(|e| format!("PDF request failed: {e}"))?;
+
+  if !resp.status().is_success() {
+    return Err(format!("HTTP {}: {url}", resp.status()));
+  }
+
+  let bytes = resp
+    .bytes()
+    .map_err(|e| format!("failed to read PDF response: {e}"))?;
+  if bytes.len() > MAX_PDF_BYTES {
+    return Err(format!("PDF too large: {} bytes", bytes.len()));
+  }
+  Ok(bytes.to_vec())
 }
 
 fn extract_tex_files(bytes: &[u8]) -> Result<Vec<(String, String)>, String> {
@@ -89,12 +122,10 @@ fn try_tar_gz(bytes: &[u8]) -> Result<Vec<(String, String)>, String> {
       .read_to_string(&mut content)
       .map_err(|e| format!("read error for {path}: {e}"))?;
 
-    let filename = std::path::Path::new(&path)
-      .file_name()
-      .map(|n| n.to_string_lossy().to_string())
-      .unwrap_or(path.clone());
-
-    files.push((filename, content));
+    // Preserve the full relative path (e.g. "content/intro/intro.tex") so that
+    // Pandoc can resolve \input{} directives when run from the temp dir root.
+    // Stripping to file_name() broke multi-file papers by flattening the tree.
+    files.push((path, content));
   }
 
   Ok(files)

@@ -26,6 +26,12 @@ pub fn draw(frame: &mut Frame, reader: &Reader, t: &Theme) {
   if reader.mode == Mode::Search {
     draw_search_bar(frame, reader, search_area.unwrap(), t);
   }
+  if reader.mode == Mode::Command {
+    draw_command_bar(frame, reader, search_area.unwrap(), t);
+  }
+  if let Some(popup) = &reader.popup {
+    draw_text_popup(frame, area, t, popup);
+  }
   if reader.help_visible {
     draw_help_overlay(frame, area, t);
   }
@@ -58,14 +64,15 @@ fn split_layout(
   };
 
   let (content_area, status_area, search_area) = match reader.mode {
-    Mode::Normal | Mode::Visual { .. } => {
+    Mode::Normal | Mode::Visual { .. } | Mode::AwaitingChar { .. } | Mode::AwaitingMarkName { .. } | Mode::AwaitingG => {
       let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(right);
       (v[0], v[1], None)
     }
-    Mode::Search => {
+    Mode::Search | Mode::Command => {
+      // Command mode reuses the search-bar slot — same shape, different prefix.
       let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
@@ -111,10 +118,23 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
       }
       let vl = &reader.visual_lines[vl_idx];
       let is_cursor = row == reader.cursor_y;
-      let is_bookmarked = reader.bookmarks.binary_search(&vl_idx).is_ok();
+      let is_bookmarked = reader.bookmarks.values().any(|&l| l == vl_idx);
       let is_selected = visual_range.map_or(false, |(lo, hi)| vl_idx >= lo && vl_idx <= hi);
       let cursor_col = if is_cursor { Some(reader.cursor_x) } else { None };
-      render_visual_line(vl, is_cursor, is_bookmarked, is_selected, cursor_col, &q, &reader.search_matches, vl_idx, t)
+      // Compute persistent-highlight byte ranges that overlap this VL,
+      // translated into vl-local byte coordinates for the renderer.
+      let highlight_ranges: Vec<(usize, usize)> = if vl.block_byte_end > vl.block_byte_start {
+        reader.highlights
+          .overlapping(vl.block_idx, vl.block_byte_start..vl.block_byte_end)
+          .map(|h| (
+            h.byte_start.max(vl.block_byte_start) - vl.block_byte_start,
+            h.byte_end.min(vl.block_byte_end) - vl.block_byte_start,
+          ))
+          .collect()
+      } else {
+        Vec::new()
+      };
+      render_visual_line(vl, is_cursor, is_bookmarked, is_selected, cursor_col, &q, &reader.search_matches, vl_idx, &highlight_ranges, t)
     })
     .collect();
 
@@ -131,6 +151,7 @@ fn render_visual_line<'a>(
   query: &str,
   matches: &[usize],
   vl_idx: usize,
+  highlight_ranges: &[(usize, usize)],
   t: &Theme,
 ) -> Line<'a> {
   let text = &vl.text;
@@ -161,6 +182,8 @@ fn render_visual_line<'a>(
         apply_char_cursor(text, col, bg, t)
       } else if !query.is_empty() && matches.contains(&vl_idx) {
         highlight_query(text, query, bg, t)
+      } else if !highlight_ranges.is_empty() {
+        overlay_highlights(text, base_style, highlight_ranges, t.bg_highlight)
       } else {
         Line::styled(text.clone(), base_style)
       }
@@ -176,25 +199,80 @@ fn render_visual_line<'a>(
         2 => (t.header, Modifier::BOLD),
         _ => (t.header, Modifier::empty()),
       };
+      let hdr_style = base_style.fg(fg).add_modifier(modifier);
       if let Some(col) = cursor_col {
         apply_char_cursor(text, col, bg, t)
+      } else if !highlight_ranges.is_empty() {
+        overlay_highlights(text, hdr_style, highlight_ranges, t.bg_highlight)
       } else {
-        Line::styled(text.clone(), base_style.fg(fg).add_modifier(modifier))
+        Line::styled(text.clone(), hdr_style)
       }
     }
 
     VisualLineKind::MatrixLine { is_header, .. } => {
-      let style = if *is_header {
+      // Cell content uses the body text colour (bold on headers); the
+      // box-drawing chars (│ ┬ ┼ ┴ ├ ┤ ┌ ┐ └ ┘ ─) are repainted with the
+      // dimmer `t.rule` colour so vertical rules visually match horizontal
+      // ones. Without this split, ratatui paints the whole line with the
+      // cell style and the verticals look brighter (and bold on headers).
+      let cell_style = if *is_header {
         base_style.fg(t.text).add_modifier(Modifier::BOLD)
       } else {
         base_style.fg(t.text)
       };
-      Line::styled(text.clone(), style)
+      let rule_style = base_style.fg(t.rule);
+      // When the cursor is on this row, walk char-by-char and emit each
+      // byte as its own span at the cursor position so the cursor is
+      // visible inside table cells.  Less efficient than the run-merging
+      // path below, but simpler than splicing one cursor cell into a
+      // pre-built span list.
+      if let Some(col) = cursor_col {
+        let safe = snap_to_char_boundary(text, col);
+        let mut spans: Vec<Span> = Vec::new();
+        let mut byte_idx = 0usize;
+        for ch in text.chars() {
+          let ch_len = ch.len_utf8();
+          let style = if byte_idx == safe {
+            Style::default().bg(t.cursor_bg).fg(t.cursor_fg)
+          } else if is_box_drawing(ch) {
+            rule_style
+          } else {
+            cell_style
+          };
+          spans.push(Span::styled(ch.to_string(), style));
+          byte_idx += ch_len;
+        }
+        if spans.is_empty() {
+          spans.push(Span::styled(" ", Style::default().bg(t.cursor_bg).fg(t.cursor_fg)));
+        }
+        return Line::from(spans);
+      }
+      let mut spans: Vec<Span> = Vec::new();
+      let mut buf = String::new();
+      let mut buf_is_rule = false;
+      for ch in text.chars() {
+        let ch_is_rule = is_box_drawing(ch);
+        if !buf.is_empty() && ch_is_rule != buf_is_rule {
+          let s = if buf_is_rule { rule_style } else { cell_style };
+          spans.push(Span::styled(std::mem::take(&mut buf), s));
+        }
+        buf_is_rule = ch_is_rule;
+        buf.push(ch);
+      }
+      if !buf.is_empty() {
+        let s = if buf_is_rule { rule_style } else { cell_style };
+        spans.push(Span::styled(buf, s));
+      }
+      Line::from(spans)
     }
 
     VisualLineKind::StyledProse(spans) => {
-      if !query.is_empty() && matches.contains(&vl_idx) {
+      if let Some(col) = cursor_col {
+        apply_styled_cursor(spans, base_style, col, t)
+      } else if !query.is_empty() && matches.contains(&vl_idx) {
         highlight_spans(spans, query, bg, t)
+      } else if !highlight_ranges.is_empty() {
+        overlay_highlights_styled(spans, base_style, highlight_ranges, t.bg_highlight, t)
       } else {
         let ratatui_spans: Vec<Span> = spans.iter().map(|s| {
           let mut style = base_style;
@@ -204,10 +282,10 @@ fn render_visual_line<'a>(
           if s.strikethrough { style = style.add_modifier(Modifier::CROSSED_OUT); }
           if s.monospace   { style = style.fg(t.mono); }
           if let Some((r, g, b)) = s.color { style = style.fg(Color::Rgb(r, g, b)); }
-          if let Some(url) = &s.url {
-            // OSC 8 clickable link: terminals that don't support it show plain text.
-            let linked = format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", url, s.text);
-            Span::styled(linked, style)
+          if s.url.is_some() {
+            // Mark external URLs with underline. Embedding raw OSC 8 sequences in ratatui
+            // Spans corrupts cell-width accounting; ratatui counts escape bytes as columns.
+            Span::styled(s.text.clone(), style.add_modifier(Modifier::UNDERLINED))
           } else {
             Span::styled(s.text.clone(), style)
           }
@@ -222,6 +300,8 @@ fn render_visual_line<'a>(
         apply_char_cursor(text, col, bg, t)
       } else if !query.is_empty() && matches.contains(&vl_idx) {
         highlight_query(text, query, bg, t)
+      } else if !highlight_ranges.is_empty() {
+        overlay_highlights(text, base_style, highlight_ranges, t.bg_highlight)
       } else {
         Line::styled(text.clone(), base_style)
       }
@@ -229,10 +309,20 @@ fn render_visual_line<'a>(
 
     VisualLineKind::Code { is_first, is_last } => {
       let prefix = if *is_first { "╔ " } else if *is_last { "╚ " } else { "║ " };
-      Line::styled(
-        format!("{}{}", prefix, text),
-        Style::default().bg(t.bg_code).fg(t.text),
-      )
+      let code_style = Style::default().bg(t.bg_code).fg(t.text);
+      let combined = format!("{}{}", prefix, text);
+      let prefix_len = prefix.len();
+      if let Some(col) = cursor_col {
+        // Cursor lives in the original text; shift past the prefix.
+        apply_inline_cursor(&combined, code_style, prefix_len + col, t)
+      } else if !highlight_ranges.is_empty() {
+        let shifted: Vec<(usize, usize)> = highlight_ranges.iter()
+          .map(|&(s, e)| (s + prefix_len, e + prefix_len))
+          .collect();
+        overlay_highlights(&combined, code_style, &shifted, t.bg_highlight)
+      } else {
+        Line::styled(combined, code_style)
+      }
     }
 
     VisualLineKind::Rule => {
@@ -240,14 +330,113 @@ fn render_visual_line<'a>(
     }
 
     VisualLineKind::Quote { .. } => {
-      Line::styled(
-        format!("    {}", text),
-        base_style
-          .fg(t.text_dim)
-          .add_modifier(Modifier::ITALIC),
-      )
+      let quote_style = base_style
+        .fg(t.text_dim)
+        .add_modifier(Modifier::ITALIC);
+      let combined = format!("    {}", text);
+      let prefix_len = 4; // "    "
+      if let Some(col) = cursor_col {
+        apply_inline_cursor(&combined, quote_style, prefix_len + col, t)
+      } else if !highlight_ranges.is_empty() {
+        let shifted: Vec<(usize, usize)> = highlight_ranges.iter()
+          .map(|&(s, e)| (s + prefix_len, e + prefix_len))
+          .collect();
+        overlay_highlights(&combined, quote_style, &shifted, t.bg_highlight)
+      } else {
+        Line::styled(combined, quote_style)
+      }
     }
   }
+}
+
+/// Apply a highlight background to byte ranges within a single-style line.
+/// Splits `text` at the range boundaries, emits Spans with the highlight bg
+/// applied to bytes inside any range and the base style elsewhere.  All
+/// indices in `ranges` must be valid char boundaries within `text`.
+fn overlay_highlights(text: &str, base_style: Style, ranges: &[(usize, usize)], hl_bg: Color) -> Line<'static> {
+  let bytes = text.len();
+  if bytes == 0 || ranges.is_empty() {
+    return Line::styled(text.to_string(), base_style);
+  }
+
+  // Build sorted list of cut points: 0, every range start/end, total length.
+  let mut cuts: Vec<usize> = Vec::with_capacity(ranges.len() * 2 + 2);
+  cuts.push(0);
+  cuts.push(bytes);
+  for &(s, e) in ranges {
+    cuts.push(s.min(bytes));
+    cuts.push(e.min(bytes));
+  }
+  cuts.sort();
+  cuts.dedup();
+
+  let mut out: Vec<Span<'static>> = Vec::with_capacity(cuts.len());
+  for w in cuts.windows(2) {
+    let (s, e) = (w[0], w[1]);
+    if s >= e || !text.is_char_boundary(s) || !text.is_char_boundary(e) { continue; }
+    let segment = text[s..e].to_string();
+    let in_range = ranges.iter().any(|&(rs, re)| s >= rs && e <= re);
+    let style = if in_range { base_style.bg(hl_bg) } else { base_style };
+    out.push(Span::styled(segment, style));
+  }
+  Line::from(out)
+}
+
+/// Apply a highlight background to byte ranges within a multi-style
+/// (StyledProse) line.  Walks the inline spans, computing each span's
+/// cumulative byte offset within the vl text, and within each span splits
+/// at any overlapping highlight range boundaries.  Inline styling
+/// (bold/italic/url-underline/etc.) is preserved on every emitted span.
+fn overlay_highlights_styled(
+  spans: &[doc_model::InlineSpan],
+  base_style: Style,
+  ranges: &[(usize, usize)],
+  hl_bg: Color,
+  t: &Theme,
+) -> Line<'static> {
+  let mut out: Vec<Span<'static>> = Vec::new();
+  let mut byte_cursor = 0usize;
+
+  for ispan in spans {
+    let span_start = byte_cursor;
+    let span_end = byte_cursor + ispan.text.len();
+    byte_cursor = span_end;
+
+    let mut style = base_style;
+    if ispan.bold        { style = style.add_modifier(Modifier::BOLD); }
+    if ispan.italic      { style = style.add_modifier(Modifier::ITALIC); }
+    if ispan.underline   { style = style.add_modifier(Modifier::UNDERLINED); }
+    if ispan.strikethrough { style = style.add_modifier(Modifier::CROSSED_OUT); }
+    if ispan.monospace   { style = style.fg(t.mono); }
+    if let Some((r, g, b)) = ispan.color { style = style.fg(Color::Rgb(r, g, b)); }
+    if ispan.url.is_some() { style = style.add_modifier(Modifier::UNDERLINED); }
+
+    // Cut points within this span (in absolute vl-byte coords).
+    let mut cuts: Vec<usize> = vec![span_start, span_end];
+    for &(rs, re) in ranges {
+      if rs < span_end && re > span_start {
+        cuts.push(rs.max(span_start));
+        cuts.push(re.min(span_end));
+      }
+    }
+    cuts.sort();
+    cuts.dedup();
+
+    for w in cuts.windows(2) {
+      let (s, e) = (w[0], w[1]);
+      if s >= e { continue; }
+      let local_s = s - span_start;
+      let local_e = e - span_start;
+      if !ispan.text.is_char_boundary(local_s) || !ispan.text.is_char_boundary(local_e) {
+        continue;
+      }
+      let segment = ispan.text[local_s..local_e].to_string();
+      let in_range = ranges.iter().any(|&(rs, re)| s >= rs && e <= re);
+      let seg_style = if in_range { style.bg(hl_bg) } else { style };
+      out.push(Span::styled(segment, seg_style));
+    }
+  }
+  Line::from(out)
 }
 
 /// Render a line with a single character highlighted at `byte_col` (the cursor position).
@@ -277,6 +466,116 @@ fn apply_char_cursor(text: &str, byte_col: usize, bg: Color, t: &Theme) -> Line<
     spans.push(Span::styled(after, Style::default().bg(bg)));
   }
   Line::from(spans)
+}
+
+// Unicode "Box Drawing" block (U+2500..U+257F). Used by MatrixLine span
+// splitting so vertical separators render with `t.rule` instead of `t.text`.
+fn is_box_drawing(ch: char) -> bool {
+  matches!(ch, '\u{2500}'..='\u{257F}')
+}
+
+/// Snap `byte_col` down to the nearest UTF-8 char boundary at or before it,
+/// clamped to the last char start in `text`.
+fn snap_to_char_boundary(text: &str, byte_col: usize) -> usize {
+  if text.is_empty() { return 0; }
+  let max = text.len() - 1;
+  let mut i = byte_col.min(max);
+  while i > 0 && !text.is_char_boundary(i) { i -= 1; }
+  i
+}
+
+/// Render a single-style line with the cursor cell painted at `byte_col`.
+/// Like `apply_char_cursor` but accepts a full `base_style` so callers
+/// (Code, Quote) can preserve their fg/bg/modifier alongside the cursor.
+fn apply_inline_cursor(text: &str, base_style: Style, byte_col: usize, t: &Theme) -> Line<'static> {
+  if text.is_empty() {
+    return Line::from(vec![Span::styled(
+      " ",
+      Style::default().bg(t.cursor_bg).fg(t.cursor_fg),
+    )]);
+  }
+  let safe = snap_to_char_boundary(text, byte_col);
+  let before = &text[..safe];
+  let mut rest = text[safe..].chars();
+  let cur: String = rest.next().map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+  let after: String = rest.collect();
+  let mut spans: Vec<Span<'static>> = Vec::new();
+  if !before.is_empty() {
+    spans.push(Span::styled(before.to_string(), base_style));
+  }
+  spans.push(Span::styled(cur, Style::default().bg(t.cursor_bg).fg(t.cursor_fg)));
+  if !after.is_empty() {
+    spans.push(Span::styled(after, base_style));
+  }
+  Line::from(spans)
+}
+
+/// Render a `StyledProse` line with the cursor cell painted at `byte_col`.
+/// Walks the inline spans, locates the one containing the cursor, splits
+/// it at the codepoint boundary, and overrides the cursor cell's style.
+/// Existing inline styling (bold/italic/url-underline/colour/monospace)
+/// is preserved on every other span so the visible cursor doesn't strip
+/// surrounding emphasis.
+fn apply_styled_cursor(
+  spans: &[doc_model::InlineSpan],
+  base_style: Style,
+  byte_col: usize,
+  t: &Theme,
+) -> Line<'static> {
+  let total: usize = spans.iter().map(|s| s.text.len()).sum();
+  if total == 0 {
+    return Line::from(vec![Span::styled(
+      " ",
+      Style::default().bg(t.cursor_bg).fg(t.cursor_fg),
+    )]);
+  }
+  let safe_col = byte_col.min(total - 1);
+
+  let mut out: Vec<Span<'static>> = Vec::new();
+  let mut byte_cursor = 0usize;
+  let mut cursor_painted = false;
+
+  for ispan in spans {
+    let span_start = byte_cursor;
+    let span_end = byte_cursor + ispan.text.len();
+    byte_cursor = span_end;
+
+    let mut style = base_style;
+    if ispan.bold        { style = style.add_modifier(Modifier::BOLD); }
+    if ispan.italic      { style = style.add_modifier(Modifier::ITALIC); }
+    if ispan.underline   { style = style.add_modifier(Modifier::UNDERLINED); }
+    if ispan.strikethrough { style = style.add_modifier(Modifier::CROSSED_OUT); }
+    if ispan.monospace   { style = style.fg(t.mono); }
+    if let Some((r, g, b)) = ispan.color { style = style.fg(Color::Rgb(r, g, b)); }
+    if ispan.url.is_some() { style = style.add_modifier(Modifier::UNDERLINED); }
+
+    if !cursor_painted && safe_col >= span_start && safe_col < span_end {
+      let local = snap_to_char_boundary(&ispan.text, safe_col - span_start);
+      let mut next = local + 1;
+      while next < ispan.text.len() && !ispan.text.is_char_boundary(next) { next += 1; }
+      if local > 0 {
+        out.push(Span::styled(ispan.text[..local].to_string(), style));
+      }
+      let cur_text = ispan.text.get(local..next).unwrap_or(" ").to_string();
+      out.push(Span::styled(cur_text, Style::default().bg(t.cursor_bg).fg(t.cursor_fg)));
+      if next < ispan.text.len() {
+        out.push(Span::styled(ispan.text[next..].to_string(), style));
+      }
+      cursor_painted = true;
+    } else {
+      out.push(Span::styled(ispan.text.clone(), style));
+    }
+  }
+
+  // If text was empty or cursor landed exactly past the end, paint a
+  // synthetic cell so the cursor is still visible.
+  if !cursor_painted {
+    out.push(Span::styled(
+      " ".to_string(),
+      Style::default().bg(t.cursor_bg).fg(t.cursor_fg),
+    ));
+  }
+  Line::from(out)
 }
 
 fn highlight_query(text: &str, query: &str, bg: Color, t: &Theme) -> Line<'static> {
@@ -414,12 +713,35 @@ fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     Mode::Visual { line_mode } => {
       if *line_mode { "  VISUAL LINE".to_string() } else { "  VISUAL".to_string() }
     }
+    Mode::AwaitingChar { kind } => {
+      // Show the operator we're awaiting a target for, e.g. "  f_".
+      let prefix = match kind {
+        crate::state::FindKind::F      => "f",
+        crate::state::FindKind::ShiftF => "F",
+        crate::state::FindKind::T      => "t",
+        crate::state::FindKind::ShiftT => "T",
+      };
+      format!("  {prefix}_")
+    }
+    Mode::AwaitingMarkName { for_set } => {
+      if *for_set { "  m_".to_string() } else { "  '_".to_string() }
+    }
+    Mode::AwaitingG => "  g_".to_string(),
+    Mode::Command => String::new(), // command bar shows its own prompt
   };
   let count_str = if !reader.count_buf.is_empty() {
     format!("  {}_", reader.count_buf)
   } else {
     String::new()
   };
+  // Errors from the most recent `:` command override the rest of the status
+  // line so they're hard to miss.  Cleared on the next keystroke.
+  if let Some(err) = &reader.cmd_error {
+    let status = Paragraph::new(format!(" {err}"))
+      .style(Style::default().bg(t.bg_input).fg(t.error));
+    frame.render_widget(status, area);
+    return;
+  }
   let text = format!(" {cur}/{tot}  {pct}%{match_info}{mode_str}{count_str}");
   let status = Paragraph::new(text)
     .style(Style::default().bg(t.bg_input).fg(t.text_dim));
@@ -433,9 +755,55 @@ fn draw_search_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
   frame.render_widget(bar, area);
 }
 
+fn draw_command_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
+  let text = format!(":{}_", reader.cmd_buf);
+  let bar = Paragraph::new(text)
+    .style(Style::default().bg(t.bg_input).fg(t.cursor_bg));
+  frame.render_widget(bar, area);
+}
+
+/// Render a generic text popup (used by `:marks`, `:highlights`, `:about`,
+/// `:placement`).  Sized to the longest line + padding, centered in `area`.
+/// Dismissed by any keystroke (handled in the event loop).
+fn draw_text_popup(frame: &mut Frame, area: Rect, t: &Theme, popup: &crate::state::PopupContent) {
+  use ratatui::text::Line;
+  let max_line = popup.lines.iter().map(|l| l.chars().count()).max().unwrap_or(0)
+    .max(popup.title.chars().count() + 4);
+  let w = (max_line as u16 + 4).min(area.width.saturating_sub(4)).max(20);
+  let h = (popup.lines.len() as u16 + 4).min(area.height.saturating_sub(4)).max(6);
+  let x = area.x + area.width.saturating_sub(w) / 2;
+  let y = area.y + area.height.saturating_sub(h) / 2;
+  let popup_area = Rect { x, y, width: w, height: h };
+
+  let mut lines: Vec<Line> = Vec::new();
+  lines.push(Line::styled(
+    format!("  {}", popup.title),
+    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+  ));
+  lines.push(Line::raw(""));
+  for l in &popup.lines {
+    lines.push(Line::styled(l.clone(), Style::default().fg(t.text)));
+  }
+  lines.push(Line::raw(""));
+  lines.push(Line::styled(
+    "  Press any key to dismiss",
+    Style::default().fg(t.text_dim),
+  ));
+
+  frame.render_widget(Clear, popup_area);
+  let para = Paragraph::new(lines)
+    .style(Style::default().bg(t.bg_popup))
+    .block(
+      Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.text_dim)),
+    );
+  frame.render_widget(para, popup_area);
+}
+
 fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
   const W: u16 = 64;
-  const H: u16 = 22;
+  const H: u16 = 44;
   let x = area.x + area.width.saturating_sub(W) / 2;
   let y = area.y + area.height.saturating_sub(H) / 2;
   let popup = Rect { x, y, width: W.min(area.width), height: H.min(area.height) };
@@ -446,22 +814,43 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
   let sec_fg = t.header;
 
   let rows: &[(&str, &str, &str, &str)] = &[
-    ("j / k",         "scroll down / up",       "] / [",    "next / prev section"),
+    ("j / k",         "scroll down / up",        "] / [",    "next / prev section"),
     ("PageDn / Up",   "full page scroll",        "Ctrl+d/u", "half page"),
-    ("} / {",         "next / prev paragraph",   "H / M / L","screen top/mid/bottom"),
-    ("g / G",         "top / bottom",            "z",        "center cursor"),
-    ("h / l",         "cursor ← / →",            "5j  10G",  "count prefix"),
-    ("*",             "search word under cursor", "Ctrl+O",   "go back"),
-    ("/  n  N",       "search / next / prev",     "m  '  `",  "bookmark: set/fwd/back"),
-    ("y",             "yank line (OSC 52)",        "t",        "toggle TOC"),
-    ("q / Esc",       "quit",                     "?",        "this help"),
+    ("} / {",         "next / prev paragraph",   "( / )",    "prev / next sentence"),
+    ("gg / G",        "top / bottom",            "H / M / L","screen top/mid/bottom"),
+    ("h / l",         "cursor ← / → (wraps)",    "z",        "center cursor"),
+    ("w / W",         "word forward (small/BIG)","b / B",    "word back (small/BIG)"),
+    ("e / E",         "word end (small/BIG)",    "ge / gE",  "back to word end"),
+    ("0  ^  $",       "line start / first / end","5j 10G",   "count prefix"),
+    ("f / F",         "find char fwd / back",    "t / T",    "till char fwd / back"),
+    ("%",             "matching brace",          "*",        "search word under cursor"),
+    ("/  n  N",       "search / next / prev",    "m{a} '{a}","set/jump named mark"),
+    ("y",             "yank line (OSC 52)",       "\\",       "toggle TOC"),
+    ("X",             "remove highlight at cursor","Ctrl+O",   "go back"),
+    (":",             "command mode (see below)", "?",        "this help"),
+    ("q / Esc",       "quit",                     "",         ""),
   ];
 
   let visual_rows: &[(&str, &str)] = &[
     ("v / V",         "enter char / line visual mode"),
     ("j / k  h / l",  "extend selection"),
     ("y",             "yank selection to clipboard"),
+    ("H",             "highlight selection (persists)"),
     ("Esc / v / V",   "cancel visual mode"),
+  ];
+
+  let cmd_rows: &[(&str, &str)] = &[
+    (":<N>",            "go to line N"),
+    (":goto <N|text>",  "jump to section"),
+    (":abstract",       "jump to abstract"),
+    (":references",     "jump to references"),
+    (":set theme=<id>", "change theme (or 'trench' to sync)"),
+    (":marks",          "list named marks"),
+    (":highlights",     "list highlights"),
+    (":about",          "paper metadata"),
+    (":url  :cite",     "copy URL / BibTeX to clipboard"),
+    (":open",           "open URL in browser"),
+    (":q  :help",       "quit / help"),
   ];
 
   let mut lines: Vec<Line> = vec![
@@ -487,6 +876,17 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
   for (k, d) in visual_rows {
     lines.push(Line::from(vec![
       Span::styled(format!("  {:<16} ", k), Style::default().fg(key_fg)),
+      Span::styled(d.to_string(), Style::default().fg(dim_fg)),
+    ]));
+  }
+  lines.push(Line::raw(""));
+  lines.push(Line::styled(
+    "  Command mode  (`:` to enter)",
+    Style::default().fg(sec_fg).add_modifier(Modifier::BOLD),
+  ));
+  for (k, d) in cmd_rows {
+    lines.push(Line::from(vec![
+      Span::styled(format!("  {:<18} ", k), Style::default().fg(key_fg)),
       Span::styled(d.to_string(), Style::default().fg(dim_fg)),
     ]));
   }

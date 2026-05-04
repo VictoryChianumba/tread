@@ -1,12 +1,53 @@
+use std::collections::HashMap;
+
 use doc_model::{Block, VisualLine, VisualLineKind, build_visual_lines};
 
+use crate::highlights::HighlightSet;
+
 pub const TOC_WIDTH: usize = 28;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FindKind {
+  /// `f<c>` — forward to next occurrence.
+  F,
+  /// `F<c>` — backward to previous occurrence.
+  ShiftF,
+  /// `t<c>` — forward, land *before* the match.
+  T,
+  /// `T<c>` — backward, land *after* the match.
+  ShiftT,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
   Normal,
   Search,
   Visual { line_mode: bool },
+  /// One-shot mode: the next `KeyCode::Char(c)` is consumed as the find
+  /// target.  Any other key returns to Normal without moving.
+  AwaitingChar { kind: FindKind },
+  /// One-shot mode: the next `KeyCode::Char(letter)` is consumed as a
+  /// mark identifier.  When `for_set` is true the mark is saved at the
+  /// current line; when false the cursor jumps to that mark (no-op if
+  /// the mark is unset).  Any non-Char key cancels.
+  AwaitingMarkName { for_set: bool },
+  /// One-shot mode after the user pressed `g`.  Awaits the second
+  /// keystroke for vim's `g`-prefixed motions: `gg` → top, `ge` /
+  /// `gE` → backward word-end (small / big).  Any other key cancels.
+  AwaitingG,
+  /// `:`-prefixed Ex-command input.  `cmd_buf` on Reader holds the
+  /// in-progress command line; Esc cancels, Enter dispatches via
+  /// `commands::execute`.
+  Command,
+}
+
+/// A modal popup surfaced by `:marks`, `:highlights`, `:about`,
+/// `:placement`, etc.  `Reader.popup` is `Some(...)` while one is open;
+/// any keystroke dismisses it.
+#[derive(Debug, Clone)]
+pub struct PopupContent {
+  pub title: String,
+  pub lines: Vec<String>,
 }
 
 /// Paper-level metadata shown in the header bar.
@@ -34,16 +75,33 @@ pub struct Reader {
   pub nav_history: Vec<(usize, usize)>,
   /// Optional paper metadata shown in the header bar.
   pub meta: Option<PaperMeta>,
-  /// Sorted list of bookmarked absolute line indices.
-  pub bookmarks: Vec<usize>,
-  /// Logical column cursor — used by `*` and visual char mode; reset to 0 on line change.
+  /// Letter-keyed bookmarks (vim-style marks).  `m<letter>` sets,
+  /// `'<letter>` jumps.  Persisted per arXiv ID.
+  pub bookmarks: HashMap<char, usize>,
+  /// Persistent character-range highlights.  Stored at block-byte
+  /// granularity so they survive resize.  Loaded on entry, saved on exit.
+  pub highlights: HighlightSet,
+  /// Effective byte column of the cursor on the current line.  Always
+  /// represents the rendered position — horizontal motions write here.
   pub cursor_x: usize,
+  /// "Desired" column carried across `j`/`k` line changes so that
+  /// returning to a long line restores the original column.  Matches
+  /// vim's `curswant`.  Set by horizontal motions; consulted by vertical
+  /// motions via `clamp_cursor_after_line_change`.
+  pub desired_column: usize,
   /// Absolute line index where visual selection started.
   pub visual_anchor: usize,
   /// Column index where visual selection started.
   pub visual_anchor_x: usize,
   /// Accumulated digit prefix for count motions (e.g. "5" before `j`).
   pub count_buf: String,
+  /// In-progress text after `:` in Command mode.
+  pub cmd_buf: String,
+  /// One-line error message shown in the status line after a command
+  /// failed (e.g. unknown command, unknown theme).  Cleared on next event.
+  pub cmd_error: Option<String>,
+  /// Active modal popup (e.g. `:marks` listing).  Any keystroke dismisses.
+  pub popup: Option<PopupContent>,
 }
 
 impl Reader {
@@ -67,11 +125,16 @@ impl Reader {
       mode: Mode::Normal,
       nav_history: Vec::new(),
       meta: None,
-      bookmarks: Vec::new(),
+      bookmarks: HashMap::new(),
+      highlights: HighlightSet::default(),
       cursor_x: 0,
+      desired_column: 0,
       visual_anchor: 0,
       visual_anchor_x: 0,
       count_buf: String::new(),
+      cmd_buf: String::new(),
+      cmd_error: None,
+      popup: None,
     }
   }
 
@@ -129,6 +192,7 @@ impl Reader {
     if let Some((offset, cursor_y)) = self.nav_history.pop() {
       self.offset = offset;
       self.cursor_y = cursor_y;
+      self.clamp_cursor_after_line_change();
     }
   }
 
@@ -136,30 +200,27 @@ impl Reader {
     self.help_visible = !self.help_visible;
   }
 
-  pub fn toggle_bookmark(&mut self) {
+  /// Set mark `letter` at the current line, replacing any prior value.
+  /// Only ASCII letters (a–z, A–Z) are valid; other chars are silently
+  /// rejected so the user gets no surprise mark on a stray punctuation key.
+  pub fn set_mark(&mut self, letter: char) {
+    if !letter.is_ascii_alphabetic() { return; }
     let line = self.offset + self.cursor_y;
-    match self.bookmarks.binary_search(&line) {
-      Ok(pos) => { self.bookmarks.remove(pos); }
-      Err(pos) => { self.bookmarks.insert(pos, line); }
-    }
+    self.bookmarks.insert(letter, line);
   }
 
-  pub fn next_bookmark(&mut self) {
-    let cur = self.offset + self.cursor_y;
-    if let Some(&target) = self.bookmarks.iter().find(|&&b| b > cur) {
-      self.push_nav_mark();
-      self.offset = target;
-      self.cursor_y = 0;
-    }
-  }
-
-  pub fn prev_bookmark(&mut self) {
-    let cur = self.offset + self.cursor_y;
-    if let Some(&target) = self.bookmarks.iter().rfind(|&&b| b < cur) {
-      self.push_nav_mark();
-      self.offset = target;
-      self.cursor_y = 0;
-    }
+  /// Jump to mark `letter`.  No-op if the mark is unset or the letter
+  /// is invalid.  Pushes the current position onto the back-nav stack
+  /// so `Ctrl+O` returns here.
+  pub fn jump_to_mark(&mut self, letter: char) {
+    if !letter.is_ascii_alphabetic() { return; }
+    let Some(&target) = self.bookmarks.get(&letter) else { return };
+    let total = self.total_lines();
+    if target >= total { return; }
+    self.push_nav_mark();
+    self.offset = target;
+    self.cursor_y = 0;
+    self.clamp_cursor_after_line_change();
   }
 
   /// Index into `sections` of the last section header at or above the current line.
@@ -205,6 +266,7 @@ impl Reader {
     let line = self.search_matches[idx];
     self.offset = line;
     self.cursor_y = 0;
+    self.clamp_cursor_after_line_change();
   }
 }
 
