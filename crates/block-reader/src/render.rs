@@ -64,7 +64,7 @@ fn split_layout(
   };
 
   let (content_area, status_area, search_area) = match reader.mode {
-    Mode::Normal | Mode::Visual { .. } | Mode::AwaitingChar { .. } | Mode::AwaitingMarkName { .. } | Mode::AwaitingG => {
+    Mode::Normal | Mode::Visual { .. } | Mode::AwaitingChar { .. } | Mode::AwaitingMarkName { .. } | Mode::AwaitingG | Mode::AwaitingOperator { .. } | Mode::AwaitingTextObject { .. } => {
       let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -728,6 +728,14 @@ fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     }
     Mode::AwaitingG => "  g_".to_string(),
     Mode::Command => String::new(), // command bar shows its own prompt
+    Mode::AwaitingOperator { op } => match op {
+      crate::state::Operator::Yank => "  y_".to_string(),
+    },
+    Mode::AwaitingTextObject { op, around } => {
+      let prefix = match op { crate::state::Operator::Yank => "y" };
+      let mid = if *around { "a" } else { "i" };
+      format!("  {prefix}{mid}_")
+    }
   };
   let count_str = if !reader.count_buf.is_empty() {
     format!("  {}_", reader.count_buf)
@@ -825,10 +833,10 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
     ("f / F",         "find char fwd / back",    "t / T",    "till char fwd / back"),
     ("%",             "matching brace",          "*",        "search word under cursor"),
     ("/  n  N",       "search / next / prev",    "m{a} '{a}","set/jump named mark"),
-    ("y",             "yank line (OSC 52)",       "\\",       "toggle TOC"),
-    ("X",             "remove highlight at cursor","Ctrl+O",   "go back"),
-    (":",             "command mode (see below)", "?",        "this help"),
-    ("q / Esc",       "quit",                     "",         ""),
+    ("yy",            "yank current line (OSC 52)","\\",      "toggle TOC"),
+    ("yi/ya<obj>",    "yank inner / around obj",  "X",        "remove highlight"),
+    (":",             "command mode (see below)", "Ctrl+O",   "go back"),
+    ("?",             "this help",                "q / Esc",  "quit"),
   ];
 
   let visual_rows: &[(&str, &str)] = &[

@@ -37,6 +37,7 @@ Given an arXiv ID or URL, the reader:
 - **Header bar** — title and authors pinned above the content area when paper metadata is available.
 - **Help overlay** — `?` for a compact keybinding reference.
 - **Visual mode** — `v` (char) and `V` (line) selection; `y` yanks to clipboard via OSC 52, `H` commits as a persistent highlight.
+- **Text objects** — vim-style `yi<obj>` / `ya<obj>` for word, quote, paren/bracket/brace pair, paragraph, and sentence. `yy` yanks the current line.
 - **Search** — `/` forward, `*` to search the word under the cursor, `n` / `N` to step.
 - **Bookmarks (vim-style marks)** — `m{a}` to set, `'{a}` / `` `{a} `` to jump. Letter-keyed slots `a..z`. Marked lines tinted amber.
 - **Persistent character-range highlights** — `H` in visual mode commits a selection as a highlight; `X` removes the one under the cursor. Stored at block-byte granularity so they survive terminal resize.

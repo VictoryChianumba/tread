@@ -108,7 +108,32 @@ Highlights persist across sessions and survive terminal resize (stored at block-
 | `\` | Toggle TOC side panel |
 | `?` | Toggle help overlay |
 | `m` / `q` / `Esc` | Quit (Esc / q work outside Command/Visual/Search) |
-| `y` | Yank current line to clipboard (OSC 52) |
+| `yy` | Yank current line to clipboard (OSC 52) |
+| `yi<obj>` | Yank **inner** text object (see [Text objects](#text-objects)) |
+| `ya<obj>` | Yank **around** text object |
+
+## Text objects
+
+After pressing `y`, the reader enters operator-pending mode. Then:
+
+- `y` again → yank the current line (vim's `yy`).
+- `i<obj>` → yank **inner** text object (excludes delimiters).
+- `a<obj>` → yank **around** text object (includes delimiters / trailing whitespace).
+- Any other key → cancel.
+
+| `<obj>` | Object |
+|---|---|
+| `w` / `W` | small word / BIG word |
+| `"` / `'` / `` ` `` | quote-delimited region |
+| `(` / `)` / `b` | parenthesized group (handles nesting) |
+| `[` / `]` | bracket pair |
+| `{` / `}` / `B` | brace pair |
+| `p` | paragraph |
+| `s` | sentence |
+
+Text objects that don't apply to the cursor's location are silent no-ops (e.g. `yi"` on an unquoted line). Single-line objects (word, quote, pair) operate on the current visual line; multi-line objects (paragraph, sentence) walk neighbouring lines.
+
+> **Note:** bare `y` no longer yanks the line directly — that was a pre-text-objects shortcut. The vim-canonical `yy` retains that behaviour.
 
 ## Command mode
 
@@ -152,7 +177,7 @@ The bottom row shows `<line>/<total>  <pct>%` plus, when relevant:
 
 - `[1/3]` — current search match index of N total
 - `VISUAL` / `VISUAL LINE` — active visual mode
-- `f_`, `t_`, `m_`, `'_`, `g_` — awaiting the next keystroke for a multi-key motion
+- `f_`, `t_`, `m_`, `'_`, `g_`, `y_`, `yi_`, `ya_` — awaiting the next keystroke for a multi-key motion or text object
 - `5_` — count prefix in progress (e.g. you've typed `5` waiting for a motion)
 - A red error message — the most recent `:` command failed; clears on next keystroke
 
@@ -165,4 +190,6 @@ Normal ──v──> Visual  ──Esc/v──> back to Normal
 Normal ──f──> AwaitingChar ──<char>──> jump + back to Normal
 Normal ──m──> AwaitingMarkName ──<letter>──> set + back to Normal
 Normal ──g──> AwaitingG ──{g,e,E}──> motion + back to Normal
+Normal ──y──> AwaitingOperator ──y──> yank line + back to Normal
+                              ──i/a──> AwaitingTextObject ──<obj>──> yank + back
 ```

@@ -39,6 +39,22 @@ pub enum Mode {
   /// in-progress command line; Esc cancels, Enter dispatches via
   /// `commands::execute`.
   Command,
+  /// After pressing an operator (currently only `y`).  Awaits the
+  /// follow-up: another `y` to apply to the current line, `i`/`a` to
+  /// enter text-object mode, or any other key cancels.
+  AwaitingOperator { op: Operator },
+  /// After `yi` or `ya`.  Awaits the text-object spec character (`w`,
+  /// `"`, `(`, `p`, `s`, etc.) and dispatches to `text_objects::*`.
+  AwaitingTextObject { op: Operator, around: bool },
+}
+
+/// Which operator is currently pending.  In a read-only reader only
+/// `Yank` is meaningful — `d`/`c`/`x` would mutate the buffer.  Kept as
+/// an enum so the dispatch surface is uniform with vim's model and the
+/// state machine can be extended without rewiring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operator {
+  Yank,
 }
 
 /// A modal popup surfaced by `:marks`, `:highlights`, `:about`,

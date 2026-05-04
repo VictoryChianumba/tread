@@ -6,6 +6,7 @@ mod nav;
 mod progress;
 mod render;
 mod state;
+mod text_objects;
 
 use crossterm::{
   event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind},
@@ -16,7 +17,7 @@ use doc_model::Block;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use commands::{CmdCtx, CommandResult};
-use state::{FindKind, Mode, Reader};
+use state::{FindKind, Mode, Operator, Reader};
 use std::io;
 use ui_theme::Theme;
 
@@ -111,6 +112,8 @@ fn event_loop(
           Mode::AwaitingChar { kind } => handle_awaiting_char(reader, key.code, kind),
           Mode::AwaitingMarkName { for_set } => handle_awaiting_mark_name(reader, key.code, for_set),
           Mode::AwaitingG => handle_awaiting_g(reader, key.code),
+          Mode::AwaitingOperator { op } => handle_awaiting_operator(reader, key.code, op),
+          Mode::AwaitingTextObject { op, around } => handle_awaiting_text_object(reader, key.code, op, around),
           Mode::Command => match handle_command(reader, key.code, &ctx) {
             CommandResult::Continue => {}
             CommandResult::Quit => break,
@@ -313,11 +316,11 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
       reader.mode = Mode::AwaitingMarkName { for_set: false };
     }
     KeyCode::Char('y') => {
+      // Vim operator-pending: bare `y` waits for a follow-up.  `yy`
+      // yanks the current line, `yi<obj>` / `ya<obj>` yanks a text
+      // object.  Any other key cancels and returns to Normal.
       reader.count_buf.clear();
-      if let Some(vl) = reader.visual_lines.get(reader.current_line()) {
-        let text = vl.text.clone();
-        osc52_yank(&text);
-      }
+      reader.mode = Mode::AwaitingOperator { op: Operator::Yank };
     }
     KeyCode::Char('v') => {
       reader.count_buf.clear();
@@ -389,6 +392,55 @@ fn handle_command(reader: &mut Reader, code: KeyCode, ctx: &CmdCtx) -> CommandRe
     }
     _ => CommandResult::Continue,
   }
+}
+
+fn handle_awaiting_operator(reader: &mut Reader, code: KeyCode, op: Operator) {
+  // After an operator key (currently only `y`):
+  //  - Doubled key (`yy`) applies to the current line.
+  //  - `i` / `a` enter text-object mode.
+  //  - Anything else cancels back to Normal.
+  match code {
+    KeyCode::Char('y') if op == Operator::Yank => {
+      if let Some(vl) = reader.visual_lines.get(reader.current_line()) {
+        let text = vl.text.clone();
+        osc52_yank(&text);
+      }
+      reader.mode = Mode::Normal;
+    }
+    KeyCode::Char('i') => {
+      reader.mode = Mode::AwaitingTextObject { op, around: false };
+    }
+    KeyCode::Char('a') => {
+      reader.mode = Mode::AwaitingTextObject { op, around: true };
+    }
+    _ => {
+      reader.mode = Mode::Normal;
+    }
+  }
+}
+
+fn handle_awaiting_text_object(reader: &mut Reader, code: KeyCode, op: Operator, around: bool) {
+  // Look up the text object spec character and produce the yank target.
+  // `b` aliases parens, `B` aliases braces (vim convention).
+  let yanked: Option<String> = match code {
+    KeyCode::Char('w') => text_objects::word(reader, false, around),
+    KeyCode::Char('W') => text_objects::word(reader, true, around),
+    KeyCode::Char('"') => text_objects::quote(reader, '"', around),
+    KeyCode::Char('\'') => text_objects::quote(reader, '\'', around),
+    KeyCode::Char('`') => text_objects::quote(reader, '`', around),
+    KeyCode::Char('(') | KeyCode::Char(')') | KeyCode::Char('b') => text_objects::pair(reader, '(', ')', around),
+    KeyCode::Char('[') | KeyCode::Char(']') => text_objects::pair(reader, '[', ']', around),
+    KeyCode::Char('{') | KeyCode::Char('}') | KeyCode::Char('B') => text_objects::pair(reader, '{', '}', around),
+    KeyCode::Char('p') => text_objects::paragraph(reader, around),
+    KeyCode::Char('s') => text_objects::sentence(reader, around),
+    _ => None,
+  };
+  if let Some(text) = yanked {
+    match op {
+      Operator::Yank => osc52_yank(&text),
+    }
+  }
+  reader.mode = Mode::Normal;
 }
 
 fn handle_awaiting_g(reader: &mut Reader, code: KeyCode) {
