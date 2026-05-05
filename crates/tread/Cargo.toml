@@ -21,3 +21,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
 ui-theme = { path = "../ui-theme" }
+# Voice / TTS subsystem.
+rodio = "0.19"
+ureq = { version = "2.12", features = ["json"] }

@@ -8,6 +8,8 @@ mod progress;
 mod render;
 mod state;
 mod text_objects;
+mod voice;
+mod voice_control;
 
 use crossterm::{
   event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
@@ -107,6 +109,16 @@ pub fn run_with_theme(
   let mut reader = Reader::new_with_bibitems(blocks, size.width as usize, size.height as usize, bibitems);
   reader.meta = meta;
 
+  // Build the voice playback controller from saved config + the
+  // env-only ELEVENLABS_API_KEY.  If audio init fails inside the
+  // background thread, voice keys will surface the error in the status
+  // bar but the rest of the reader stays fully functional.
+  let cfg_for_voice = config::load();
+  let voice_cfg = cfg_for_voice.voice.clone().unwrap_or_default();
+  let api_key = std::env::var("ELEVENLABS_API_KEY").ok();
+  let provider = voice::make_provider(&voice_cfg, api_key.as_deref());
+  reader.voice_controller = Some(voice::PlaybackController::new(provider));
+
   // Restore reading progress and bookmarks.
   if let Some(ref key) = progress_key {
     let map = progress::load();
@@ -166,6 +178,30 @@ fn event_loop(
       images::place_visible(reader, &mut img_state, content_area, kitty_supported);
     }
 
+    // Voice playback runs on a background thread; we sync its status
+    // each tick so the status-bar spinner animates and the active-word
+    // highlight repaints.  `event::poll` with a 100ms timeout gives us
+    // both: keystrokes wake us instantly, and on idle we still tick
+    // through to refresh.  The continuous-reading auto-advance also
+    // hooks into the idle branch (chunk-end detection happens via
+    // status sync from Playing→Idle).
+    let prev_status = reader.voice_status.clone();
+    voice_control::sync_voice_status(reader);
+    if reader.continuous_reading
+      && matches!(prev_status, voice::PlaybackStatus::Playing)
+      && matches!(reader.voice_status, voice::PlaybackStatus::Idle)
+    {
+      // Chunk just ended → roll forward to the next paragraph.
+      let advanced = voice_control::advance_to_next_paragraph_for_continuous_reading(reader);
+      if !advanced {
+        reader.continuous_reading = false;
+      }
+    }
+
+    if !event::poll(std::time::Duration::from_millis(100))? {
+      // Idle tick — loop back to redraw with refreshed voice state.
+      continue;
+    }
     match event::read()? {
       Event::Key(key) => {
         // Any keystroke clears the previous command's error and dismisses
@@ -251,6 +287,17 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
   // Dismiss help overlay on any key.
   if reader.help_visible {
     reader.help_visible = false;
+    return false;
+  }
+
+  // Voice keys take priority — `r`, `R`, `Ctrl+P` enter or restart
+  // reading mode; `Space`, `c`, `Esc` only fire while reading_mode is
+  // true.  Putting this BEFORE the digit accumulator and the global
+  // `Esc`-quits match means reading-mode Esc stops audio without
+  // also quitting the reader.
+  let key_event = crossterm::event::KeyEvent::new(code, mods);
+  if voice_control::handle_voice_keys(reader, key_event) {
+    reader.count_buf.clear();
     return false;
   }
 

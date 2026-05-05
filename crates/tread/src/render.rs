@@ -110,6 +110,10 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     _ => None,
   };
 
+  // Voice playback effects, computed once per draw and reused per row.
+  let voice_word = crate::voice_control::active_voice_word(reader);
+  let voice_active = crate::voice_control::voice_rendering_active(reader);
+
   let lines: Vec<Line> = (0..ch)
     .map(|row| {
       let vl_idx = reader.offset + row;
@@ -123,7 +127,7 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
       let cursor_col = if is_cursor { Some(reader.cursor_x) } else { None };
       // Compute persistent-highlight byte ranges that overlap this VL,
       // translated into vl-local byte coordinates for the renderer.
-      let highlight_ranges: Vec<(usize, usize)> = if vl.block_byte_end > vl.block_byte_start {
+      let mut highlight_ranges: Vec<(usize, usize)> = if vl.block_byte_end > vl.block_byte_start {
         reader.highlights
           .overlapping(vl.block_idx, vl.block_byte_start..vl.block_byte_end)
           .map(|h| (
@@ -134,7 +138,22 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
       } else {
         Vec::new()
       };
-      render_visual_line(vl, is_cursor, is_bookmarked, is_selected, cursor_col, &q, &reader.search_matches, vl_idx, &highlight_ranges, t)
+      // Active-word highlight rides on the same overlay path as
+      // persistent character highlights; reuse rather than introducing
+      // a parallel system.  Visually distinct because search/highlight
+      // never occur during active playback.
+      if let Some((word_vl, ws, we)) = voice_word {
+        if word_vl == vl_idx {
+          highlight_ranges.push((ws, we));
+        }
+      }
+      let mut line = render_visual_line(vl, is_cursor, is_bookmarked, is_selected, cursor_col, &q, &reader.search_matches, vl_idx, &highlight_ranges, t);
+      // Dim non-paragraph lines during voice playback so the active
+      // paragraph reads as the focused region.
+      if voice_active && crate::voice_control::voice_line_dimmed(reader, vl_idx) {
+        line = line.style(Style::default().fg(t.text_dim));
+      }
+      line
     })
     .collect();
 
@@ -774,7 +793,13 @@ fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     frame.render_widget(status, area);
     return;
   }
-  let text = format!(" {cur}/{tot}  {pct}%{match_info}{mode_str}{count_str}");
+  // Voice status takes precedence over normal mode indicators because
+  // audio playback is the user's active focus when present.  Spinner
+  // glyph rotates via wall-clock so the Loading state animates.
+  let voice_str = crate::voice_control::voice_status_label(reader)
+    .map(|s| format!("  {s}"))
+    .unwrap_or_default();
+  let text = format!(" {cur}/{tot}  {pct}%{match_info}{mode_str}{count_str}{voice_str}");
   let status = Paragraph::new(text)
     .style(Style::default().bg(t.bg_input).fg(t.text_dim));
   frame.render_widget(status, area);
@@ -835,7 +860,7 @@ fn draw_text_popup(frame: &mut Frame, area: Rect, t: &Theme, popup: &crate::stat
 
 fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
   const W: u16 = 64;
-  const H: u16 = 44;
+  const H: u16 = 52;
   let x = area.x + area.width.saturating_sub(W) / 2;
   let y = area.y + area.height.saturating_sub(H) / 2;
   let popup = Rect { x, y, width: W.min(area.width), height: H.min(area.height) };
@@ -870,6 +895,15 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
     ("y",             "yank selection to clipboard"),
     ("H",             "highlight selection (persists)"),
     ("Esc / v / V",   "cancel visual mode"),
+  ];
+
+  let voice_rows: &[(&str, &str)] = &[
+    ("r",             "read current paragraph aloud"),
+    ("R",             "read from cursor to end of paragraph"),
+    ("Ctrl+P",        "continuous reading (paragraph by paragraph)"),
+    ("Space",         "pause / resume playback"),
+    ("c",             "recenter viewport on cursor"),
+    ("Esc",           "stop playback + exit reading mode"),
   ];
 
   let cmd_rows: &[(&str, &str)] = &[
@@ -908,6 +942,17 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
     Style::default().fg(sec_fg).add_modifier(Modifier::BOLD),
   ));
   for (k, d) in visual_rows {
+    lines.push(Line::from(vec![
+      Span::styled(format!("  {:<16} ", k), Style::default().fg(key_fg)),
+      Span::styled(d.to_string(), Style::default().fg(dim_fg)),
+    ]));
+  }
+  lines.push(Line::raw(""));
+  lines.push(Line::styled(
+    "  Voice / TTS playback",
+    Style::default().fg(sec_fg).add_modifier(Modifier::BOLD),
+  ));
+  for (k, d) in voice_rows {
     lines.push(Line::from(vec![
       Span::styled(format!("  {:<16} ", k), Style::default().fg(key_fg)),
       Span::styled(d.to_string(), Style::default().fg(dim_fg)),

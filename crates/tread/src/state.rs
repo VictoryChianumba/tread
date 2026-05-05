@@ -138,6 +138,38 @@ pub struct Reader {
   /// skipped — the caption row always renders, so degradation is
   /// graceful.
   pub image_paths: HashMap<u32, std::path::PathBuf>,
+
+  // ── Voice / TTS playback state ──────────────────────────────────────────
+  // All fields are `None` / `false` / `Idle` when voice is inactive.  The
+  // controller is wired post-construction in `lib.rs::run` once the env
+  // API key is read; tests can leave it `None`.
+  /// Background TTS playback controller, or `None` when audio init failed.
+  pub voice_controller: Option<crate::voice::PlaybackController>,
+  /// Last-synced playback status; refreshed each tick from the
+  /// controller's shared `Arc<Mutex>`.
+  pub voice_status: crate::voice::PlaybackStatus,
+  /// Pending error from the playback thread (e.g. ElevenLabs auth
+  /// failure, audio device missing).  Cleared after display in the
+  /// status bar.
+  pub voice_error: Option<String>,
+  /// First / last visual-line index of the paragraph currently being
+  /// read.  Used for line dimming and word-position bookkeeping.
+  pub voice_para_start: usize,
+  pub voice_para_end: usize,
+  /// Wall-clock instant when the current chunk's audio started playing.
+  /// `None` when nothing is playing.  Combined with a fixed chars-per-
+  /// second rate, this drives the "active word" highlight.
+  pub voice_started_at: Option<std::time::Instant>,
+  /// Cumulative character count from chunks that completed BEFORE the
+  /// current one, so word-position math knows what offset to start at.
+  pub voice_chars_before: usize,
+  /// True while the user is in voice mode (`r`/`R`/`Ctrl+P` started a
+  /// playback session).  Allows navigation to keep working while audio
+  /// plays, and gates `Space`/`c`/`Esc` voice handlers.
+  pub reading_mode: bool,
+  /// True when continuous reading is active — on chunk-end, advance to
+  /// the next paragraph and start playing it.
+  pub continuous_reading: bool,
 }
 
 impl Reader {
@@ -209,6 +241,18 @@ impl Reader {
       cmd_error: None,
       popup: None,
       image_paths,
+      // Voice fields default to "no playback in progress."  The
+      // controller is wired in lib.rs::run after the API key + config
+      // are loaded; leaving it None here lets tests skip audio entirely.
+      voice_controller: None,
+      voice_status: crate::voice::PlaybackStatus::Idle,
+      voice_error: None,
+      voice_para_start: 0,
+      voice_para_end: 0,
+      voice_started_at: None,
+      voice_chars_before: 0,
+      reading_mode: false,
+      continuous_reading: false,
     }
   }
 

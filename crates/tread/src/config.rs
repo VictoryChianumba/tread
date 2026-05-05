@@ -28,7 +28,46 @@ pub struct ReaderConfig {
   /// regardless of trench (id is a `ThemeId` kebab-case label).
   #[serde(default)]
   pub theme_override: Option<String>,
+  /// Voice / TTS settings.  `None` (or missing in JSON) means use
+  /// defaults (macOS `say` with the "Samantha" voice).  The
+  /// `ELEVENLABS_API_KEY` is **environment-only** and never lands here.
+  #[serde(default)]
+  pub voice: Option<VoiceConfig>,
 }
+
+/// Voice / TTS configuration, persisted alongside the reader's other
+/// settings.  All fields default to the empty string / 1.0 so the JSON
+/// only needs to specify what differs from the auto-fallback chain
+/// (ElevenLabs if env API key set → macOS `say`).
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct VoiceConfig {
+  /// ElevenLabs voice id; required only when using the ElevenLabs
+  /// provider.  Look up at <https://elevenlabs.io/app/voice-library>.
+  #[serde(default)]
+  pub voice_id: String,
+  /// Force a specific provider — "elevenlabs", "say", "piper".  Empty
+  /// string lets `make_provider` pick: ElevenLabs if API key in env,
+  /// else `say`.
+  #[serde(default)]
+  pub tts_provider: String,
+  /// macOS `say` voice name (run `say -v ?` to list).  Empty defaults
+  /// to "Samantha".
+  #[serde(default)]
+  pub say_voice: String,
+  /// Path to the Piper binary for offline TTS.
+  #[serde(default)]
+  pub piper_binary: String,
+  /// Path to the Piper voice model file.
+  #[serde(default)]
+  pub piper_model: String,
+  /// Playback speed multiplier (1.0 = normal).  Currently only honoured
+  /// on a per-provider basis where supported; v2 will plumb through
+  /// uniformly.
+  #[serde(default = "default_speed")]
+  pub playback_speed: f32,
+}
+
+fn default_speed() -> f32 { 1.0 }
 
 fn config_path() -> Option<PathBuf> {
   dirs::config_dir().map(|p| p.join("trench").join("block_reader.json"))
@@ -82,7 +121,7 @@ mod tests {
 
   #[test]
   fn config_round_trip() {
-    let c = ReaderConfig { theme_override: Some("light".to_string()) };
+    let c = ReaderConfig { theme_override: Some("light".to_string()), voice: None };
     let json = serde_json::to_string(&c).unwrap();
     let back: ReaderConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(back.theme_override.as_deref(), Some("light"));
@@ -99,5 +138,35 @@ mod tests {
     // Forwards-compat: extra fields ignored, missing field defaults.
     let back: ReaderConfig = serde_json::from_str(r#"{"future_field": 42}"#).unwrap();
     assert!(back.theme_override.is_none());
+    assert!(back.voice.is_none());
+  }
+
+  #[test]
+  fn voice_round_trip() {
+    let c = ReaderConfig {
+      theme_override: None,
+      voice: Some(VoiceConfig {
+        voice_id: "abc123".to_string(),
+        tts_provider: "elevenlabs".to_string(),
+        say_voice: "Samantha".to_string(),
+        piper_binary: String::new(),
+        piper_model: String::new(),
+        playback_speed: 1.25,
+      }),
+    };
+    let json = serde_json::to_string(&c).unwrap();
+    let back: ReaderConfig = serde_json::from_str(&json).unwrap();
+    let v = back.voice.as_ref().unwrap();
+    assert_eq!(v.voice_id, "abc123");
+    assert_eq!(v.tts_provider, "elevenlabs");
+    assert!((v.playback_speed - 1.25).abs() < 1e-6);
+  }
+
+  #[test]
+  fn voice_speed_defaults_to_one() {
+    let json = r#"{"voice": {"voice_id": "x"}}"#;
+    let back: ReaderConfig = serde_json::from_str(json).unwrap();
+    let v = back.voice.unwrap();
+    assert!((v.playback_speed - 1.0).abs() < 1e-6);
   }
 }

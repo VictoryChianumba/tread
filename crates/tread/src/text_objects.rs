@@ -196,6 +196,71 @@ pub fn paragraph(reader: &Reader, around: bool) -> Option<String> {
   Some(join_lines(reader, start, end))
 }
 
+/// Like `paragraph` but also returns the visual-line range so callers
+/// (voice playback) can track which rows correspond to the text being
+/// read aloud.  Returns `(text, vl_start, vl_end)` where both
+/// indices are inclusive.  Skips trailing blank lines from the range
+/// even when `around=true` so the read-aloud range matches the
+/// "actually-prose" content.
+pub fn paragraph_with_range(reader: &Reader, around: bool) -> Option<(String, usize, usize)> {
+  let total = reader.total_lines();
+  if total == 0 { return None; }
+  let cur = reader.current_line();
+
+  let is_blank = |i: usize| reader.visual_lines.get(i)
+    .map(|vl| vl.text.trim().is_empty())
+    .unwrap_or(true);
+
+  if is_blank(cur) {
+    let mut start = cur;
+    while start > 0 && is_blank(start - 1) { start -= 1; }
+    let mut end = cur;
+    while end + 1 < total && is_blank(end + 1) { end += 1; }
+    return Some((join_lines(reader, start, end), start, end));
+  }
+
+  let mut start = cur;
+  while start > 0 && !is_blank(start - 1) { start -= 1; }
+  let mut end = cur;
+  while end + 1 < total && !is_blank(end + 1) { end += 1; }
+  let inner_end = end;
+  if around && end + 1 < total && is_blank(end + 1) {
+    end += 1;
+  }
+  // Voice tracking always wants the prose range, not trailing blanks.
+  let _ = around;
+  Some((join_lines(reader, start, inner_end), start, inner_end))
+}
+
+/// Returns the text from the cursor to the end of the current paragraph
+/// (exclusive of trailing blank lines), plus the VL range.  Used by
+/// capital `R` ("read from cursor").
+pub fn cursor_to_paragraph_end(reader: &Reader) -> Option<(String, usize, usize)> {
+  let total = reader.total_lines();
+  if total == 0 { return None; }
+  let cur = reader.current_line();
+  let is_blank = |i: usize| reader.visual_lines.get(i)
+    .map(|vl| vl.text.trim().is_empty())
+    .unwrap_or(true);
+  if is_blank(cur) { return None; }
+  let mut end = cur;
+  while end + 1 < total && !is_blank(end + 1) { end += 1; }
+  // Slice the cursor's line at cursor_x; subsequent lines verbatim.
+  let mut out = String::new();
+  if let Some(vl) = reader.visual_lines.get(cur) {
+    let cut = reader.cursor_x.min(vl.text.len());
+    out.push_str(&vl.text[cut..]);
+  }
+  for i in (cur + 1)..=end {
+    if let Some(vl) = reader.visual_lines.get(i) {
+      out.push('\n');
+      out.push_str(&vl.text);
+    }
+  }
+  if out.trim().is_empty() { return None; }
+  Some((out, cur, end))
+}
+
 fn join_lines(reader: &Reader, start: usize, end: usize) -> String {
   let mut out = String::new();
   for i in start..=end {
@@ -489,6 +554,55 @@ mod tests {
     r.cursor_x = 0;
     r.cursor_y = 0;
     assert_eq!(paragraph(&r, true).as_deref(), Some("aaa\nbbb\n"));
+  }
+
+  // --- paragraph_with_range ---
+
+  #[test]
+  fn paragraph_with_range_yields_indices() {
+    let mut r = reader_with(&["line one", "line two", "", "next para"]);
+    r.cursor_x = 0;
+    r.cursor_y = 1; // on "line two"
+    let (text, start, end) = paragraph_with_range(&r, false).expect("paragraph_with_range");
+    assert_eq!(text, "line one\nline two");
+    assert_eq!(start, 0);
+    assert_eq!(end, 1);
+  }
+
+  #[test]
+  fn paragraph_with_range_at_eof() {
+    let mut r = reader_with(&["only paragraph"]);
+    r.cursor_x = 0;
+    r.cursor_y = 0;
+    let (text, start, end) = paragraph_with_range(&r, false).expect("paragraph_with_range");
+    assert_eq!(text, "only paragraph");
+    assert_eq!(start, 0);
+    assert_eq!(end, 0);
+  }
+
+  #[test]
+  fn paragraph_with_range_skips_trailing_blank() {
+    // `around=true` would normally include the trailing blank in the
+    // string output of `paragraph()`, but for voice we want only the
+    // prose range so the dim-overlay matches what's being read.
+    let mut r = reader_with(&["aaa", "bbb", "", "next"]);
+    r.cursor_x = 0;
+    r.cursor_y = 0;
+    let (text, start, end) = paragraph_with_range(&r, true).expect("paragraph_with_range");
+    assert_eq!(text, "aaa\nbbb");
+    assert_eq!((start, end), (0, 1));
+  }
+
+  // --- cursor_to_paragraph_end ---
+
+  #[test]
+  fn cursor_to_paragraph_end_starts_at_cursor() {
+    let mut r = reader_with(&["aaa bbb ccc", "ddd eee", "", "next"]);
+    r.cursor_x = 4; // start of "bbb"
+    r.cursor_y = 0;
+    let (text, start, end) = cursor_to_paragraph_end(&r).expect("cursor_to_paragraph_end");
+    assert_eq!(text, "bbb ccc\nddd eee");
+    assert_eq!((start, end), (0, 1));
   }
 
   // --- sentence ---
