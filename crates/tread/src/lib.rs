@@ -25,6 +25,44 @@ use ui_theme::Theme;
 
 pub use state::PaperMeta;
 
+/// What `fetch_paper` returns: everything the reader needs to build/refresh
+/// its block tree and bib lookups for one arXiv paper.  The `asset_dir`
+/// is kept on disk for image lookups — the reader doesn't need to track it
+/// explicitly, but holding the value here lets callers know it exists.
+pub struct PaperData {
+  pub blocks: Vec<Block>,
+  pub bibitems: HashMap<String, String>,
+  pub asset_dir: std::path::PathBuf,
+}
+
+/// Fetch + parse + post-process a paper.  Mirrors the bootstrap steps
+/// in `main.rs` so both initial load and `:reload` go through the same
+/// pipeline: fetch the e-print tarball, parse to blocks, resolve image
+/// paths (or degrade to captions on non-graphics terminals), lift table
+/// floats to PDF-rendered position.  Network-bound; runs synchronously
+/// so the caller will block for ~2s on a typical paper.
+pub fn fetch_paper(id: &str, kitty_supported: bool) -> Result<PaperData, String> {
+  use arxiv_render::{fetch, parse, pdf_anchors, placement};
+
+  let fetched = fetch::fetch_source(id)?;
+  let sources = fetched.tex;
+  let asset_dir = fetched.asset_dir;
+  let bibitems = arxiv_render::extract_bibitems(&sources);
+  let mut blocks = parse::to_blocks(sources);
+  if kitty_supported {
+    arxiv_render::absolutize_image_paths(&mut blocks, &asset_dir);
+  } else {
+    arxiv_render::degrade_images_to_captions(&mut blocks);
+  }
+  // Best-effort PDF anchor extraction; failures leave blocks in source order.
+  let anchors = match fetch::fetch_pdf(id) {
+    Ok(pdf) => pdf_anchors::extract_anchors(&pdf),
+    Err(_) => Vec::new(),
+  };
+  let blocks = placement::lift_tables(blocks, &anchors);
+  Ok(PaperData { blocks, bibitems, asset_dir })
+}
+
 pub fn run(
   blocks: Vec<Block>,
   meta: Option<PaperMeta>,
@@ -80,7 +118,7 @@ pub fn run_with_theme(
     reader.highlights = highlights::load(key);
   }
 
-  let ctx = CmdCtx { arxiv_id: progress_key.clone() };
+  let ctx = CmdCtx { arxiv_id: progress_key.clone(), kitty_supported };
   let result = event_loop(&mut terminal, &mut reader, theme, ctx, kitty_supported);
 
   // Persist reading progress and bookmarks on clean exit.
@@ -156,6 +194,12 @@ fn event_loop(
             CommandResult::ChangeTheme(new) => theme = new,
             CommandResult::OpenHelp => reader.help_visible = true,
             CommandResult::Error(msg) => reader.cmd_error = Some(msg),
+            CommandResult::Reload => {
+              // Paper just rebuilt with fresh blocks → all kitty_ids
+              // are new.  Drop on-screen image placements so we don't
+              // try to reuse stale ids the terminal still has cached.
+              images::clear_all(&mut img_state);
+            }
           },
         }
       }

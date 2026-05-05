@@ -883,6 +883,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
     (":about",          "paper metadata"),
     (":url  :cite",     "copy URL / BibTeX to clipboard"),
     (":open",           "open URL in browser"),
+    (":reload  :e",     "re-fetch and re-parse the paper"),
     (":q  :help",       "quit / help"),
   ];
 

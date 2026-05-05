@@ -212,6 +212,50 @@ impl Reader {
     }
   }
 
+  /// Replace the loaded paper with freshly-fetched blocks + bibitems
+  /// in-place, preserving user state where it still makes sense.  Used
+  /// by `:reload`.  We keep:
+  ///   - `offset`, `cursor_y`, `cursor_x`, `desired_column` (clamped to new bounds)
+  ///   - `bookmarks` and `highlights` (block-byte addressed; survive
+  ///     re-parse iff the document structure is unchanged.  If the paper
+  ///     has been edited upstream, some marks may land on different
+  ///     content — acceptable for v1)
+  ///   - `mode`, `search_query`, `search_matches`, `search_idx`, `nav_history`,
+  ///     `toc_visible`, `meta`, `count_buf`, `cmd_buf`, `cmd_error`, `popup`
+  ///
+  /// Re-derives: `visual_lines`, `sections`, `label_lines`, `bib_entries`,
+  /// `bib_entry_lines`, `image_paths`.
+  pub fn reload_with(&mut self, blocks: Vec<Block>, bibitems: HashMap<String, String>) {
+    self.blocks = blocks;
+    let cw = self.content_width();
+    self.visual_lines = build_visual_lines(&self.blocks, cw, self.height);
+    self.sections = build_sections(&self.visual_lines);
+    let (label_lines, mut bib_entries, bib_entry_lines) =
+      build_link_indexes(&self.blocks, &self.visual_lines);
+    for (k, v) in bibitems {
+      bib_entries.insert(k, v);
+    }
+    self.label_lines = label_lines;
+    self.bib_entries = bib_entries;
+    self.bib_entry_lines = bib_entry_lines;
+    let mut image_paths = HashMap::new();
+    for block in &self.blocks {
+      match block {
+        Block::Image { kitty_id, path, .. } => {
+          image_paths.insert(*kitty_id, path.clone());
+        }
+        Block::ImageRow { items, .. } => {
+          for item in items {
+            image_paths.insert(item.kitty_id, item.path.clone());
+          }
+        }
+        _ => {}
+      }
+    }
+    self.image_paths = image_paths;
+    self.clamp_position();
+  }
+
   /// Effective text column width after subtracting the TOC panel (if visible).
   pub fn content_width(&self) -> usize {
     content_width_for(self.width, self.toc_visible)

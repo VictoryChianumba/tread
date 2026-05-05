@@ -21,6 +21,7 @@ use crate::state::{PopupContent, Reader};
 #[derive(Debug, Clone, Default)]
 pub struct CmdCtx {
   pub arxiv_id: Option<String>,
+  pub kitty_supported: bool,
 }
 
 /// Outcome of executing a command line.  The event loop reacts:
@@ -29,12 +30,15 @@ pub struct CmdCtx {
 /// - `ChangeTheme`: swap the loop's local `theme`
 /// - `OpenHelp`: set `reader.help_visible = true`
 /// - `Error(msg)`: stash on `reader.cmd_error` for the status line
+/// - `Reload`: paper data was just replaced; event loop must clear
+///   image-cache state since old kitty_ids no longer match the new blocks
 pub enum CommandResult {
   Continue,
   Quit,
   ChangeTheme(Theme),
   OpenHelp,
   Error(String),
+  Reload,
 }
 
 /// Top-level dispatch.  Splits the command line into name + args, then
@@ -85,7 +89,26 @@ fn command_table() -> &'static [(&'static str, &'static [&'static str], Handler)
     ("cite",       &["bibtex"],        cmd_cite),
     ("open",       &[],                cmd_open),
     ("placement",  &[],                cmd_placement),
+    ("reload",     &["e"],             cmd_reload),
   ]
+}
+
+/// `:reload` — re-fetch source from arXiv and rebuild the paper in
+/// place.  Preserves cursor, scroll position, bookmarks, highlights.
+/// Synchronous — the UI freezes for ~2s while the network round-trip
+/// runs.  No-op when no paper is loaded (e.g. when running the reader
+/// against a local file in the future).
+fn cmd_reload(reader: &mut Reader, ctx: &CmdCtx, _args: &[&str]) -> CommandResult {
+  let Some(id) = &ctx.arxiv_id else {
+    return CommandResult::Error("no paper loaded — :reload requires an arxiv id".to_string());
+  };
+  match crate::fetch_paper(id, ctx.kitty_supported) {
+    Ok(data) => {
+      reader.reload_with(data.blocks, data.bibitems);
+      CommandResult::Reload
+    }
+    Err(e) => CommandResult::Error(format!("reload: {e}")),
+  }
 }
 
 // ── Quit / aliases ───────────────────────────────────────────────────────────
@@ -402,7 +425,7 @@ fn cmd_placement(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
 mod tests {
   use super::*;
 
-  fn ctx() -> CmdCtx { CmdCtx { arxiv_id: Some("1706.03762".to_string()) } }
+  fn ctx() -> CmdCtx { CmdCtx { arxiv_id: Some("1706.03762".to_string()), kitty_supported: false } }
 
   fn dummy_reader() -> Reader {
     use doc_model::Block;

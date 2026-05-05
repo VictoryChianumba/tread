@@ -245,10 +245,21 @@ struct SectionCounters {
     table: u32,
     figure: u32,
     kitty_id: u32,
+    equation: u32,
 }
 
 impl SectionCounters {
-    fn new() -> Self { Self { sec: [0; 3], table: 0, figure: 0, kitty_id: 0 } }
+    fn new() -> Self { Self { sec: [0; 3], table: 0, figure: 0, kitty_id: 0, equation: 0 } }
+
+    /// Increment the equation counter by `count` and return the LAST
+    /// allocated number — used so that an `align` block with N lines
+    /// claims N consecutive numbers and the rendered tag shows the
+    /// final one beside the last line.  v2 will refine this to per-line
+    /// numbers and `\notag`/`\nonumber` suppression.
+    fn bump_equation(&mut self, count: u32) -> u32 {
+        self.equation = self.equation.saturating_add(count);
+        self.equation
+    }
 
     /// Allocate the next Kitty graphics protocol image id.  Starts at 1
     /// because some Kitty implementations reject id=0.
@@ -298,7 +309,7 @@ fn walk_blocks(
         match t {
             "Para" | "Plain" => {
                 if let Some(inlines) = c.as_array() {
-                    let blocks = para_to_block(inlines);
+                    let blocks = para_to_block(inlines, counters);
                     if !blocks.is_empty() {
                         out.extend(blocks);
                         out.push(Block::Blank);
@@ -581,7 +592,7 @@ fn walk_blocks(
 
 // ── Para → Block ──────────────────────────────────────────────────────────────
 
-fn para_to_block(inlines: &[Value]) -> Vec<Block> {
+fn para_to_block(inlines: &[Value], counters: &mut SectionCounters) -> Vec<Block> {
     // Check for a lone DisplayMath inline (possibly surrounded by whitespace).
     let meaningful: Vec<&Value> = inlines
         .iter()
@@ -602,7 +613,14 @@ fn para_to_block(inlines: &[Value]) -> Vec<Block> {
             }
             let rendered = render_math(latex);
             let lines: Vec<String> = rendered.lines().map(|l| l.to_string()).collect();
-            blocks.push(Block::DisplayMath { lines, num: None });
+            // Assign equation number based on env type.  Numbered envs
+            // (equation, align, gather, eqnarray, multline) bump the
+            // counter; starred variants and bare display-math like
+            // `\[…\]` don't.  v2 will handle `\notag`/`\nonumber`
+            // suppression of individual rows.
+            let count = equation_count_for_source(latex);
+            let num = if count > 0 { Some(counters.bump_equation(count) as usize) } else { None };
+            blocks.push(Block::DisplayMath { lines, num });
             return blocks;
         }
     }
@@ -620,6 +638,48 @@ fn para_to_block(inlines: &[Value]) -> Vec<Block> {
 /// Scan a display-math LaTeX source for the first `\label{X}`.  Used to
 /// emit a `Block::Anchor` so `\ref{eq:X}` resolves at runtime —
 /// Pandoc doesn't lift math labels to `attr.id`.
+/// Count how many equation numbers a display-math source claims.
+/// Numbered top-level envs:
+///   - `equation`, `multline` → 1 number total (multline only the last
+///     line is numbered, but for our purposes one number per block).
+///   - `align`, `gather`, `eqnarray` → one number per `\\`-separated row.
+/// Unnumbered envs (`*`-variants) → 0.  Sub-envs that don't number
+/// themselves (`aligned`, `gathered`, `cases`, matrix family) → 0.
+/// Bare display math without a `\begin{}` wrapper → 1 (treated as
+/// `equation` by default; matches LaTeX's `\[…\]`).
+///
+/// **v2 refinements**: `\notag` and `\nonumber` directives suppress
+/// individual rows; this function ignores them today.  See `v2.md`.
+fn equation_count_for_source(latex: &str) -> u32 {
+    let trimmed = latex.trim_start();
+    let env = trimmed.strip_prefix("\\begin{")
+        .and_then(|rest| {
+            let close = rest.find('}')?;
+            Some(&rest[..close])
+        });
+    let Some(env) = env else {
+        // No `\begin{...}` — bare display math, treat as one numbered eq.
+        return 1;
+    };
+    let starred = env.ends_with('*');
+    if starred {
+        return 0;
+    }
+    let base = env;
+    match base {
+        "equation" | "multline" => 1,
+        "align" | "gather" | "eqnarray" => {
+            // Count `\\` occurrences in the body.  N separators mean
+            // N+1 rows, each numbered.  Source has them as literal
+            // backslash-backslash; in the Rust string that's "\\\\".
+            (latex.matches("\\\\").count() as u32) + 1
+        }
+        // Sub-envs (aligned, split, cases, matrix family) don't claim
+        // their own numbers — their parent `equation` already did.
+        _ => 0,
+    }
+}
+
 fn extract_math_label(math_src: &str) -> Option<String> {
     let bytes = math_src.as_bytes();
     let mut i = 0;
