@@ -51,7 +51,15 @@ fn main() {
   eprintln!("parsed {} bibitem entries from source", bibitems.len());
 
   let mut blocks = parse::to_blocks(sources);
-  arxiv_render::absolutize_image_paths(&mut blocks, &asset_dir);
+  // Stage 6: terminal-capability fallback.  On terminals without any
+  // inline-graphics protocol, replace every Image/ImageRow with its
+  // caption text — no reserved blank rows, no would-be-emitted escapes.
+  // Otherwise, resolve paths to absolute so the reader can load bytes.
+  if matches!(kitty_capability, kitty_graphics::Capability::Supported) {
+    arxiv_render::absolutize_image_paths(&mut blocks, &asset_dir);
+  } else {
+    arxiv_render::degrade_images_to_captions(&mut blocks);
+  }
 
   // Best-effort PDF anchor extraction.  Tables are floats — their source
   // position rarely matches the rendered position the LaTeX typesetter
@@ -72,7 +80,11 @@ fn main() {
   };
   let blocks = placement::lift_tables(blocks, &anchors);
 
-  let image_count = blocks.iter().filter(|b| matches!(b, doc_model::Block::Image { .. })).count();
+  let image_count: usize = blocks.iter().map(|b| match b {
+    doc_model::Block::Image { .. } => 1,
+    doc_model::Block::ImageRow { items, .. } => items.len(),
+    _ => 0,
+  }).sum();
   eprintln!("{} blocks ({} images) — launching reader ...", blocks.len(), image_count);
 
   if let Err(e) = block_reader::run(blocks, None, Some(id), bibitems) {

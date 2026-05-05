@@ -48,7 +48,10 @@ fn main() {
   eprintln!("found {} .tex file(s); parsing ...", fetched.tex.len());
 
   let mut blocks = parse::to_blocks(fetched.tex);
-  arxiv_render::absolutize_image_paths(&mut blocks, &fetched.asset_dir);
+  // The debug viewer only dumps text — pixel graphics never apply, so
+  // collapse Image/ImageRow to caption lines for cleaner output.
+  arxiv_render::degrade_images_to_captions(&mut blocks);
+  let _ = &fetched.asset_dir; // kept on disk; not consumed here.
   let visual_lines = build_visual_lines(&blocks, 80);
 
   for vl in &visual_lines {

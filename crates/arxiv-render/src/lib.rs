@@ -7,6 +7,31 @@ pub mod placement;
 pub use parse::{extract_bibitems, to_blocks};
 pub use placement::lift_tables;
 
+/// Replace every `Block::Image` and `Block::ImageRow` with a plain
+/// caption line.  The fallback for terminals that don't speak any
+/// inline-graphics protocol — instead of reserving 16 blank rows per
+/// figure (where pixels would land on a graphics-capable terminal),
+/// users see a single `[Figure N: caption]` line in document flow.
+///
+/// Call this in `main.rs` *before* `absolutize_image_paths` when
+/// `kitty_graphics::detect()` returns `Unsupported`.  After this pass
+/// there are no `Image`/`ImageRow` blocks left in the tree, so the
+/// graphics capability flag effectively becomes a no-op for the
+/// reader's hot path.
+pub fn degrade_images_to_captions(blocks: &mut Vec<doc_model::Block>) {
+  for b in blocks.iter_mut() {
+    match b {
+      doc_model::Block::Image { alt, .. } => {
+        *b = doc_model::Block::Line(format!("[{alt}]"));
+      }
+      doc_model::Block::ImageRow { alt, .. } => {
+        *b = doc_model::Block::Line(format!("[{alt}]"));
+      }
+      _ => {}
+    }
+  }
+}
+
 /// Rewrite every `Block::Image::path` from a tarball-relative form to an
 /// absolute path under `asset_dir`, and recover the file extension when
 /// LaTeX's `\includegraphics{name}` form omitted it.  Idempotent: paths
