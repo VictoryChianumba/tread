@@ -25,8 +25,9 @@ fn main() {
   // figure doesn't read as silent breakage.
   if kitty_graphics::in_tmux() && matches!(kitty_capability, kitty_graphics::Capability::Supported) {
     eprintln!(
-      "tmux detected: enable graphics with `tmux set -g allow-passthrough on` \
-       (or add to ~/.tmux.conf), then re-attach the session."
+      "tmux detected: for inline graphics add to ~/.tmux.conf:\n  \
+       set -g allow-passthrough on    (forwards Kitty escapes to iTerm2)\n  \
+       set -g focus-events on         (lets the reader clear images on pane switch)"
     );
   }
 

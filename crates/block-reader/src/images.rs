@@ -38,6 +38,13 @@ use crate::state::Reader;
 /// figure.  We don't cache *terminal-side* (the `a=T` protocol variant
 /// re-transmits each frame) because iTerm2's Kitty implementation
 /// doesn't keep an image store between frames — it only renders.
+///
+/// `last_emitted` is the lazy-transmission cache: when the next frame
+/// would place an image at the same `(row, col, cols, rows)` as last
+/// frame, the terminal already has it on screen and we skip the entire
+/// delete+transmit cycle.  Saves ~210 KB of base64 per visible figure
+/// per idle frame (mouse motion, focus events, key repeats that don't
+/// change scroll position).
 #[derive(Default)]
 pub(crate) struct ImageState {
   /// Decoded PNG bytes by kitty_id.  Loaded lazily on first visibility.
@@ -48,6 +55,10 @@ pub(crate) struct ImageState {
   /// Kitty ids that had visible placements last frame.  Diffed against
   /// `current` each frame to find which ones just scrolled out.
   prev_visible: HashSet<u32>,
+  /// Last `(abs_row, abs_col, cols, rows)` we emitted for each id.
+  /// Compared against the current frame's intended placement; equal
+  /// means "already on screen, don't re-emit."
+  last_emitted: HashMap<u32, (u16, u16, u16, u16)>,
 }
 
 /// Walk the visible window for Image VLs and emit Kitty escapes to
@@ -132,10 +143,13 @@ pub(crate) fn place_visible(
 
   // Delete placements for images that just scrolled out entirely.
   // Kitty otherwise leaves the image painted over the area where new
-  // text is about to appear.
+  // text is about to appear.  Also clear them from `last_emitted` so
+  // the next time they scroll back in we know to re-emit (the terminal
+  // has discarded the image at this point).
   let dropped: Vec<u32> = state.prev_visible.difference(&current).copied().collect();
   for id in dropped {
     let _ = delete_placement(id);
+    state.last_emitted.remove(&id);
   }
 
   // Re-emit `a=T` (transmit-and-display) for every visible image on
@@ -167,6 +181,15 @@ pub(crate) fn place_visible(
       if trace { eprintln!("  skip id={} (no bytes)", id); }
       continue;
     };
+    // Lazy emission: skip the delete+transmit cycle when the placement
+    // hasn't moved since last frame.  Idle events (mouse motion, focus,
+    // un-handled keys) don't change scroll position, so most frames
+    // hit this fast path and pay zero terminal-IO for image upkeep.
+    let placement_key = (abs_row, abs_col, cols, rows);
+    if state.last_emitted.get(&id) == Some(&placement_key) {
+      if trace { eprintln!("  cached id={} at row={} col={}", id, abs_row + 1, abs_col + 1); }
+      continue;
+    }
     let _ = delete_placement(id);
     // Cursor positioning travels inside the same passthrough envelope
     // as the APC inside `transmit_and_place` — see that function's
@@ -177,6 +200,7 @@ pub(crate) fn place_visible(
         id, abs_row + 1, abs_col + 1, cols, rows);
     }
     let _ = transmit_and_place(id, bytes, cols, rows, abs_row + 1, abs_col + 1);
+    state.last_emitted.insert(id, placement_key);
   }
 
   state.prev_visible = current;
@@ -184,11 +208,14 @@ pub(crate) fn place_visible(
 
 /// Clear all on-screen placements.  Called on resize and on exit so
 /// stale image artefacts don't bleed onto the next frame or back into
-/// the user's shell after the alt-screen tears down.
+/// the user's shell after the alt-screen tears down.  Also resets
+/// `last_emitted` since the cached coordinates are about to become
+/// invalid (resize re-flows visual_lines; exit closes the alt screen).
 pub(crate) fn clear_all(state: &mut ImageState) {
   for id in state.prev_visible.drain() {
     let _ = delete_placement(id);
   }
+  state.last_emitted.clear();
 }
 
 /// Resolve an image source path to PNG bytes.  PNGs read directly;

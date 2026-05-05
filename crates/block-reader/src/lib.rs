@@ -10,7 +10,7 @@ mod state;
 mod text_objects;
 
 use crossterm::{
-  event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
+  event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
   execute,
   terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -48,7 +48,13 @@ pub fn run_with_theme(
 ) -> Result<(), Box<dyn std::error::Error>> {
   enable_raw_mode()?;
   let mut stdout = io::stdout();
-  execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+  // Focus events let us detect tmux pane switches: when our pane
+  // loses focus we delete all image placements (otherwise iTerm2
+  // keeps them painted at absolute screen coordinates that now
+  // belong to a different tmux pane).  Requires `set -g focus-events
+  // on` in the user's tmux config; if absent, FocusLost never fires
+  // and behaviour is what we had before — image bleed across panes.
+  execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableFocusChange)?;
   // Opt into the kitty keyboard protocol so Shift+Enter (and other
   // modified specials) are distinguishable from plain Enter.  Terminals
   // that don't speak the protocol silently ignore the push; on those,
@@ -93,7 +99,7 @@ pub fn run_with_theme(
   // that didn't accept it.
   let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
   disable_raw_mode()?;
-  execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+  execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture, DisableFocusChange)?;
   terminal.show_cursor()?;
 
   result
@@ -164,6 +170,19 @@ fn event_loop(
         // coordinates — re-emitting at old positions would stack ghosts.
         images::clear_all(&mut img_state);
         reader.resize(w as usize, h as usize);
+      }
+      Event::FocusLost => {
+        // tmux pane lost focus.  iTerm2 has no concept of panes, so
+        // image placements stay painted at absolute screen coords —
+        // bleeding into whatever pane is on top of ours.  Delete them
+        // all; FocusGained will replay on next draw.
+        images::clear_all(&mut img_state);
+      }
+      Event::FocusGained => {
+        // No explicit redraw needed — the next loop iteration calls
+        // terminal.draw and place_visible, and `clear_all` already
+        // emptied last_emitted, so every visible image is treated as
+        // first-time-visible and re-emitted.
       }
       _ => {}
     }
