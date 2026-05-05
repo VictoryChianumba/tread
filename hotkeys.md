@@ -119,10 +119,29 @@ Internal refs that point to elements we don't index yet (e.g. equation labels) a
 |---|---|
 | `\` | Toggle TOC side panel |
 | `?` | Toggle help overlay |
-| `m` / `q` / `Esc` | Quit (Esc / q work outside Command/Visual/Search) |
+| `m` / `q` / `Esc` | Quit (Esc / q work outside Command/Visual/Search/Reading) |
 | `yy` | Yank current line to clipboard (OSC 52) |
 | `yi<obj>` | Yank **inner** text object (see [Text objects](#text-objects)) |
 | `ya<obj>` | Yank **around** text object |
+
+## Voice / TTS playback
+
+| Key | Action |
+|---|---|
+| `r` | Read the current paragraph aloud. Press again to re-read |
+| `R` | Read from the cursor to the end of the current paragraph |
+| `Ctrl+P` | Continuous reading — auto-advances paragraph by paragraph |
+| `Space` | Pause / resume (only in reading mode) |
+| `c` | Recenter the viewport on the cursor (only in reading mode) |
+| `Esc` | Stop playback and exit reading mode |
+
+While playing, the active paragraph stays at full brightness, surrounding lines dim, and the word currently being spoken is highlighted. The status bar shows `[♪ Playing]`, `[⏸ Paused]`, `[⠋ Loading]` (animated spinner during network round-trip), or `[Voice: <error>]` if synthesis fails.
+
+Provider auto-selection (no config needed):
+1. **ElevenLabs** if `ELEVENLABS_API_KEY` is set in the environment AND a `voice_id` is configured.
+2. **macOS `say`** (default `Samantha` voice) — universal fallback.
+
+Override with `tts_provider` in the `voice` section of `~/.config/trench/block_reader.json`. Available providers: `"elevenlabs"`, `"say"`, `"piper"`. See [features.md](features.md#voice--tts) for the full config schema.
 
 ## Text objects
 
@@ -171,6 +190,7 @@ Press `:` to open the command bar. Type, then `Enter` to execute or `Esc` to can
 | `:back` | `:bk` | Same as `Ctrl+O` |
 | `:help` | `:h` | Open help overlay |
 | `:toc` | `:tree` | Toggle TOC panel |
+| `:reload` | `:e` | Re-fetch source and re-parse the paper in place. Preserves cursor, scroll, bookmarks, highlights. |
 | `:placement` | — | Diagnostic popup showing each parsed Matrix table's block index and caption |
 
 ### Themes
@@ -191,6 +211,8 @@ The bottom row shows `<line>/<total>  <pct>%` plus, when relevant:
 - `VISUAL` / `VISUAL LINE` — active visual mode
 - `f_`, `t_`, `m_`, `'_`, `g_`, `y_`, `yi_`, `ya_` — awaiting the next keystroke for a multi-key motion or text object
 - `5_` — count prefix in progress (e.g. you've typed `5` waiting for a motion)
+- `[♪ Playing]` / `[⏸ Paused]` / `[⠋ Loading]` — voice playback status
+- `[Voice: <error>]` — the TTS provider failed (missing API key, audio device unavailable, etc.)
 - A red error message — the most recent `:` command failed; clears on next keystroke
 
 ## Modes at a glance
