@@ -37,7 +37,7 @@ fn main() {
 
   eprintln!("fetching source for arXiv:{id} ...");
 
-  let sources = match fetch::fetch_source(&id) {
+  let fetched = match fetch::fetch_source(&id) {
     Ok(s) => s,
     Err(e) => {
       eprintln!("error: {e}");
@@ -45,9 +45,10 @@ fn main() {
     }
   };
 
-  eprintln!("found {} .tex file(s); parsing ...", sources.len());
+  eprintln!("found {} .tex file(s); parsing ...", fetched.tex.len());
 
-  let blocks = parse::to_blocks(sources);
+  let mut blocks = parse::to_blocks(fetched.tex);
+  arxiv_render::absolutize_image_paths(&mut blocks, &fetched.asset_dir);
   let visual_lines = build_visual_lines(&blocks, 80);
 
   for vl in &visual_lines {

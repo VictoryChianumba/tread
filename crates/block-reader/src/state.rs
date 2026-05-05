@@ -131,6 +131,13 @@ pub struct Reader {
   pub cmd_error: Option<String>,
   /// Active modal popup (e.g. `:marks` listing).  Any keystroke dismisses.
   pub popup: Option<PopupContent>,
+  /// Resolved on-disk path for every `Block::Image` in the document,
+  /// keyed by its `kitty_id`.  Built once at construction; consulted
+  /// post-draw to load PNG bytes for terminals that speak the Kitty
+  /// graphics protocol.  Paths that fail to resolve are silently
+  /// skipped — the caption row always renders, so degradation is
+  /// graceful.
+  pub image_paths: HashMap<u32, std::path::PathBuf>,
 }
 
 impl Reader {
@@ -153,6 +160,20 @@ impl Reader {
     // cite-keys, so this is the authoritative source.
     for (k, v) in bibitems {
       bib_entries.insert(k, v);
+    }
+    let mut image_paths = HashMap::new();
+    for block in &blocks {
+      match block {
+        Block::Image { kitty_id, path, .. } => {
+          image_paths.insert(*kitty_id, path.clone());
+        }
+        Block::ImageRow { items, .. } => {
+          for item in items {
+            image_paths.insert(item.kitty_id, item.path.clone());
+          }
+        }
+        _ => {}
+      }
     }
     Self {
       blocks,
@@ -183,6 +204,7 @@ impl Reader {
       cmd_buf: String::new(),
       cmd_error: None,
       popup: None,
+      image_paths,
     }
   }
 

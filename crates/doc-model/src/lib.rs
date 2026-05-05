@@ -116,6 +116,18 @@ pub enum Block {
   /// is a sequential id assigned by the parser; the renderer uses it
   /// as the Kitty graphics protocol image identifier.
   Image { path: std::path::PathBuf, alt: String, kitty_id: u32 },
+  /// A multi-image figure, e.g. LaTeX `\subfloat`/`\subfigure` siblings
+  /// inside one `\begin{figure}`.  Items are rendered side-by-side at
+  /// equal cell widths; the shared `alt` is the figure's caption.
+  ImageRow { items: Vec<ImageItem>, alt: String },
+}
+
+/// One sub-image inside a `Block::ImageRow`.  Each carries its own
+/// `kitty_id` so deletions and re-placements address them individually.
+#[derive(Debug, Clone)]
+pub struct ImageItem {
+  pub path: std::path::PathBuf,
+  pub kitty_id: u32,
 }
 
 /// A single screen row, fully expanded from a Block.
@@ -163,6 +175,10 @@ pub enum VisualLineKind {
   /// of rows the image occupies (this VL is one of them).  `is_first`
   /// flags the row where the renderer should emit the placement escape.
   Image { kitty_id: u32, rows: u16, is_first: bool },
+  /// One row of a multi-image figure (`Block::ImageRow`).  All sub-image
+  /// kitty_ids share the same row range; the renderer divides the
+  /// content width evenly among them.
+  ImageRow { kitty_ids: Vec<u32>, rows: u16, is_first: bool },
 }
 
 /// Expand a block list into the flat visual line table.
@@ -365,24 +381,78 @@ pub fn build_visual_lines(blocks: &[Block], terminal_width: usize) -> Vec<Visual
       // label-to-line resolution by the reader.
       Block::Anchor(_) => {}
       Block::Image { alt, kitty_id, .. } => {
-        // Stage 2 (data-model only): emit a single placeholder VL with
-        // the existing `[Image: alt]` text.  Stage 5 of the pixel-graphics
-        // work will replace this with N rows of `VisualLineKind::Image`
-        // once the protocol-emission path is live.
-        let text = if alt.is_empty() {
-          format!("[Image #{kitty_id}]")
-        } else {
-          format!("[Image: {alt}]")
-        };
-        let len = text.len();
-        out.push(VisualLine {
-          block_idx,
-          line_in_block: 0,
-          text,
-          kind: VisualLineKind::Prose,
-          block_byte_start: 0,
-          block_byte_end: len,
-        });
+        // Reserve N rows for the image, plus one prose row for the
+        // caption.  The image rows render as blank text (the actual
+        // pixels come from a Kitty `a=p` escape emitted post-draw); the
+        // caption row stays useful even on terminals without graphics
+        // support, so the user always sees "[Figure N: caption]" beneath
+        // (or in place of) the image.
+        //
+        // N is hardcoded at 16 rows for v1.  A typical 8×16 cell on
+        // retina-class displays gives ~250px height, which works for
+        // most figures without crowding scrolling.  Refining N from
+        // actual PNG dimensions is a Stage-7 enhancement.
+        const IMAGE_ROWS: u16 = 16;
+        let blank = String::new();
+        for line_in_block in 0..IMAGE_ROWS {
+          out.push(VisualLine {
+            block_idx,
+            line_in_block: line_in_block as usize,
+            text: blank.clone(),
+            kind: VisualLineKind::Image {
+              kitty_id: *kitty_id,
+              rows: IMAGE_ROWS,
+              is_first: line_in_block == 0,
+            },
+            block_byte_start: 0,
+            block_byte_end: 0,
+          });
+        }
+        if !alt.is_empty() {
+          let caption = format!("[{}]", alt);
+          let len = caption.len();
+          out.push(VisualLine {
+            block_idx,
+            line_in_block: IMAGE_ROWS as usize,
+            text: caption,
+            kind: VisualLineKind::Prose,
+            block_byte_start: 0,
+            block_byte_end: len,
+          });
+        }
+      }
+      Block::ImageRow { items, alt } => {
+        // Same shape as `Block::Image` but with multiple sub-images
+        // sharing one row range.  The renderer divides the content
+        // width evenly among `kitty_ids`.
+        const IMAGE_ROWS: u16 = 16;
+        let kitty_ids: Vec<u32> = items.iter().map(|i| i.kitty_id).collect();
+        for line_in_block in 0..IMAGE_ROWS {
+          out.push(VisualLine {
+            block_idx,
+            line_in_block: line_in_block as usize,
+            text: String::new(),
+            kind: VisualLineKind::ImageRow {
+              kitty_ids: kitty_ids.clone(),
+              rows: IMAGE_ROWS,
+              is_first: line_in_block == 0,
+            },
+            block_byte_start: 0,
+            block_byte_end: 0,
+          });
+        }
+        if !alt.is_empty() {
+          let caption = format!("[{}]", alt);
+          let len = caption.len();
+          out.push(VisualLine {
+            block_idx,
+            line_in_block: IMAGE_ROWS as usize,
+            text: caption,
+            kind: VisualLineKind::Prose,
+            block_byte_start: 0,
+            block_byte_end: len,
+          });
+        }
       }
     }
 

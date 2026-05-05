@@ -25,6 +25,9 @@
 //! v1 uses approach #2.  If we ever need precision, we can layer
 //! approach #1 on top behind a feature flag.
 
+pub mod pdf;
+pub mod transmit;
+
 /// Whether the host terminal supports the Kitty graphics protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
@@ -51,6 +54,11 @@ pub fn detect() -> Capability {
   if std::env::var("TREAD_DISABLE_KITTY_GRAPHICS").is_ok() {
     return Capability::Unsupported;
   }
+  // Manual force-enable.  Useful inside tmux when the host terminal
+  // supports Kitty graphics but no env-var hint survives the multiplexer.
+  if std::env::var("TREAD_FORCE_KITTY_GRAPHICS").is_ok() {
+    return Capability::Supported;
+  }
   if std::env::var("KITTY_WINDOW_ID").is_ok() {
     return Capability::Supported;
   }
@@ -65,12 +73,47 @@ pub fn detect() -> Capability {
       return Capability::Supported;
     }
   }
+  // `TERM_PROGRAM` survives tmux on most setups (it's set by the host
+  // terminal, not by the shell), so we use it as the tmux fallback —
+  // when iTerm2 launches tmux, `TERM_PROGRAM=iTerm.app` propagates into
+  // pane shells even though `KITTY_WINDOW_ID` / `LC_TERMINAL` typically
+  // don't.  The version check is best-effort: missing/unparseable means
+  // we trust the user (over-enable on iTerm2 ≥ 3.5).
+  if let Ok(prog) = std::env::var("TERM_PROGRAM") {
+    let p = prog.to_ascii_lowercase();
+    if p.contains("iterm") && iterm2_term_program_at_least_3_5() {
+      return Capability::Supported;
+    }
+    if p.contains("kitty") || p.contains("ghostty") || p.contains("wezterm") {
+      return Capability::Supported;
+    }
+  }
   if let Ok(term) = std::env::var("TERM") {
     if term.contains("kitty") || term.contains("ghostty") {
       return Capability::Supported;
     }
   }
   Capability::Unsupported
+}
+
+/// True when running inside tmux.  `transmit` knows how to wrap
+/// graphics escapes in tmux's DCS passthrough envelope, but the user
+/// must additionally have `set -g allow-passthrough on` in their tmux
+/// config — otherwise tmux silently drops the wrapped sequence.
+pub fn in_tmux() -> bool {
+  std::env::var_os("TMUX").is_some()
+}
+
+/// Like `iterm2_at_least_3_5` but reads `TERM_PROGRAM_VERSION` instead
+/// of `LC_TERMINAL_VERSION`.  iTerm2 sets both, but `LC_*` doesn't
+/// propagate through tmux while `TERM_PROGRAM*` does (tmux's
+/// `update-environment` includes it on most distros).
+fn iterm2_term_program_at_least_3_5() -> bool {
+  let Ok(v) = std::env::var("TERM_PROGRAM_VERSION") else { return true };
+  let mut parts = v.split('.');
+  let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+  let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+  major > 3 || (major == 3 && minor >= 5)
 }
 
 /// Parse `LC_TERMINAL_VERSION` (typically `"3.5.0"` or similar) and
@@ -91,15 +134,22 @@ mod tests {
   use super::*;
 
   /// Helper that snapshots and restores env vars across tests so they
-  /// don't leak state.
+  /// don't leak state.  Holds a process-wide mutex for the duration of
+  /// its lifetime so concurrent tests can't stomp on each other's env
+  /// vars — `std::env` is a shared, process-global table.
+  use std::sync::{Mutex, MutexGuard};
+  static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
   struct EnvLock {
     snapshot: Vec<(&'static str, Option<String>)>,
+    _guard: MutexGuard<'static, ()>,
   }
   impl EnvLock {
     fn new(keys: &[&'static str]) -> Self {
+      let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
       let snapshot = keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
       for k in keys { unsafe { std::env::remove_var(k); } }
-      Self { snapshot }
+      Self { snapshot, _guard: guard }
     }
   }
   impl Drop for EnvLock {

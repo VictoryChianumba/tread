@@ -1,0 +1,225 @@
+//! Post-draw Kitty graphics emission for `Block::Image` rows.
+//!
+//! Ratatui's frame buffer is character-cell only — it has no concept of
+//! pixel data and would mangle any escape sequence we tried to embed in
+//! a `Span` (the cell-width accounting would corrupt).  So images live
+//! outside the buffer: ratatui paints blank rows where the image goes,
+//! and *after* `terminal.draw()` returns we walk the visible window for
+//! Image VLs and emit Kitty `a=p` (place) escapes directly to stdout.
+//!
+//! The same pattern is used elsewhere in this crate for OSC 52 yank.
+//!
+//! ## Lifecycle
+//!
+//! - **First time visible**: read the PNG bytes from disk (converting
+//!   PDFs via `pdftoppm` if necessary), `a=t` transmit them once, mark
+//!   the kitty_id as cached for the rest of the session.
+//! - **Each frame**: emit `a=d` (delete) for every cached id followed
+//!   by `a=p` (place) at its current screen row.  We delete before
+//!   placing because Kitty's `a=p` *adds* a placement instead of
+//!   replacing — without the delete, scrolling stacks ghost images
+//!   from previous offsets.
+//! - **Scrolled out**: emit `a=d` for any id that was visible last
+//!   frame but isn't this frame.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use doc_model::VisualLineKind;
+use kitty_graphics::transmit::{delete_placement, transmit_and_place};
+use ratatui::layout::Rect;
+
+use crate::state::Reader;
+
+/// Frame-to-frame image bookkeeping for the post-draw injector.
+///
+/// We cache PNG bytes in memory the first time an image is requested
+/// so fast scrolling doesn't re-read 150 KB of disk per keystroke per
+/// figure.  We don't cache *terminal-side* (the `a=T` protocol variant
+/// re-transmits each frame) because iTerm2's Kitty implementation
+/// doesn't keep an image store between frames — it only renders.
+#[derive(Default)]
+pub(crate) struct ImageState {
+  /// Decoded PNG bytes by kitty_id.  Loaded lazily on first visibility.
+  /// `None` marks an image we tried to load and failed (missing file,
+  /// bad format) — caching the negative result avoids retrying every
+  /// frame.
+  bytes: HashMap<u32, Option<Vec<u8>>>,
+  /// Kitty ids that had visible placements last frame.  Diffed against
+  /// `current` each frame to find which ones just scrolled out.
+  prev_visible: HashSet<u32>,
+}
+
+/// Walk the visible window for Image VLs and emit Kitty escapes to
+/// transmit (first time) and place each one at its current screen row.
+/// No-op if `supported == false` — keeps the hot path cheap on
+/// non-graphics terminals and on prose-only papers.
+pub(crate) fn place_visible(
+  reader: &Reader,
+  state: &mut ImageState,
+  content_area: Rect,
+  supported: bool,
+) {
+  if !supported {
+    return;
+  }
+
+  // Collect first-row Image VLs that fall inside content_area, plus
+  // the set of all kitty_ids touching the visible window (which may
+  // include rows of an image whose first row scrolled off the top).
+  let total = reader.visual_lines.len();
+  let height = content_area.height as usize;
+  let cell_cols = content_area.width;
+
+  // Each placement: (id, abs_row, rows, abs_col, cols).  Single-image
+  // figures get full content_width; multi-image ImageRow figures get
+  // the row split evenly among siblings.
+  let mut placements: Vec<(u32, u16, u16, u16, u16)> = Vec::new();
+  let mut current: HashSet<u32> = HashSet::new();
+  for screen_row in 0..height {
+    let vl_idx = reader.offset + screen_row;
+    if vl_idx >= total {
+      break;
+    }
+    let abs_row = content_area.y + screen_row as u16;
+    match &reader.visual_lines[vl_idx].kind {
+      VisualLineKind::Image { kitty_id, rows, is_first } => {
+        current.insert(*kitty_id);
+        if *is_first {
+          placements.push((*kitty_id, abs_row, *rows, content_area.x, cell_cols));
+        }
+      }
+      VisualLineKind::ImageRow { kitty_ids, rows, is_first } => {
+        for &id in kitty_ids {
+          current.insert(id);
+        }
+        if *is_first {
+          let count = kitty_ids.len() as u16;
+          if count > 0 {
+            let per_image = cell_cols / count;
+            for (i, &id) in kitty_ids.iter().enumerate() {
+              let col = content_area.x + (i as u16) * per_image;
+              placements.push((id, abs_row, *rows, col, per_image));
+            }
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  // Trace logging — gated by env var so it only fires when we're
+  // actively debugging.  Run with `TREAD_TRACE_IMAGES=1 ... 2>/tmp/br.log`
+  // to capture without polluting the alt screen.
+  let trace = std::env::var_os("TREAD_TRACE_IMAGES").is_some();
+  if trace && !placements.is_empty() {
+    eprintln!(
+      "trace: offset={} content_area=({},{},{}x{}) placements={:?}",
+      reader.offset,
+      content_area.x, content_area.y, content_area.width, content_area.height,
+      placements,
+    );
+    for &(id, _, _, _, _) in &placements {
+      let path = reader.image_paths.get(&id);
+      let load_status = match state.bytes.get(&id) {
+        Some(Some(b)) => format!("loaded ({} bytes)", b.len()),
+        Some(None) => "LOAD FAILED (cached negative)".to_string(),
+        None => "not loaded yet".to_string(),
+      };
+      eprintln!("  id={} path={:?} status={}", id, path, load_status);
+    }
+  }
+
+  // Delete placements for images that just scrolled out entirely.
+  // Kitty otherwise leaves the image painted over the area where new
+  // text is about to appear.
+  let dropped: Vec<u32> = state.prev_visible.difference(&current).copied().collect();
+  for id in dropped {
+    let _ = delete_placement(id);
+  }
+
+  // Re-emit `a=T` (transmit-and-display) for every visible image on
+  // every frame.  We can't rely on terminal-side caching: iTerm2's
+  // Kitty implementation doesn't keep images across frames, so a cached
+  // `a=p` would be a no-op.  Native Kitty handles re-transmission fine
+  // (it just refreshes its own cache), so this works everywhere.
+  //
+  // Failures (missing file, unreadable bytes, unsupported format) are
+  // memoised as `None` in `state.bytes` and silently skipped on every
+  // future frame — the caption row beneath the image is the
+  // user-visible fallback.
+  for &(id, abs_row, rows, abs_col, cols) in &placements {
+    let path_for_load = reader.image_paths.get(&id).cloned();
+    let bytes_opt = state.bytes.entry(id).or_insert_with(|| {
+      let result = path_for_load.as_ref().and_then(|p| {
+        let r = resolve_png(p);
+        if trace {
+          match &r {
+            Ok(b) => eprintln!("  load id={} path={:?} ok ({} bytes)", id, p, b.len()),
+            Err(e) => eprintln!("  load id={} path={:?} ERR: {}", id, p, e),
+          }
+        }
+        r.ok()
+      });
+      result
+    });
+    let Some(bytes) = bytes_opt.as_ref() else {
+      if trace { eprintln!("  skip id={} (no bytes)", id); }
+      continue;
+    };
+    let _ = delete_placement(id);
+    // Cursor positioning travels inside the same passthrough envelope
+    // as the APC inside `transmit_and_place` — see that function's
+    // doc comment for why bundling matters under tmux.  Both row and
+    // col are 1-indexed (ANSI CUP convention).
+    if trace {
+      eprintln!("  emit id={} at row={} col={} cells={}x{}",
+        id, abs_row + 1, abs_col + 1, cols, rows);
+    }
+    let _ = transmit_and_place(id, bytes, cols, rows, abs_row + 1, abs_col + 1);
+  }
+
+  state.prev_visible = current;
+}
+
+/// Clear all on-screen placements.  Called on resize and on exit so
+/// stale image artefacts don't bleed onto the next frame or back into
+/// the user's shell after the alt-screen tears down.
+pub(crate) fn clear_all(state: &mut ImageState) {
+  for id in state.prev_visible.drain() {
+    let _ = delete_placement(id);
+  }
+}
+
+/// Resolve an image source path to PNG bytes.  PNGs read directly;
+/// PDFs go through Poppler via `kitty_graphics::pdf::pdf_to_png` and
+/// are cached under `~/.cache/tread/figures` so a second visit doesn't
+/// re-rasterise.  Other formats are not yet supported.
+fn resolve_png(path: &Path) -> std::io::Result<Vec<u8>> {
+  let ext = path
+    .extension()
+    .and_then(|s| s.to_str())
+    .unwrap_or("")
+    .to_ascii_lowercase();
+  match ext.as_str() {
+    "png" => std::fs::read(path),
+    "pdf" => {
+      let cache = cache_dir();
+      let png = kitty_graphics::pdf::pdf_to_png(path, &cache)?;
+      std::fs::read(png)
+    }
+    other => Err(std::io::Error::other(format!(
+      "unsupported image format: {other}"
+    ))),
+  }
+}
+
+fn cache_dir() -> PathBuf {
+  if let Some(home) = std::env::var_os("HOME") {
+    return PathBuf::from(home)
+      .join(".cache")
+      .join("tread")
+      .join("figures");
+  }
+  std::env::temp_dir().join("tread-figures")
+}

@@ -19,16 +19,28 @@ fn main() {
   // For now we just log the result; later stages gate image rendering on it.
   let kitty_capability = kitty_graphics::detect();
   eprintln!("kitty graphics: {:?}", kitty_capability);
+  // Inside tmux, kitty escapes are wrapped in the tmux passthrough
+  // envelope automatically — but tmux drops them unless the user has
+  // `set -g allow-passthrough on`.  Print a one-time hint so a missing
+  // figure doesn't read as silent breakage.
+  if kitty_graphics::in_tmux() && matches!(kitty_capability, kitty_graphics::Capability::Supported) {
+    eprintln!(
+      "tmux detected: enable graphics with `tmux set -g allow-passthrough on` \
+       (or add to ~/.tmux.conf), then re-attach the session."
+    );
+  }
 
   eprintln!("fetching source for arXiv:{id} ...");
 
-  let sources = match fetch::fetch_source(&id) {
+  let fetched = match fetch::fetch_source(&id) {
     Ok(s) => s,
     Err(e) => {
       eprintln!("error: {e}");
       std::process::exit(1);
     }
   };
+  let sources = fetched.tex;
+  let asset_dir = fetched.asset_dir;
 
   eprintln!("found {} .tex file(s); parsing ...", sources.len());
 
@@ -38,7 +50,8 @@ fn main() {
   let bibitems = arxiv_render::extract_bibitems(&sources);
   eprintln!("parsed {} bibitem entries from source", bibitems.len());
 
-  let blocks = parse::to_blocks(sources);
+  let mut blocks = parse::to_blocks(sources);
+  arxiv_render::absolutize_image_paths(&mut blocks, &asset_dir);
 
   // Best-effort PDF anchor extraction.  Tables are floats — their source
   // position rarely matches the rendered position the LaTeX typesetter

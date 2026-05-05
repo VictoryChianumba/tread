@@ -37,7 +37,7 @@ pub fn draw(frame: &mut Frame, reader: &Reader, t: &Theme) {
   }
 }
 
-fn split_layout(
+pub(crate) fn split_layout(
   area: Rect,
   reader: &Reader,
 ) -> (Option<Rect>, Option<Rect>, Rect, Rect, Option<Rect>) {
@@ -332,11 +332,10 @@ fn render_visual_line<'a>(
       Line::styled(text.clone(), Style::default().fg(t.rule))
     }
 
-    VisualLineKind::Image { .. } => {
-      // Stage 2 of pixel-graphics: data-model only — Block::Image emits
-      // a Prose placeholder line via build_visual_lines, so this arm is
-      // only reached in stage 5+ when image VLs are emitted directly.
-      // For now, just paint a blank row so ratatui has something to draw.
+    VisualLineKind::Image { .. } | VisualLineKind::ImageRow { .. } => {
+      // The actual image pixels arrive via the post-draw Kitty `a=T`
+      // escape; ratatui paints a blank row underneath so cells exist
+      // for the image to land on.
       Line::styled(text.clone(), base_style)
     }
 

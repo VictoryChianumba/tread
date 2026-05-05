@@ -437,23 +437,45 @@ fn walk_blocks(
                 }
                 let cap = extract_caption_text(&c[1]);
                 let n = counters.bump_figure();
-                let image_src = c[2].as_array().and_then(|blocks| find_image_src(blocks));
+                let image_srcs: Vec<String> = c[2]
+                    .as_array()
+                    .map(|blocks| find_image_srcs(blocks))
+                    .unwrap_or_default();
                 let alt = if cap.is_empty() {
                     format!("Figure {n}")
                 } else {
                     format!("Figure {n}: {cap}")
                 };
-                if let Some(src) = image_src {
-                    let kitty_id = counters.next_kitty_id();
-                    out.push(Block::Image {
-                        path: std::path::PathBuf::from(src),
-                        alt,
-                        kitty_id,
-                    });
-                } else if !cap.is_empty() {
-                    out.push(Block::Line(format!("[Figure {n}: {cap}]")));
-                } else {
-                    out.push(Block::Line(format!("[Figure {n}]")));
+                match image_srcs.len() {
+                    0 => {
+                        if !cap.is_empty() {
+                            out.push(Block::Line(format!("[Figure {n}: {cap}]")));
+                        } else {
+                            out.push(Block::Line(format!("[Figure {n}]")));
+                        }
+                    }
+                    1 => {
+                        let kitty_id = counters.next_kitty_id();
+                        out.push(Block::Image {
+                            path: std::path::PathBuf::from(&image_srcs[0]),
+                            alt,
+                            kitty_id,
+                        });
+                    }
+                    _ => {
+                        // Multi-image figure (LaTeX `\subfloat`/`\subfigure`):
+                        // assign one kitty_id per sub-image so we can place
+                        // and delete them independently.  Renderer divides
+                        // the content width evenly among the items.
+                        let items: Vec<doc_model::ImageItem> = image_srcs
+                            .iter()
+                            .map(|src| doc_model::ImageItem {
+                                path: std::path::PathBuf::from(src),
+                                kitty_id: counters.next_kitty_id(),
+                            })
+                            .collect();
+                        out.push(Block::ImageRow { items, alt });
+                    }
                 }
                 out.push(Block::Blank);
             }
@@ -847,17 +869,26 @@ fn extract_caption_text(cap: &Value) -> String {
 
 // ── Inline walkers ────────────────────────────────────────────────────────────
 
-/// Recursively walk a Pandoc AST node array looking for the first
-/// Image inline node.  Returns its `src` string (the path Pandoc
-/// extracted from `\includegraphics{...}`).  Used by the Figure arm
-/// to find the image inside `c[2]` (figure content blocks).
-fn find_image_src(nodes: &[Value]) -> Option<String> {
+/// Recursively walk a Pandoc AST node array collecting every Image
+/// inline's `src` string in document order.  Used by the Figure arm:
+/// a single src means a plain `\includegraphics`, multiple srcs means
+/// the figure has subfigures (`\subfloat`/`\subfigure` siblings) which
+/// the renderer lays out side-by-side.
+fn find_image_srcs(nodes: &[Value]) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_for_images(nodes, &mut out);
+    out
+}
+
+fn walk_for_images(nodes: &[Value], out: &mut Vec<String>) {
     for node in nodes {
         if node["t"].as_str() == Some("Image") {
             // c = [attr, alt_inlines, [src, title]]
             if let Some(src) = node["c"][2][0].as_str() {
                 if !src.is_empty() {
-                    return Some(src.to_string());
+                    out.push(src.to_string());
+                    // Don't recurse into the matched Image's own children.
+                    continue;
                 }
             }
         }
@@ -865,19 +896,12 @@ fn find_image_src(nodes: &[Value]) -> Option<String> {
         // Para, Div, etc.  The child structure varies per node type so
         // we walk every array-valued field.
         if let Some(arr) = node["c"].as_array() {
-            if let Some(found) = find_image_src(arr) {
-                return Some(found);
-            }
+            walk_for_images(arr, out);
         }
-        if node.is_array() {
-            if let Some(arr) = node.as_array() {
-                if let Some(found) = find_image_src(arr) {
-                    return Some(found);
-                }
-            }
+        if let Some(arr) = node.as_array() {
+            walk_for_images(arr, out);
         }
     }
-    None
 }
 
 /// Build the rendered bibliography block sequence from the

@@ -2,6 +2,7 @@ mod bookmarks;
 mod commands;
 mod config;
 mod highlights;
+mod images;
 mod nav;
 mod progress;
 mod render;
@@ -33,7 +34,8 @@ pub fn run(
   // Resolve theme via the new config layer: respect override, else follow
   // trench's theme, else fall back to the built-in dark default.
   let theme = config::resolve_theme();
-  run_with_theme(blocks, meta, progress_key, bibitems, theme)
+  let kitty_supported = matches!(kitty_graphics::detect(), kitty_graphics::Capability::Supported);
+  run_with_theme(blocks, meta, progress_key, bibitems, theme, kitty_supported)
 }
 
 pub fn run_with_theme(
@@ -42,6 +44,7 @@ pub fn run_with_theme(
   progress_key: Option<String>,
   bibitems: HashMap<String, String>,
   theme: Theme,
+  kitty_supported: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
   enable_raw_mode()?;
   let mut stdout = io::stdout();
@@ -72,7 +75,7 @@ pub fn run_with_theme(
   }
 
   let ctx = CmdCtx { arxiv_id: progress_key.clone() };
-  let result = event_loop(&mut terminal, &mut reader, theme, ctx);
+  let result = event_loop(&mut terminal, &mut reader, theme, ctx, kitty_supported);
 
   // Persist reading progress and bookmarks on clean exit.
   if let Some(ref key) = progress_key {
@@ -101,9 +104,23 @@ fn event_loop(
   reader: &mut Reader,
   mut theme: Theme,
   ctx: CmdCtx,
+  kitty_supported: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+  let mut img_state = images::ImageState::default();
   loop {
     terminal.draw(|f| render::draw(f, reader, &theme))?;
+
+    // Post-draw image placement: ratatui's character buffer can't carry
+    // pixel data, so we paint Kitty `a=p` escapes onto stdout *after*
+    // the frame so they sit on top of the blank rows reserved by the
+    // Image VLs.  No-op when the host terminal doesn't speak the
+    // graphics protocol.
+    if kitty_supported {
+      let size = terminal.size()?;
+      let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+      let (_, _, content_area, _, _) = render::split_layout(area, reader);
+      images::place_visible(reader, &mut img_state, content_area, kitty_supported);
+    }
 
     match event::read()? {
       Event::Key(key) => {
@@ -141,10 +158,19 @@ fn event_loop(
         MouseEventKind::ScrollUp   => { for _ in 0..3 { reader.nav_up(); } }
         _ => {}
       },
-      Event::Resize(w, h) => reader.resize(w as usize, h as usize),
+      Event::Resize(w, h) => {
+        // Resize re-flows visual_lines, which can move every Image VL.
+        // Clear all placements so the next draw replaces them at fresh
+        // coordinates — re-emitting at old positions would stack ghosts.
+        images::clear_all(&mut img_state);
+        reader.resize(w as usize, h as usize);
+      }
       _ => {}
     }
   }
+  // Clear any lingering image placements so they don't bleed onto the
+  // user's shell after we leave the alt screen.
+  images::clear_all(&mut img_state);
   Ok(())
 }
 
