@@ -68,10 +68,11 @@ pub fn detect() -> Capability {
   if std::env::var("GHOSTTY_RESOURCES_DIR").is_ok() {
     return Capability::Supported;
   }
-  if let Ok(term) = std::env::var("LC_TERMINAL") {
-    if term.eq_ignore_ascii_case("iTerm2") && iterm2_at_least_3_5() {
-      return Capability::Supported;
-    }
+  if let Ok(term) = std::env::var("LC_TERMINAL")
+    && term.eq_ignore_ascii_case("iTerm2")
+    && iterm2_at_least_3_5()
+  {
+    return Capability::Supported;
   }
   // `TERM_PROGRAM` survives tmux on most setups (it's set by the host
   // terminal, not by the shell), so we use it as the tmux fallback —
@@ -88,10 +89,10 @@ pub fn detect() -> Capability {
       return Capability::Supported;
     }
   }
-  if let Ok(term) = std::env::var("TERM") {
-    if term.contains("kitty") || term.contains("ghostty") {
-      return Capability::Supported;
-    }
+  if let Ok(term) = std::env::var("TERM")
+    && (term.contains("kitty") || term.contains("ghostty"))
+  {
+    return Capability::Supported;
   }
   Capability::Unsupported
 }

@@ -141,6 +141,10 @@ pub struct Reader {
 }
 
 impl Reader {
+  /// Construct a Reader without any pre-scanned bibitems.  Used by
+  /// internal tests; production callers go through
+  /// `new_with_bibitems` so cite-key popups have data.
+  #[allow(dead_code)]
   pub fn new(blocks: Vec<Block>, width: usize, height: usize) -> Self {
     Self::new_with_bibitems(blocks, width, height, HashMap::new())
   }

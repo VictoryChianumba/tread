@@ -8,7 +8,6 @@ const WRAP_WIDTH: usize = 80;
 enum ListKind {
   Itemize,
   Enumerate(usize),
-  Description,
 }
 
 // ── Inline builder ────────────────────────────────────────────────────────────
@@ -567,8 +566,6 @@ struct LabelMap {
   labels: HashMap<String, String>,
   /// bibitem cite-key → citation number [1], [2], …
   bibitems: HashMap<String, usize>,
-  /// ordered cite-keys for bibliography rendering
-  bibitem_order: Vec<String>,
 }
 
 /// Lightweight first-pass scanner that walks the document body collecting
@@ -577,7 +574,6 @@ struct LabelMap {
 fn collect_labels(body: &str) -> LabelMap {
   let mut labels: HashMap<String, String> = HashMap::new();
   let mut bibitems: HashMap<String, usize> = HashMap::new();
-  let mut bibitem_order: Vec<String> = Vec::new();
 
   let chars: Vec<char> = body.chars().collect();
   let len = chars.len();
@@ -676,8 +672,7 @@ fn collect_labels(body: &str) -> LabelMap {
         let key = key.trim().to_string();
         if !key.is_empty() && !bibitems.contains_key(&key) {
           bibitem_counter += 1;
-          bibitems.insert(key.clone(), bibitem_counter);
-          bibitem_order.push(key);
+          bibitems.insert(key, bibitem_counter);
         }
       }
       _ => {
@@ -690,7 +685,7 @@ fn collect_labels(body: &str) -> LabelMap {
     }
   }
 
-  LabelMap { labels, bibitems, bibitem_order }
+  LabelMap { labels, bibitems }
 }
 
 // ── Main processor ────────────────────────────────────────────────────────────
@@ -1783,7 +1778,7 @@ fn clean_bib_entry(s: &str) -> String {
       continue;
     }
     if chars[i] == '\\' && i + 1 < len {
-      let (cmd, consumed) = read_command(&chars, i + 1);
+      let (_cmd, consumed) = read_command(&chars, i + 1);
       i += 1 + consumed;
       // For known decorators that wrap text, emit the text.
       if i < len && chars[i] == '{' {

@@ -8,11 +8,6 @@ fn is_word_char(b: u8) -> bool {
   b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// Vim WORD chars: anything that isn't whitespace.  Used by `W`/`B`/`E`.
-fn is_big_word_char(b: u8) -> bool {
-  !b.is_ascii_whitespace()
-}
-
 /// Classify a byte for small-word boundary detection.  Returns three buckets so
 /// "word→punctuation" is recognised as a boundary (which a simple
 /// "is_word_char vs not" two-bucket function would miss when transitioning
@@ -679,15 +674,6 @@ mod motion_tests {
     assert!(!is_word_char(b'-'));
     assert!(!is_word_char(b' '));
     assert!(!is_word_char(b'.'));
-  }
-
-  #[test]
-  fn big_word_separator_is_whitespace_only() {
-    assert!(is_big_word_char(b'a'));
-    assert!(is_big_word_char(b'.'));
-    assert!(is_big_word_char(b'-'));
-    assert!(!is_big_word_char(b' '));
-    assert!(!is_big_word_char(b'\t'));
   }
 
   #[test]
