@@ -82,35 +82,60 @@ pub(crate) fn place_visible(
   let height = content_area.height as usize;
   let cell_cols = content_area.width;
 
-  // Each placement: (id, abs_row, rows, abs_col, cols).  Single-image
-  // figures get full content_width; multi-image ImageRow figures get
-  // the row split evenly among siblings.
+  // Each placement: (id, abs_row, rows, abs_col, cols).  Cell footprint
+  // (cols × rows) was chosen at build_visual_lines time to preserve
+  // each image's aspect ratio; we just read it from the VL kind here.
   let mut placements: Vec<(u32, u16, u16, u16, u16)> = Vec::new();
   let mut current: HashSet<u32> = HashSet::new();
+  let _ = cell_cols; // total content width — kept for the trace log only.
   for screen_row in 0..height {
     let vl_idx = reader.offset + screen_row;
     if vl_idx >= total {
       break;
     }
     let abs_row = content_area.y + screen_row as u16;
+    // The image must fit *fully* inside the content area for us to
+    // render it.  Kitty graphics has no partial-from-top OR partial-
+    // from-bottom clipping — the image is anchored at one row and
+    // extends downward.  If its bottom would draw past the content
+    // area, that overflow lands in the status bar / next pane.  So we
+    // gate placement on "first row in viewport AND last row in
+    // viewport"; the moment either edge scrolls past the boundary,
+    // `current` excludes the id, the dropped-set fires, the image
+    // disappears cleanly.  See v2.md for the scale-to-fit alternative.
+    let viewport_bottom = content_area.y.saturating_add(content_area.height);
     match &reader.visual_lines[vl_idx].kind {
-      VisualLineKind::Image { kitty_id, rows, is_first } => {
-        current.insert(*kitty_id);
+      VisualLineKind::Image { kitty_id, cols, rows, is_first } => {
         if *is_first {
-          placements.push((*kitty_id, abs_row, *rows, content_area.x, cell_cols));
+          let last_row = abs_row.saturating_add(*rows);
+          if last_row <= viewport_bottom {
+            // Center horizontally within the content area — same
+            // visual treatment as tables and display math.  When the
+            // image's cell width matches content_area.width, padding
+            // is zero and the image starts flush left, naturally.
+            let pad = content_area.width.saturating_sub(*cols) / 2;
+            let abs_col = content_area.x.saturating_add(pad);
+            current.insert(*kitty_id);
+            placements.push((*kitty_id, abs_row, *rows, abs_col, *cols));
+          }
         }
       }
-      VisualLineKind::ImageRow { kitty_ids, rows, is_first } => {
-        for &id in kitty_ids {
-          current.insert(id);
-        }
+      VisualLineKind::ImageRow { items, rows, is_first } => {
         if *is_first {
-          let count = kitty_ids.len() as u16;
-          if count > 0 {
-            let per_image = cell_cols / count;
-            for (i, &id) in kitty_ids.iter().enumerate() {
-              let col = content_area.x + (i as u16) * per_image;
-              placements.push((id, abs_row, *rows, col, per_image));
+          let last_row = abs_row.saturating_add(*rows);
+          if last_row <= viewport_bottom {
+            for (id, _) in items {
+              current.insert(*id);
+            }
+            // Center the WHOLE row: sum of sibling cols vs content
+            // width gives the slack to split as left padding.  Items
+            // then place at consecutive cumulative offsets.
+            let total_cols: u16 = items.iter().map(|(_, c)| *c).sum();
+            let pad = content_area.width.saturating_sub(total_cols) / 2;
+            let mut col = content_area.x.saturating_add(pad);
+            for (id, item_cols) in items {
+              placements.push((*id, abs_row, *rows, col, *item_cols));
+              col = col.saturating_add(*item_cols);
             }
           }
         }

@@ -26,6 +26,7 @@ version = "0.1.0"
 dependencies = [
  "doc-model",
  "flate2",
+ "kitty-graphics",
  "math-render",
  "reqwest",
  "serde_json",

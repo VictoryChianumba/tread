@@ -114,8 +114,21 @@ pub enum Block {
   /// `path` is relative to the paper's source root.  `alt` is the
   /// image's alt text (LaTeX optional argument or empty).  `kitty_id`
   /// is a sequential id assigned by the parser; the renderer uses it
-  /// as the Kitty graphics protocol image identifier.
-  Image { path: std::path::PathBuf, alt: String, kitty_id: u32 },
+  /// as the Kitty graphics protocol image identifier.  `dims` carries
+  /// the source pixel `(width, height)` once it's been read from disk
+  /// (PNG header for `.png`, post-conversion for `.pdf`); used at
+  /// `build_visual_lines` time to pick a cell footprint that
+  /// preserves aspect ratio.  `stack_total` tells the layout how
+  /// many panels share the figure budget — 1 for a standalone figure,
+  /// N for one of N stacked panels (which split the budget N ways and
+  /// share one caption on the last panel).
+  Image {
+    path: std::path::PathBuf,
+    alt: String,
+    kitty_id: u32,
+    dims: Option<(u32, u32)>,
+    stack_total: u8,
+  },
   /// A multi-image figure, e.g. LaTeX `\subfloat`/`\subfigure` siblings
   /// inside one `\begin{figure}`.  Items are rendered side-by-side at
   /// equal cell widths; the shared `alt` is the figure's caption.
@@ -123,11 +136,14 @@ pub enum Block {
 }
 
 /// One sub-image inside a `Block::ImageRow`.  Each carries its own
-/// `kitty_id` so deletions and re-placements address them individually.
+/// `kitty_id` so deletions and re-placements address them individually,
+/// and its own pixel `dims` so the row's height is computed from the
+/// most demanding sibling's aspect ratio.
 #[derive(Debug, Clone)]
 pub struct ImageItem {
   pub path: std::path::PathBuf,
   pub kitty_id: u32,
+  pub dims: Option<(u32, u32)>,
 }
 
 /// A single screen row, fully expanded from a Block.
@@ -171,21 +187,227 @@ pub enum VisualLineKind {
   /// A block quote; text = plain concatenation of spans.
   Quote { is_continuation: bool },
   /// One row of an inline image figure.  `kitty_id` identifies the
-  /// image to the Kitty graphics protocol.  `rows` is the total number
-  /// of rows the image occupies (this VL is one of them).  `is_first`
-  /// flags the row where the renderer should emit the placement escape.
-  Image { kitty_id: u32, rows: u16, is_first: bool },
+  /// image to the Kitty graphics protocol.  `rows` × `cols` is the
+  /// cell footprint chosen to preserve aspect ratio (computed in
+  /// `build_visual_lines` from `Block::Image::dims` and the terminal
+  /// width).  `is_first` flags the row where the renderer should emit
+  /// the placement escape.
+  Image { kitty_id: u32, cols: u16, rows: u16, is_first: bool },
   /// One row of a multi-image figure (`Block::ImageRow`).  All sub-image
-  /// kitty_ids share the same row range; the renderer divides the
-  /// content width evenly among them.
-  ImageRow { kitty_ids: Vec<u32>, rows: u16, is_first: bool },
+  /// kitty_ids share the same `rows`; each sibling renders at its own
+  /// `cols` width side-by-side.  Per-image cols are stored as the
+  /// `(kitty_id, cols)` pairs so siblings with different aspect ratios
+  /// can take different horizontal slices.
+  ImageRow { items: Vec<(u32, u16)>, rows: u16, is_first: bool },
 }
 
 /// Expand a block list into the flat visual line table.
 ///
-/// Called once at document load and again on terminal resize (only the
-/// centering offset of MathLine entries changes on resize).
-pub fn build_visual_lines(blocks: &[Block], terminal_width: usize) -> Vec<VisualLine> {
+/// Hardcoded cell-pixel ratio for cell-footprint math.  Real terminals
+/// vary (retina iTerm2 ≈ 7×14 px, classic xterm 8×16 px, Kitty 9×18,
+/// etc.), but `(cell_w / cell_h) ≈ 0.5` is close enough to preserve
+/// aspect ratios within a couple of percent.  Querying the terminal
+/// for actual pixel-per-cell via `\e[14t` is on the v2 backlog.
+const CELL_W_PX: u32 = 8;
+const CELL_H_PX: u32 = 16;
+
+/// Lower bound on rows reserved for an image — even tiny figures
+/// (icons, small diagrams) get this much screen space so they're
+/// recognisable rather than vestigial.
+const MIN_IMAGE_ROWS: u16 = 6;
+
+/// Estimated rows reserved for the caption beneath each figure.  Used
+/// when budgeting how much vertical space a figure may consume so the
+/// image plus caption together fit within the per-figure budget.
+const CAPTION_ROWS_BUDGET: u16 = 4;
+
+/// Compute the **whole-figure** vertical budget from terminal height.
+/// A figure here means image(s) + caption together; this number is
+/// the rows available for the IMAGE PORTION (caption is reserved
+/// separately at `CAPTION_ROWS_BUDGET`).  Roughly 70% of the usable
+/// height — leaves room for context above and below the figure when
+/// reading.
+///
+/// For a standalone (single-image) figure, the whole budget goes to
+/// that one image.  For a stacked figure of N panels, the budget is
+/// split N ways minus separator rows.  See `panel_row_budget`.
+fn figure_row_budget(content_height: usize) -> u16 {
+  let h = content_height as u16;
+  let usable = h.saturating_sub(CAPTION_ROWS_BUDGET);
+  // 70% of usable height, with a floor.
+  ((usable * 7) / 10).max(MIN_IMAGE_ROWS)
+}
+
+/// Per-panel row budget for one image in a stacked figure.  For
+/// `stack_total == 1` this is the whole figure budget.  For N panels
+/// we apply a **stack bonus**: a 2-panel figure is intrinsically more
+/// content than a 1-panel figure and earns extra vertical space, so
+/// a naive figure_budget/N split would shrink panels too aggressively.
+/// Formula: `(figure_budget + (N-1) × STACK_BONUS_ROWS) / N`, minus
+/// separator rows.  Tuned so a 2-stack lands at ~21 rows per panel
+/// (matches the old half-screen sizing) and 3+ stacks degrade
+/// gracefully without underflowing `MIN_IMAGE_ROWS`.
+///
+/// Cap result at `PANEL_ROW_CAP` so single-figure panels match the
+/// stacked-panel size — uniform visual mass per panel across the
+/// document instead of solo figures looking outsized vs. stacked ones.
+fn panel_row_budget(figure_budget: u16, stack_total: u8) -> u16 {
+  /// Extra row budget granted per additional stacked panel.  10 was
+  /// picked so a 2-stack on a 50-row content area gets 21 rows per
+  /// panel — same as the old half-screen budget — while a 3-stack
+  /// gets ~17 each (small but readable).
+  const STACK_BONUS_ROWS: u16 = 10;
+  /// Hard cap on rows per panel.  Single figures and stacked panels
+  /// both top out here so visual mass stays consistent across the
+  /// document.  Below the cap, smaller terminals still respect their
+  /// natural figure_budget.
+  const PANEL_ROW_CAP: u16 = 21;
+  let n = stack_total.max(1) as u16;
+  let raw = if n == 1 {
+    figure_budget
+  } else {
+    let bonus = (n - 1) * STACK_BONUS_ROWS;
+    let separators = n - 1;
+    figure_budget.saturating_add(bonus).saturating_sub(separators) / n
+  };
+  raw.min(PANEL_ROW_CAP).max(MIN_IMAGE_ROWS)
+}
+
+/// Compute cell `(cols, rows)` for an image given its pixel `dims` and
+/// the available content_width / max_rows budgets.  Preserves aspect
+/// ratio; clamps rows by the budget and shrinks cols when the row
+/// clamp kicks in.  Falls back to a sensible default when dims are
+/// unknown.
+pub fn compute_cell_footprint(
+  dims: Option<(u32, u32)>,
+  content_width: usize,
+  max_rows: u16,
+) -> (u16, u16) {
+  let max_cols = (content_width as u16).max(1);
+  let Some((w_px, h_px)) = dims else {
+    return (max_cols, max_rows);
+  };
+  if w_px == 0 || h_px == 0 {
+    return (max_cols, max_rows);
+  }
+  // Natural cell footprint: pixel dims divided by per-cell pixels.
+  let nat_c = ((w_px / CELL_W_PX) as u16).max(1);
+  // Start by fitting width to the column budget.
+  let mut c = nat_c.min(max_cols);
+  // Preserve aspect ratio: rows = cols × (h_px/w_px) × (cell_w/cell_h).
+  // With CELL_W_PX=8, CELL_H_PX=16, the cell ratio is 0.5.
+  let mut r = ((c as u32 * h_px * CELL_W_PX) / (w_px * CELL_H_PX)) as u16;
+  r = r.max(MIN_IMAGE_ROWS);
+  // If still too tall, clamp rows and shrink cols proportionally.
+  if r > max_rows {
+    r = max_rows;
+    c = ((r as u32 * w_px * CELL_H_PX) / (h_px * CELL_W_PX)) as u16;
+    c = c.min(max_cols).max(1);
+  }
+  (c, r)
+}
+
+/// Word-wrap a caption to fit `width` columns.  Greedy: accumulates
+/// words into the current line until adding another would exceed
+/// width, then breaks.  Used only for `Block::Image` / `Block::ImageRow`
+/// captions — long figure descriptions otherwise get truncated at the
+/// right edge of the screen.
+fn wrap_caption(text: &str, width: usize) -> Vec<String> {
+  let mut lines: Vec<String> = Vec::new();
+  let mut cur = String::new();
+  for word in text.split_whitespace() {
+    if cur.is_empty() {
+      cur.push_str(word);
+    } else if cur.len() + 1 + word.len() <= width {
+      cur.push(' ');
+      cur.push_str(word);
+    } else {
+      lines.push(std::mem::take(&mut cur));
+      cur.push_str(word);
+    }
+  }
+  if !cur.is_empty() { lines.push(cur); }
+  if lines.is_empty() { lines.push(String::new()); }
+  lines
+}
+
+/// Emit one or more Prose VLs for a wrapped figure caption.  Caller
+/// gives the figure's bottom row index; we lay the wrapped lines out
+/// sequentially below.  Each wrapped line is **centered** within the
+/// content width by prepending leading spaces — visually aligns the
+/// caption beneath the (centered) image.
+fn emit_caption(
+  out: &mut Vec<VisualLine>,
+  block_idx: usize,
+  caption: &str,
+  start_line: usize,
+  width: usize,
+) {
+  let formatted = format!("[{}]", caption);
+  let wrapped = wrap_caption(&formatted, width);
+  for (i, line) in wrapped.into_iter().enumerate() {
+    let line_width = line.chars().count();
+    let pad = if width > line_width { (width - line_width) / 2 } else { 0 };
+    let centered = format!("{}{}", " ".repeat(pad), line);
+    let len = centered.len();
+    out.push(VisualLine {
+      block_idx,
+      line_in_block: start_line + i,
+      text: centered,
+      kind: VisualLineKind::Prose,
+      block_byte_start: 0,
+      block_byte_end: len,
+    });
+  }
+}
+
+/// Push N consecutive `VisualLineKind::Image` rows for one Block::Image.
+fn emit_image_rows(out: &mut Vec<VisualLine>, block_idx: usize, kitty_id: u32, cols: u16, rows: u16) {
+  for line_in_block in 0..rows {
+    out.push(VisualLine {
+      block_idx,
+      line_in_block: line_in_block as usize,
+      text: String::new(),
+      kind: VisualLineKind::Image {
+        kitty_id,
+        cols,
+        rows,
+        is_first: line_in_block == 0,
+      },
+      block_byte_start: 0,
+      block_byte_end: 0,
+    });
+  }
+}
+
+/// Push N consecutive `VisualLineKind::ImageRow` rows for one Block::ImageRow.
+fn emit_image_row_rows(out: &mut Vec<VisualLine>, block_idx: usize, items: &[(u32, u16)], rows: u16) {
+  for line_in_block in 0..rows {
+    out.push(VisualLine {
+      block_idx,
+      line_in_block: line_in_block as usize,
+      text: String::new(),
+      kind: VisualLineKind::ImageRow {
+        items: items.to_vec(),
+        rows,
+        is_first: line_in_block == 0,
+      },
+      block_byte_start: 0,
+      block_byte_end: 0,
+    });
+  }
+}
+
+/// Called once at document load and again on terminal resize.  Both
+/// `terminal_width` and `terminal_height` are needed so figures can be
+/// scaled to fit (the height budget caps image rows so a single figure
+/// + caption never overflows the visible viewport).
+pub fn build_visual_lines(
+  blocks: &[Block],
+  terminal_width: usize,
+  terminal_height: usize,
+) -> Vec<VisualLine> {
+  let figure_budget = figure_row_budget(terminal_height);
   let mut out = Vec::new();
   let mut i = 0;
 
@@ -380,78 +602,56 @@ pub fn build_visual_lines(blocks: &[Block], terminal_width: usize) -> Vec<Visual
       // Anchors are invisible — they tag the next visible block for
       // label-to-line resolution by the reader.
       Block::Anchor(_) => {}
-      Block::Image { alt, kitty_id, .. } => {
-        // Reserve N rows for the image, plus one prose row for the
-        // caption.  The image rows render as blank text (the actual
-        // pixels come from a Kitty `a=p` escape emitted post-draw); the
-        // caption row stays useful even on terminals without graphics
-        // support, so the user always sees "[Figure N: caption]" beneath
-        // (or in place of) the image.
-        //
-        // N is hardcoded at 16 rows for v1.  A typical 8×16 cell on
-        // retina-class displays gives ~250px height, which works for
-        // most figures without crowding scrolling.  Refining N from
-        // actual PNG dimensions is a Stage-7 enhancement.
-        const IMAGE_ROWS: u16 = 16;
-        let blank = String::new();
-        for line_in_block in 0..IMAGE_ROWS {
-          out.push(VisualLine {
-            block_idx,
-            line_in_block: line_in_block as usize,
-            text: blank.clone(),
-            kind: VisualLineKind::Image {
-              kitty_id: *kitty_id,
-              rows: IMAGE_ROWS,
-              is_first: line_in_block == 0,
-            },
-            block_byte_start: 0,
-            block_byte_end: 0,
-          });
-        }
+      Block::Image { alt, kitty_id, dims, stack_total, .. } => {
+        // Stacked panels share the figure's vertical budget; standalone
+        // figures get the whole thing.  The caller (pandoc_parse)
+        // tagged each Block::Image with stack_total so we know the
+        // group size at sizing time.  A blank separator block sits
+        // between stacked panels in the parsed Block stream.
+        let max_rows = panel_row_budget(figure_budget, *stack_total);
+        let (cols, rows) = compute_cell_footprint(*dims, terminal_width, max_rows);
+        emit_image_rows(&mut out, block_idx, *kitty_id, cols, rows);
         if !alt.is_empty() {
-          let caption = format!("[{}]", alt);
-          let len = caption.len();
-          out.push(VisualLine {
-            block_idx,
-            line_in_block: IMAGE_ROWS as usize,
-            text: caption,
-            kind: VisualLineKind::Prose,
-            block_byte_start: 0,
-            block_byte_end: len,
-          });
+          emit_caption(&mut out, block_idx, alt, rows as usize, terminal_width);
         }
       }
       Block::ImageRow { items, alt } => {
-        // Same shape as `Block::Image` but with multiple sub-images
-        // sharing one row range.  The renderer divides the content
-        // width evenly among `kitty_ids`.
-        const IMAGE_ROWS: u16 = 16;
-        let kitty_ids: Vec<u32> = items.iter().map(|i| i.kitty_id).collect();
-        for line_in_block in 0..IMAGE_ROWS {
-          out.push(VisualLine {
-            block_idx,
-            line_in_block: line_in_block as usize,
-            text: String::new(),
-            kind: VisualLineKind::ImageRow {
-              kitty_ids: kitty_ids.clone(),
-              rows: IMAGE_ROWS,
-              is_first: line_in_block == 0,
-            },
-            block_byte_start: 0,
-            block_byte_end: 0,
-          });
+        // Multi-image figure.  Each sibling gets its own per-cols
+        // share of the full content width; the row's height is the
+        // tallest sibling's natural aspect (so no sibling gets clipped).
+        let count = items.len() as u16;
+        if count == 0 {
+          continue;
         }
+        let per_cols = (terminal_width as u16) / count;
+        // ImageRow is one figure with siblings sharing width.  The
+        // whole figure gets the full vertical budget.
+        let mut row_height: u16 = MIN_IMAGE_ROWS;
+        let mut sibling_cols: Vec<(u32, u16)> = Vec::with_capacity(items.len());
+        for item in items {
+          let (c, r) = compute_cell_footprint(item.dims, per_cols as usize, figure_budget);
+          sibling_cols.push((item.kitty_id, c));
+          if r > row_height {
+            row_height = r;
+          }
+        }
+        // Recompute each sibling's cols at the chosen common rows so
+        // tall siblings don't overflow horizontally past their share.
+        let row_items: Vec<(u32, u16)> = items.iter().zip(sibling_cols.iter())
+          .map(|(item, (id, _natural_c))| {
+            let cols = match item.dims {
+              Some((w, h)) if h > 0 && w > 0 => {
+                let derived = ((row_height as u32 * w * 2) / h) as u16;
+                derived.min(per_cols).max(1)
+              }
+              _ => per_cols,
+            };
+            (*id, cols)
+          })
+          .collect();
+        emit_image_row_rows(&mut out, block_idx, &row_items, row_height);
         if !alt.is_empty() {
-          let caption = format!("[{}]", alt);
-          let len = caption.len();
-          out.push(VisualLine {
-            block_idx,
-            line_in_block: IMAGE_ROWS as usize,
-            text: caption,
-            kind: VisualLineKind::Prose,
-            block_byte_start: 0,
-            block_byte_end: len,
-          });
+          emit_caption(&mut out, block_idx, alt, row_height as usize, terminal_width);
         }
       }
     }

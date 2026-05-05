@@ -437,44 +437,121 @@ fn walk_blocks(
                 }
                 let cap = extract_caption_text(&c[1]);
                 let n = counters.bump_figure();
-                let image_srcs: Vec<String> = c[2]
-                    .as_array()
-                    .map(|blocks| find_image_srcs(blocks))
-                    .unwrap_or_default();
                 let alt = if cap.is_empty() {
                     format!("Figure {n}")
                 } else {
                     format!("Figure {n}: {cap}")
                 };
-                match image_srcs.len() {
-                    0 => {
-                        if !cap.is_empty() {
-                            out.push(Block::Line(format!("[Figure {n}: {cap}]")));
+                // Detect stacked vs side-by-side by walking c[2] (the
+                // figure's content blocks).  Empirically, Pandoc emits:
+                //   - `\\` between images → one Para block with inline
+                //     LineBreaks separating the Images → STACKED.
+                //   - Minipages / subfigures → multiple Div blocks each
+                //     with one Image inside → SIDE-BY-SIDE.
+                //
+                // The result is a vec of vecs: outer = stack rows,
+                // inner = side-by-side siblings within a row.
+                let blocks_in_figure: Vec<Value> = c[2]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                // Layout-detection precedence:
+                //   1. Multiple top-level blocks → side-by-side
+                //      (minipage/subfigure pattern).
+                //   2. Single block with explicit `\\` (LineBreak inline)
+                //      between images → stacked.
+                //   3. Single block where any image has `width=\textwidth`
+                //      / `\linewidth` (or scalar ≥ 0.85) → stacked.
+                //   4. Otherwise → side-by-side.
+                let groups: Vec<Vec<String>> = if blocks_in_figure.len() == 1 {
+                    let block = &blocks_in_figure[0];
+                    let t = block["t"].as_str();
+                    if matches!(t, Some("Para") | Some("Plain")) {
+                        let inlines = block["c"]
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default();
+                        // (2) Explicit `\\` separator wins.
+                        let by_linebreak = split_inlines_by_linebreak(&inlines);
+                        if by_linebreak.len() > 1 {
+                            by_linebreak
                         } else {
-                            out.push(Block::Line(format!("[Figure {n}]")));
+                            // (3) Width-attribute inference.
+                            let with_widths = collect_images_with_width(&inlines);
+                            if with_widths.iter().any(|(_, fw)| *fw) {
+                                with_widths.into_iter()
+                                    .map(|(s, _)| vec![s])
+                                    .collect()
+                            } else {
+                                // (4) Default side-by-side row.
+                                let srcs: Vec<String> = with_widths.into_iter()
+                                    .map(|(s, _)| s)
+                                    .collect();
+                                if srcs.is_empty() { Vec::new() } else { vec![srcs] }
+                            }
                         }
+                    } else {
+                        // Div or other wrapper: treat as one row of images.
+                        let mut imgs = Vec::new();
+                        walk_for_images(std::slice::from_ref(block), &mut imgs);
+                        if imgs.is_empty() { Vec::new() } else { vec![imgs] }
                     }
-                    1 => {
-                        let kitty_id = counters.next_kitty_id();
-                        out.push(Block::Image {
-                            path: std::path::PathBuf::from(&image_srcs[0]),
-                            alt,
-                            kitty_id,
-                        });
+                } else {
+                    // (1) Multiple top-level blocks (minipage / subfigure):
+                    // combine all images into one side-by-side row.
+                    let mut all_imgs = Vec::new();
+                    for block in &blocks_in_figure {
+                        walk_for_images(std::slice::from_ref(block), &mut all_imgs);
                     }
-                    _ => {
-                        // Multi-image figure (LaTeX `\subfloat`/`\subfigure`):
-                        // assign one kitty_id per sub-image so we can place
-                        // and delete them independently.  Renderer divides
-                        // the content width evenly among the items.
-                        let items: Vec<doc_model::ImageItem> = image_srcs
-                            .iter()
-                            .map(|src| doc_model::ImageItem {
-                                path: std::path::PathBuf::from(src),
-                                kitty_id: counters.next_kitty_id(),
-                            })
-                            .collect();
-                        out.push(Block::ImageRow { items, alt });
+                    if all_imgs.is_empty() { Vec::new() } else { vec![all_imgs] }
+                };
+
+                if groups.is_empty() {
+                    if !cap.is_empty() {
+                        out.push(Block::Line(format!("[Figure {n}: {cap}]")));
+                    } else {
+                        out.push(Block::Line(format!("[Figure {n}]")));
+                    }
+                } else {
+                    // `stack_total` tells build_visual_lines how to
+                    // budget vertical space — N panels in a stack
+                    // share the figure's row budget instead of each
+                    // claiming the whole thing.  A `Block::Blank`
+                    // between non-last panels gives them visual
+                    // breathing room.  Caption attaches only to the
+                    // LAST panel so it doesn't repeat between rows.
+                    let stack_total = groups.len() as u8;
+                    let last_idx = groups.len() - 1;
+                    for (i, group) in groups.into_iter().enumerate() {
+                        let item_alt = if i == last_idx { alt.clone() } else { String::new() };
+                        if group.len() == 1 {
+                            let kitty_id = counters.next_kitty_id();
+                            out.push(Block::Image {
+                                path: std::path::PathBuf::from(&group[0]),
+                                alt: item_alt,
+                                kitty_id,
+                                dims: None, // populated post-parse by absolutize_image_paths
+                                stack_total,
+                            });
+                        } else {
+                            // Side-by-side row inside this panel slot.
+                            // (Mixed stacked-and-side-by-side figures
+                            // are rare; ImageRow doesn't track stack
+                            // membership today — would be a v2 add.)
+                            let items: Vec<doc_model::ImageItem> = group.iter()
+                                .map(|src| doc_model::ImageItem {
+                                    path: std::path::PathBuf::from(src),
+                                    kitty_id: counters.next_kitty_id(),
+                                    dims: None, // populated post-parse by absolutize_image_paths
+                                })
+                                .collect();
+                            out.push(Block::ImageRow { items, alt: item_alt });
+                        }
+                        // Separator between stacked panels (not after
+                        // the last one — caption follows there).
+                        if i < last_idx {
+                            out.push(Block::Blank);
+                        }
                     }
                 }
                 out.push(Block::Blank);
@@ -870,14 +947,97 @@ fn extract_caption_text(cap: &Value) -> String {
 // ── Inline walkers ────────────────────────────────────────────────────────────
 
 /// Recursively walk a Pandoc AST node array collecting every Image
-/// inline's `src` string in document order.  Used by the Figure arm:
-/// a single src means a plain `\includegraphics`, multiple srcs means
-/// the figure has subfigures (`\subfloat`/`\subfigure` siblings) which
-/// the renderer lays out side-by-side.
-fn find_image_srcs(nodes: &[Value]) -> Vec<String> {
+/// inline's `src` string in document order.  The Figure arm walks
+/// `c[2]` block-by-block to preserve LaTeX layout intent (same block
+/// = side-by-side, separate blocks = stacked); within each block this
+/// helper finds all images regardless of further nesting (Plain →
+/// Image, Plain → Subfigure → Image, etc.).
+/// Walk inlines collecting `(src, is_full_width)` per Image.  The
+/// width flag is read from the LaTeX `width=` attribute that Pandoc
+/// preserves verbatim on the Image's attr triple — `\textwidth` or
+/// `\linewidth` (with no scalar prefix or scalar ≥ 0.85) means the
+/// image will dominate its row and so should stack rather than share.
+///
+/// Walks recursively into Spans and other inline wrappers so the
+/// `{Span(Image)}` pattern Pandoc uses for `{\includegraphics{}}` is
+/// handled correctly.
+fn collect_images_with_width(inlines: &[Value]) -> Vec<(String, bool)> {
     let mut out = Vec::new();
-    walk_for_images(nodes, &mut out);
+    walk_for_images_with_width(inlines, &mut out);
     out
+}
+
+fn walk_for_images_with_width(nodes: &[Value], out: &mut Vec<(String, bool)>) {
+    for node in nodes {
+        if node["t"].as_str() == Some("Image") {
+            let c = &node["c"];
+            // c = [attr, alt_inlines, [src, title]]
+            // attr = [id, classes, key-value pairs]
+            if let Some(src) = c[2][0].as_str() {
+                if !src.is_empty() {
+                    let full = c[0][2]
+                        .as_array()
+                        .map(|kvs| kvs.iter().any(|kv| {
+                            kv[0].as_str() == Some("width")
+                                && kv[1].as_str().is_some_and(is_full_width)
+                        }))
+                        .unwrap_or(false);
+                    out.push((src.to_string(), full));
+                    continue;
+                }
+            }
+        }
+        if let Some(arr) = node["c"].as_array() {
+            walk_for_images_with_width(arr, out);
+        }
+        if let Some(arr) = node.as_array() {
+            walk_for_images_with_width(arr, out);
+        }
+    }
+}
+
+/// Decide whether a LaTeX width spec (preserved verbatim by Pandoc)
+/// indicates the image is meant to fill the available row.  Treats
+/// `\textwidth` and `\linewidth` as the markers; an absent scalar
+/// prefix means 1.0 (full), a present scalar ≥ 0.85 still counts as
+/// effectively full (e.g. `0.95\textwidth`), anything smaller is
+/// fractional.
+fn is_full_width(s: &str) -> bool {
+    let trimmed = s.trim();
+    let marker_idx = trimmed
+        .find("\\textwidth")
+        .or_else(|| trimmed.find("\\linewidth"))
+        .or_else(|| trimmed.find("\\columnwidth"));
+    let Some(idx) = marker_idx else { return false };
+    let prefix = trimmed[..idx].trim();
+    if prefix.is_empty() {
+        return true;
+    }
+    prefix.parse::<f32>().map(|v| v >= 0.85).unwrap_or(false)
+}
+
+/// Walk a list of Pandoc inlines and split into groups separated by
+/// `LineBreak` inlines.  Each returned inner Vec is the images on one
+/// "row" — i.e. siblings that should render side-by-side.  Used for
+/// the `\includegraphics{}\\\includegraphics{}` pattern, which Pandoc
+/// emits as a single Para containing `[Image, LineBreak, Image]`.
+fn split_inlines_by_linebreak(inlines: &[Value]) -> Vec<Vec<String>> {
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    let mut cur: Vec<String> = Vec::new();
+    for node in inlines {
+        if node["t"].as_str() == Some("LineBreak") {
+            if !cur.is_empty() {
+                groups.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        // Anything else: walk for nested images and add to current row.
+        walk_for_images(std::slice::from_ref(node), &mut cur);
+    }
+    if !cur.is_empty() {
+        groups.push(cur);
+    }
+    groups
 }
 
 fn walk_for_images(nodes: &[Value], out: &mut Vec<String>) {
@@ -1228,11 +1388,14 @@ fn dedup_spaces(spans: Vec<InlineSpan>) -> Vec<InlineSpan> {
 
 // ── Math rendering ─────────────────────────────────────────────────────────────
 
-// Display math: full pipeline including tui_math vertical layout (multi-line OK).
+// Display math: pass the full source — including the `\begin{X}…\end{X}`
+// wrapper if present — to math_render.  Its preprocess uses the env
+// name to decide whether `\\` is structural (multi-equation systems
+// like `align`/`aligned`/`gather`) or decorative (single-equation
+// `equation`/`equation*`/`split`).  strip_latex then drops the
+// `\begin{X}` / `\end{X}` commands silently via its catch-all list.
 fn render_math(latex: &str) -> String {
-    let s = latex.trim();
-    let inner = strip_env_wrapper(s).unwrap_or(s);
-    math_render::render(math_render::MathInput::Latex(inner))
+    math_render::render(math_render::MathInput::Latex(latex.trim()))
 }
 
 // Inline math: strip_latex only — tui_math's vertical output fragments into

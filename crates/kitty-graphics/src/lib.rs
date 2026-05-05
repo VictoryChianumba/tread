@@ -26,6 +26,7 @@
 //! approach #1 on top behind a feature flag.
 
 pub mod pdf;
+pub mod png;
 pub mod transmit;
 
 /// Whether the host terminal supports the Kitty graphics protocol.

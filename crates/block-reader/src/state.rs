@@ -156,7 +156,7 @@ impl Reader {
     bibitems: HashMap<String, String>,
   ) -> Self {
     let cw = content_width_for(width, false);
-    let visual_lines = build_visual_lines(&blocks, cw);
+    let visual_lines = build_visual_lines(&blocks, cw, height);
     let sections = build_sections(&visual_lines);
     let (label_lines, mut bib_entries, bib_entry_lines) = build_link_indexes(&blocks, &visual_lines);
     // Pre-scanned bibitems from source override anything we picked up via
@@ -221,7 +221,7 @@ impl Reader {
     self.width = width;
     self.height = height;
     let cw = self.content_width();
-    self.visual_lines = build_visual_lines(&self.blocks, cw);
+    self.visual_lines = build_visual_lines(&self.blocks, cw, height);
     self.sections = build_sections(&self.visual_lines);
     let (ll, be, bel) = build_link_indexes(&self.blocks, &self.visual_lines);
     self.label_lines = ll;
@@ -233,7 +233,7 @@ impl Reader {
   pub fn toggle_toc(&mut self) {
     self.toc_visible = !self.toc_visible;
     let cw = self.content_width();
-    self.visual_lines = build_visual_lines(&self.blocks, cw);
+    self.visual_lines = build_visual_lines(&self.blocks, cw, self.height);
     self.sections = build_sections(&self.visual_lines);
     self.clamp_position();
   }

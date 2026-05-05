@@ -19,23 +19,24 @@ pub fn render_inline(latex: &str) -> String {
 /// Render math to a Unicode string suitable for terminal display.
 ///
 /// Pipeline:
-///   1. preprocess() — expand symbol table, strip sizing hints
-///   2. render_multiline() — split align/gather on \\ into per-line renders
-///   3. tui_math::render_latex() — attempt Unicode typesetting
-///   4. strip_latex() — fallback with frac/sqrt/super/subscript approximation
+///   1. preprocess() — expand symbol table, strip sizing hints, normalise
+///      LaTeX spacing commands and non-breaking-space ties
+///   2. strip_latex() — single-line render with Unicode super/subscripts,
+///      `\frac{a}{b}` → `a/b`, `\sqrt{x}` → `√x`.  `\\` produces a newline
+///      for align/aligned environments.
+///
+/// `tui_math` was previously used for "display-quality" typesetting but its
+/// vertical layout (placing superscripts on a row above the line, subscripts
+/// on a row below, fractions stacked) blew simple equations like `W^O` or
+/// `d^{-0.5}_{model}` up to 4-5 rows when the compact form (`Wᴼ`, `dₘ⁻⁰·⁵`)
+/// reads better and matches published paper styling.  Kept in the dep tree
+/// for the future "Knuth-quality math via pixel rendering" v2 path.
 pub fn render(input: MathInput<'_>) -> String {
   match input {
     MathInput::Latex(src) => {
       let preprocessed = preprocess(src);
-      // Multi-line environments (align, gather) must be split first.
-      if let Some(multiline) = render_multiline(&preprocessed) {
-        return multiline;
-      }
-      match tui_math::render_latex(&preprocessed) {
-        // Any backslash in tui-math output means leaked LaTeX — fall back.
-        Ok(s) if !s.contains("[PARSE ERROR:") && !s.contains('\\') => s,
-        _ => strip_latex(&preprocessed),
-      }
+      let stripped = strip_latex(&preprocessed);
+      trim_per_line(&stripped)
     }
     MathInput::MathMl(src) => src.to_string(),
   }
@@ -184,12 +185,87 @@ fn preprocess(src: &str) -> String {
     s = remove_braced_cmd(&s, cmd);
   }
 
-  // 4. Apply the full symbol table.
+  // 4. LaTeX spacing characters and commands → regular space (or empty).
+  // `~` is a non-breaking space tie; `\,` `\:` `\;` `\ ` are thin/medium/
+  // thick spaces; `\!` is a negative thin space (drop entirely).  These
+  // would otherwise leak as literal characters in the output.
+  s = s.replace('~', " ");
+  s = s.replace("\\,", " ");
+  s = s.replace("\\:", " ");
+  s = s.replace("\\;", " ");
+  s = s.replace("\\ ", " ");
+  s = s.replace("\\!", "");
+  s = s.replace("\\quad", " ");
+  s = s.replace("\\qquad", "  ");
+
+  // 5. Decorative line-breaks in single-equation environments
+  // (`\begin{equation}`, `equation*`, `split`, `multline`, or no env)
+  // collapse to a space so the equation flows on one terminal line —
+  // they fit a printed page width but not a terminal viewport.
+  // Genuine multi-equation envs (`align`, `aligned`, `gather`,
+  // `gathered`, `eqnarray`, `cases`, matrix family) preserve `\\` as
+  // a row separator.  Raw source newlines (`\n`) are treated as
+  // whitespace either way — LaTeX itself never renders them as line
+  // breaks, only `\\` does.
+  const MULTI_EQ_ENVS: &[&str] = &[
+    "align", "aligned", "gather", "gathered", "eqnarray", "cases",
+    "matrix", "pmatrix", "bmatrix", "vmatrix", "Vmatrix",
+  ];
+  let has_multi_eq = MULTI_EQ_ENVS.iter().any(|e|
+    s.contains(&format!("\\begin{{{e}}}")) ||
+      s.contains(&format!("\\begin{{{e}*}}"))
+  );
+  if has_multi_eq {
+    // Multi-equation: keep `\\` (becomes newline in strip_latex) but
+    // collapse raw source newlines to space.
+    s = s.replace('\n', " ");
+  } else {
+    // Single equation: both raw `\n` and `\\` line-breaks collapse
+    // to space so the equation flows on one line.
+    s = s.replace("\\\\", " ");
+    s = s.replace('\n', " ");
+  }
+  // Collapse runs of whitespace within a line (preserve `\n` so multi-
+  // equation row separators survive).  Source LaTeX often has
+  // indentation after `\\` that would otherwise produce visible gaps
+  // like `· · ·` between operators in the rendered output.
+  s = collapse_inline_spaces(&s);
+
+  // 6. Apply the full symbol table.
   for (from, to) in SYMBOL_TABLE {
     s = s.replace(from, to);
   }
 
   s
+}
+
+/// Collapse runs of whitespace (space + tab) into a single space.
+/// Preserves `\n` so multi-equation row separators stay intact.
+fn collapse_inline_spaces(s: &str) -> String {
+  let mut out = String::with_capacity(s.len());
+  let mut prev_space = false;
+  for c in s.chars() {
+    if c == ' ' || c == '\t' {
+      if !prev_space {
+        out.push(' ');
+        prev_space = true;
+      }
+    } else {
+      out.push(c);
+      prev_space = false;
+    }
+  }
+  out
+}
+
+/// Trim each `\n`-separated line in the final rendered output so each
+/// row of a multi-equation block has no leading or trailing whitespace
+/// — keeps centered alignment honest.
+fn trim_per_line(s: &str) -> String {
+  s.lines()
+    .map(|l| l.trim())
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 const MATHBB: &[(&str, &str)] = &[
@@ -201,6 +277,10 @@ const MATHBB: &[(&str, &str)] = &[
 
 /// Detect `align`-style environments (contain `\\` line breaks) and render
 /// each equation line independently, returning newline-joined Unicode.
+/// Currently unused — `render` always uses `strip_latex` which handles
+/// `\\` → newline natively.  Kept for the v2 "Knuth-quality math via
+/// pixel rendering" path where per-line tui_math typesetting would matter.
+#[allow(dead_code)]
 /// Returns None for single-line math (let tui_math handle it).
 fn render_multiline(src: &str) -> Option<String> {
   if !src.contains(r"\\") {
@@ -321,9 +401,12 @@ pub fn strip_latex(src: &str) -> String {
           let (content, skip) = read_braced(&chars, i); i += skip;
           out.push_str(&strip_latex(&content));
         }
-        // Drop braced content silently.
+        // Drop braced content silently.  `begin`/`end` are crucial:
+        // `\begin{equation}` ... `\end{equation}` would otherwise leak
+        // the env name ("equation", "split", "aligned") as plain text
+        // in the output via the catch-all that re-strips braced args.
         "label" | "tag" | "nonumber" | "notag" | "vspace" | "hspace"
-        | "phantom" | "color" => {
+        | "phantom" | "color" | "begin" | "end" => {
           if i < len && chars[i] == '{' {
             let (_, skip) = read_braced(&chars, i); i += skip;
           }
@@ -366,25 +449,51 @@ fn strip_latex_simple(src: &str) -> String {
 
 // ── Super/subscript Unicode approximation ─────────────────────────────────────
 
+/// Render a string as a superscript run, per-character.  Characters with a
+/// Unicode superscript codepoint use it; characters without (like `d`, `,`,
+/// `/`) fall through to the literal — the result is mixed-script but stays
+/// inline.  Two papering substitutes worth their column: `.` → `·` (middle
+/// dot — published-paper convention for decimals in superscripts) and
+/// `/` → `⁄` (U+2044 fraction slash).
+///
+/// When the run contains a fraction slash, we wrap it in superscript parens
+/// `⁽…⁾` to disambiguate from any surrounding division — e.g. in
+/// `pos/10000^{2i/d_{model}}` the inner ⁄ would otherwise blend with the
+/// outer `/`.  Already-bracketed content (source had explicit parens) is
+/// left alone.
 fn to_superscript(s: &str) -> String {
-  // For short simple expressions, map to Unicode combining superscripts.
-  let mapped: Option<String> = s.chars().map(|c| superscript_char(c)).collect();
-  match mapped {
-    Some(m) => m,
-    None => format!("^({})", s),
+  let inner: String = s.chars().map(superscript_char).collect();
+  if needs_super_brackets(&inner) {
+    format!("⁽{}⁾", inner)
+  } else {
+    inner
   }
 }
 
 fn to_subscript(s: &str) -> String {
-  let mapped: Option<String> = s.chars().map(|c| subscript_char(c)).collect();
-  match mapped {
-    Some(m) => m,
-    None => format!("_({})", s),
+  let inner: String = s.chars().map(subscript_char).collect();
+  if needs_sub_brackets(&inner) {
+    format!("₍{}₎", inner)
+  } else {
+    inner
   }
 }
 
-fn superscript_char(c: char) -> Option<char> {
-  Some(match c {
+fn needs_super_brackets(s: &str) -> bool {
+  if s.starts_with('⁽') && s.ends_with('⁾') { return false; }
+  // Fraction slash signals the run contains an operator that could be
+  // confused with the surrounding division.
+  s.contains('⁄')
+}
+
+fn needs_sub_brackets(s: &str) -> bool {
+  if s.starts_with('₍') && s.ends_with('₎') { return false; }
+  // Subscripts rarely carry fractions, but keep symmetric.
+  s.contains('/')
+}
+
+fn superscript_char(c: char) -> char {
+  match c {
     '0' => '⁰', '1' => '¹', '2' => '²', '3' => '³', '4' => '⁴',
     '5' => '⁵', '6' => '⁶', '7' => '⁷', '8' => '⁸', '9' => '⁹',
     'a' => 'ᵃ', 'b' => 'ᵇ', 'c' => 'ᶜ', 'd' => 'ᵈ', 'e' => 'ᵉ',
@@ -395,15 +504,16 @@ fn superscript_char(c: char) -> Option<char> {
     'A' => 'ᴬ', 'B' => 'ᴮ', 'D' => 'ᴰ', 'E' => 'ᴱ', 'G' => 'ᴳ',
     'H' => 'ᴴ', 'I' => 'ᴵ', 'J' => 'ᴶ', 'K' => 'ᴷ', 'L' => 'ᴸ',
     'M' => 'ᴹ', 'N' => 'ᴺ', 'O' => 'ᴼ', 'P' => 'ᴾ', 'R' => 'ᴿ',
-    'T' => 'ᵀ', 'U' => 'ᵁ', 'V' => 'ᵛ', 'W' => 'ᵂ',
+    'T' => 'ᵀ', 'U' => 'ᵁ', 'V' => 'ⱽ', 'W' => 'ᵂ',
     '+' => '⁺', '-' => '⁻', '=' => '⁼', '(' => '⁽', ')' => '⁾',
-    '*' => '⃰', ' ' => ' ',
-    _ => return None,
-  })
+    '.' => '·',  // middle dot for decimal points in superscripts
+    '/' => '⁄',  // fraction slash for division in superscripts
+    other => other,
+  }
 }
 
-fn subscript_char(c: char) -> Option<char> {
-  Some(match c {
+fn subscript_char(c: char) -> char {
+  match c {
     '0' => '₀', '1' => '₁', '2' => '₂', '3' => '₃', '4' => '₄',
     '5' => '₅', '6' => '₆', '7' => '₇', '8' => '₈', '9' => '₉',
     'a' => 'ₐ', 'e' => 'ₑ', 'h' => 'ₕ', 'i' => 'ᵢ', 'j' => 'ⱼ',
@@ -411,9 +521,8 @@ fn subscript_char(c: char) -> Option<char> {
     'p' => 'ₚ', 'r' => 'ᵣ', 's' => 'ₛ', 't' => 'ₜ', 'u' => 'ᵤ',
     'v' => 'ᵥ', 'x' => 'ₓ',
     '+' => '₊', '-' => '₋', '=' => '₌', '(' => '₍', ')' => '₎',
-    ' ' => ' ',
-    _ => return None,
-  })
+    other => other,
+  }
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────

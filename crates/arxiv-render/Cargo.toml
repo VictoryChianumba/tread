@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 doc-model = { path = "../doc-model" }
 math-render = { path = "../math-render" }
+kitty-graphics = { path = "../kitty-graphics" }
 flate2 = "1"
 tar = "0.4"
 reqwest = { version = "0.12", features = ["blocking"] }

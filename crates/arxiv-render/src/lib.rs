@@ -65,13 +65,49 @@ pub fn absolutize_image_paths(blocks: &mut [doc_model::Block], asset_dir: &std::
   };
   for b in blocks {
     match b {
-      doc_model::Block::Image { path, .. } => resolve(path),
+      doc_model::Block::Image { path, dims, .. } => {
+        resolve(path);
+        *dims = read_image_dims(path);
+      }
       doc_model::Block::ImageRow { items, .. } => {
         for item in items.iter_mut() {
           resolve(&mut item.path);
+          item.dims = read_image_dims(&item.path);
         }
       }
       _ => {}
     }
   }
+}
+
+/// Read pixel `(width, height)` for an image at `path`.  PNG: parse the
+/// IHDR chunk directly.  PDF: rasterise via `pdftoppm` (cached), then
+/// read the resulting PNG's header.  JPG/GIF: not yet supported —
+/// returns `None` and the caller falls back to default cell footprint.
+fn read_image_dims(path: &std::path::Path) -> Option<(u32, u32)> {
+  let ext = path
+    .extension()
+    .and_then(|s| s.to_str())
+    .unwrap_or("")
+    .to_ascii_lowercase();
+  match ext.as_str() {
+    "png" => kitty_graphics::png::dimensions(path),
+    "pdf" => {
+      // Eager rasterisation so build_visual_lines has dims.  pdf_to_png
+      // is cached by FNV-1a of canonical path, so subsequent runs and
+      // retries pay zero conversion cost.
+      let cache = pdf_cache_dir();
+      let png = kitty_graphics::pdf::pdf_to_png(path, &cache).ok()?;
+      kitty_graphics::png::dimensions(&png)
+    }
+    _ => None,
+  }
+}
+
+fn pdf_cache_dir() -> std::path::PathBuf {
+  if let Some(home) = std::env::var_os("HOME") {
+    return std::path::PathBuf::from(home)
+      .join(".cache").join("tread").join("figures");
+  }
+  std::env::temp_dir().join("tread-figures")
 }
