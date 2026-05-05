@@ -1,4 +1,4 @@
-//! Ex-command parser and dispatcher for block-reader's `:` mode.
+//! Ex-command parser and dispatcher for tread's `:` mode.
 //!
 //! `execute(reader, ctx, line)` is the single public entry point.  The
 //! event loop calls it when the user presses Enter in `Mode::Command`,

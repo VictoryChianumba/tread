@@ -1,14 +1,14 @@
 [package]
-name = "block-reader"
+name = "tread"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "block_reader"
+name = "tread"
 path = "src/lib.rs"
 
 [[bin]]
-name = "block-reader"
+name = "tread"
 path = "src/main.rs"
 
 [dependencies]

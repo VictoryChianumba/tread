@@ -3,7 +3,7 @@ use arxiv_render::{fetch, parse, pdf_anchors, placement};
 fn main() {
   let arg = std::env::args().nth(1).unwrap_or_default();
   if arg.is_empty() {
-    eprintln!("usage: block-reader <arxiv-id-or-url>");
+    eprintln!("usage: tread <arxiv-id-or-url>");
     std::process::exit(1);
   }
 
@@ -88,7 +88,7 @@ fn main() {
   }).sum();
   eprintln!("{} blocks ({} images) — launching reader ...", blocks.len(), image_count);
 
-  if let Err(e) = block_reader::run(blocks, None, Some(id), bibitems) {
+  if let Err(e) = tread::run(blocks, None, Some(id), bibitems) {
     eprintln!("reader error: {e}");
     std::process::exit(1);
   }

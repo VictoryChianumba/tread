@@ -1,7 +1,7 @@
 //! Standalone smoke test for the Kitty graphics pipeline.
 //!
 //! Reads a PNG from argv[1], exercises the exact transmit/place path
-//! used by block-reader (including tmux passthrough wrapping), then
+//! used by tread (including tmux passthrough wrapping), then
 //! sleeps a few seconds so the image stays visible before the shell
 //! redraws.  Run inside the same terminal you're seeing the bug in.
 //!

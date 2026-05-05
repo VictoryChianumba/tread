@@ -24,7 +24,7 @@ fn main() {
   print!("\x1b[2J");
   io::stdout().flush().unwrap();
 
-  // Emit the same a=T escape block-reader would use.  Cursor positioning
+  // Emit the same a=T escape tread would use.  Cursor positioning
   // is bundled inside the escape so it survives tmux passthrough.
   let id = 1u32;
   if let Err(e) = kitty_graphics::transmit::transmit_and_place(id, &png, 60, 12, 5, 5) {

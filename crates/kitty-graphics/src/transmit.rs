@@ -136,7 +136,7 @@ pub fn move_cursor(row: u16, col: u16) -> io::Result<()> {
 }
 
 /// Standard base64 encoder.  Hand-rolled to avoid pulling in the
-/// `base64` crate just for this — the OSC 52 yank in block-reader uses
+/// `base64` crate just for this — the OSC 52 yank in tread uses
 /// the same trick.
 fn base64_encode(data: &[u8]) -> String {
   const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

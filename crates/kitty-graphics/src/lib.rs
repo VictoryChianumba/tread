@@ -1,4 +1,4 @@
-//! Kitty graphics protocol support for the block-reader.
+//! Kitty graphics protocol support for tread.
 //!
 //! Two responsibilities for now:
 //! - **Capability detection** — figure out at startup whether the host

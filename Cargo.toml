@@ -5,7 +5,7 @@ members = [
   "crates/doc-model",
   "crates/math-render",
   "crates/arxiv-render",
-  "crates/block-reader",
+  "crates/tread",
   "crates/kitty-graphics",
   "crates/ui-theme",
 ]

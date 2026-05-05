@@ -54,21 +54,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
 
 [[package]]
-name = "block-reader"
-version = "0.1.0"
-dependencies = [
- "arxiv-render",
- "crossterm",
- "dirs",
- "doc-model",
- "kitty-graphics",
- "ratatui",
- "serde",
- "serde_json",
- "ui-theme",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1689,6 +1674,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "tread"
+version = "0.1.0"
+dependencies = [
+ "arxiv-render",
+ "crossterm",
+ "dirs",
+ "doc-model",
+ "kitty-graphics",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "ui-theme",
 ]
 
 [[package]]
