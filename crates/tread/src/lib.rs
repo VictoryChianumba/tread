@@ -145,16 +145,11 @@ pub fn run_with_theme(
   let mut terminal = Terminal::new(backend)?;
 
   // Build the voice playback controller from saved config + the
-  // env-only ELEVENLABS_API_KEY.  If audio init fails inside the
-  // background thread, voice keys will surface the error in the status
-  // bar but the rest of the reader stays fully functional.  Wrapped in
-  // `Arc` so the embed surface signature is uniform between standalone
-  // and host-embedded use (trench clones the same Arc into each tab).
-  let cfg_for_voice = config::load();
-  let voice_cfg = cfg_for_voice.voice.clone().unwrap_or_default();
-  let api_key = std::env::var("ELEVENLABS_API_KEY").ok();
-  let provider = voice::make_provider(&voice_cfg, api_key.as_deref());
-  let voice_controller = Some(Arc::new(voice::PlaybackController::new(provider)));
+  // env-only ELEVENLABS_API_KEY.  Wrapped in `Arc` so the embed surface
+  // signature is uniform between standalone and host-embedded use
+  // (trench clones the same Arc into each tab — see
+  // `tread::build_voice_controller`).
+  let voice_controller = Some(build_voice_controller());
 
   let size = terminal.size()?;
   let paper = PaperData {
@@ -214,6 +209,25 @@ pub fn draw(frame: &mut ratatui::Frame, area: Rect, reader: &Reader, theme: &The
 /// (tmux pane switch).  Idempotent and cheap.
 pub fn clear_images(state: &mut ImageState) {
   images::clear_all(state);
+}
+
+/// Build a shared TTS playback controller from the saved voice config
+/// plus the env-only `ELEVENLABS_API_KEY`.  Hosts call this once at
+/// app startup and `clone()` the returned `Arc` into every Reader tab
+/// — the underlying audio thread + `rodio::Sink` are shared, so only
+/// one paper speaks at a time across tabs (cross-tab preemption is
+/// handled by the session-id machinery in `voice/playback.rs`).
+///
+/// Construction never fails: if the audio device isn't available, the
+/// playback thread surfaces the error via `take_error()` instead of
+/// panicking.  Standalone tread embeds the same call in
+/// `run_with_theme`.
+pub fn build_voice_controller() -> Arc<PlaybackController> {
+  let cfg = config::load();
+  let voice_cfg = cfg.voice.clone().unwrap_or_default();
+  let api_key = std::env::var("ELEVENLABS_API_KEY").ok();
+  let provider = voice::make_provider(&voice_cfg, api_key.as_deref());
+  Arc::new(PlaybackController::new(provider))
 }
 
 impl Reader {
