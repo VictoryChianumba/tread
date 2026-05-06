@@ -18,14 +18,22 @@ use crossterm::{
 };
 use doc_model::Block;
 use std::collections::HashMap;
+use std::sync::Arc;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use commands::{CmdCtx, CommandResult};
-use state::{FindKind, Mode, Operator, Reader};
+use ratatui::layout::Rect;
+use state::{FindKind, Mode, Operator};
 use std::io;
 use ui_theme::Theme;
 
-pub use state::PaperMeta;
+// Public embed surface — host TUIs (trench) and the standalone tread
+// binary both build against these.  See `crates/tread/CLAUDE.md` for
+// the embed guide.  Stable from v1; signature changes are a contract
+// break.
+pub use state::{Reader, PaperMeta};
+pub use commands::ReaderAction;
+pub use images::ImageState;
+pub use voice::PlaybackController;
 
 /// What `fetch_paper` returns: everything the reader needs to build/refresh
 /// its block tree and bib lookups for one arXiv paper.  The `asset_dir`
@@ -86,6 +94,9 @@ pub fn run_with_theme(
   theme: Theme,
   kitty_supported: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+  // Standalone tread: tread itself owns terminal setup and teardown.
+  // When embedded in a host TUI (trench), the host owns terminal state
+  // and constructs the Reader directly via `Reader::init`.
   enable_raw_mode()?;
   let mut stdout = io::stdout();
   // Focus events let us detect tmux pane switches: when our pane
@@ -105,45 +116,38 @@ pub fn run_with_theme(
   let backend = CrosstermBackend::new(stdout);
   let mut terminal = Terminal::new(backend)?;
 
-  let size = terminal.size()?;
-  let mut reader = Reader::new_with_bibitems(blocks, size.width as usize, size.height as usize, bibitems);
-  reader.meta = meta;
-
   // Build the voice playback controller from saved config + the
   // env-only ELEVENLABS_API_KEY.  If audio init fails inside the
   // background thread, voice keys will surface the error in the status
-  // bar but the rest of the reader stays fully functional.
+  // bar but the rest of the reader stays fully functional.  Wrapped in
+  // `Arc` so the embed surface signature is uniform between standalone
+  // and host-embedded use (trench clones the same Arc into each tab).
   let cfg_for_voice = config::load();
   let voice_cfg = cfg_for_voice.voice.clone().unwrap_or_default();
   let api_key = std::env::var("ELEVENLABS_API_KEY").ok();
   let provider = voice::make_provider(&voice_cfg, api_key.as_deref());
-  reader.voice_controller = Some(voice::PlaybackController::new(provider));
+  let voice_controller = Some(Arc::new(voice::PlaybackController::new(provider)));
 
-  // Restore reading progress and bookmarks.
-  if let Some(ref key) = progress_key {
-    let map = progress::load();
-    if let Some(p) = map.get(key) {
-      let max_offset = reader.total_lines().saturating_sub(1);
-      reader.offset = p.offset.min(max_offset);
-    }
-    reader.bookmarks = bookmarks::load(key).named;
-    reader.highlights = highlights::load(key);
-  }
+  let size = terminal.size()?;
+  let paper = PaperData {
+    blocks,
+    bibitems,
+    asset_dir: std::path::PathBuf::new(),
+  };
+  let mut reader = Reader::init(
+    paper,
+    meta,
+    progress_key.clone(),
+    size.width,
+    size.height,
+    kitty_supported,
+    voice_controller,
+  );
 
-  let ctx = CmdCtx { arxiv_id: progress_key.clone(), kitty_supported };
-  let result = event_loop(&mut terminal, &mut reader, theme, ctx, kitty_supported);
+  let result = standalone_loop(&mut terminal, &mut reader, theme, kitty_supported);
 
-  // Persist reading progress and bookmarks on clean exit.
-  if let Some(ref key) = progress_key {
-    let mut map = progress::load();
-    map.insert(key.clone(), progress::ReaderProgress { offset: reader.offset });
-    progress::save(&map);
-    bookmarks::save(key, &bookmarks::BookmarkSet {
-      marks: Vec::new(),
-      named: reader.bookmarks.clone(),
-    });
-    highlights::save(key, &reader.highlights);
-  }
+  // Persist reading progress, bookmarks, and highlights on clean exit.
+  reader.save_progress();
 
   // Balance the keyboard-enhancement push.  Ignored on terminals
   // that didn't accept it.
@@ -155,116 +159,178 @@ pub fn run_with_theme(
   result
 }
 
-fn event_loop(
+/// Post-draw hook: emit Kitty graphics escapes for visible image VLs.
+/// Hosts call this after `terminal.draw(|f| tread::render::draw(...))`
+/// returns.  Walks the visible window each frame; lazy emission inside
+/// `place_visible` skips unchanged placements so the hot path is cheap
+/// on idle frames.  No-op when `kitty_supported == false` — keeps
+/// non-graphics terminals from paying any cost here.
+pub fn after_draw(reader: &Reader, state: &mut ImageState, area: Rect, kitty_supported: bool) {
+  if !kitty_supported {
+    return;
+  }
+  let (_, _, content_area, _, _) = render::split_layout(area, reader);
+  images::place_visible(reader, state, content_area, kitty_supported);
+}
+
+/// Public draw entry point — wraps `render::draw` so hosts don't need
+/// to import `render`.  Same signature as the closure body in
+/// `terminal.draw(|f| ...)`.
+pub fn draw(frame: &mut ratatui::Frame, reader: &Reader, theme: &Theme) {
+  render::draw(frame, reader, theme);
+}
+
+/// Clear the host-owned image cache.  Call after `:reload` returns
+/// `ReaderAction::Reload`, on terminal resize, and on `Event::FocusLost`
+/// (tmux pane switch).  Idempotent and cheap.
+pub fn clear_images(state: &mut ImageState) {
+  images::clear_all(state);
+}
+
+impl Reader {
+  /// Embed-surface event handler.  Hosts call this for every crossterm
+  /// `Event` they want the reader to process — keystrokes, mouse,
+  /// resize, focus events.  Returns a `ReaderAction` the host reacts
+  /// to: `Quit` to close the reader, `ChangeTheme(t)` to update the
+  /// active theme, `Reload` to clear image caches, `Error(msg)` to
+  /// optionally surface in a host-side status bar (the reader's own
+  /// status bar already shows `cmd_error`).  `OpenHelp` is a side-
+  /// effect-only action — `help_visible` has already been set on the
+  /// Reader; the host can ignore it.
+  ///
+  /// Resize: this method calls `Reader::resize`, but the host should
+  /// also call `tread::clear_images(&mut state)` because reflow can
+  /// move every image VL.  FocusLost: same — the host should clear
+  /// the image cache.  Both can be done before or after this call.
+  pub fn handle_event(&mut self, ev: Event) -> ReaderAction {
+    match ev {
+      Event::Key(key) => {
+        // Any keystroke clears the previous command's error and dismisses
+        // any open popup so it doesn't linger across input.
+        self.cmd_error = None;
+        if self.popup.is_some() {
+          self.popup = None;
+          return ReaderAction::Continue;
+        }
+        match self.mode {
+          Mode::Normal => {
+            if handle_normal(self, key.code, key.modifiers) {
+              ReaderAction::Quit
+            } else {
+              ReaderAction::Continue
+            }
+          }
+          Mode::Search => { handle_search(self, key.code); ReaderAction::Continue }
+          Mode::Visual { .. } => { handle_visual(self, key.code); ReaderAction::Continue }
+          Mode::AwaitingChar { kind } => {
+            handle_awaiting_char(self, key.code, kind);
+            ReaderAction::Continue
+          }
+          Mode::AwaitingMarkName { for_set } => {
+            handle_awaiting_mark_name(self, key.code, for_set);
+            ReaderAction::Continue
+          }
+          Mode::AwaitingG => { handle_awaiting_g(self, key.code); ReaderAction::Continue }
+          Mode::AwaitingOperator { op } => {
+            handle_awaiting_operator(self, key.code, op);
+            ReaderAction::Continue
+          }
+          Mode::AwaitingTextObject { op, around } => {
+            handle_awaiting_text_object(self, key.code, op, around);
+            ReaderAction::Continue
+          }
+          Mode::Command => handle_command(self, key.code),
+        }
+      }
+      Event::Mouse(mouse) => {
+        match mouse.kind {
+          MouseEventKind::ScrollDown => { for _ in 0..3 { self.nav_down(); } }
+          MouseEventKind::ScrollUp => { for _ in 0..3 { self.nav_up(); } }
+          _ => {}
+        }
+        ReaderAction::Continue
+      }
+      Event::Resize(w, h) => {
+        // Reflow visual_lines for the new size.  The host is responsible
+        // for clearing its image cache — see method docs.
+        self.resize(w as usize, h as usize);
+        ReaderAction::Continue
+      }
+      // FocusLost / FocusGained / Paste: no Reader-side state change
+      // here.  Hosts should clear the image cache on FocusLost so
+      // placements don't bleed across tmux panes; the next draw will
+      // re-emit visible images via `after_draw` anyway.
+      _ => ReaderAction::Continue,
+    }
+  }
+
+  /// Per-frame tick: sync voice playback state and run continuous-
+  /// reading auto-advance.  Hosts call this once per frame (typically
+  /// on `event::poll` timeout in their main loop) so the loading
+  /// spinner animates and the active-word highlight repaints during
+  /// playback.  Cheap when `voice_controller` is None.
+  pub fn tick(&mut self) {
+    let prev_status = self.voice_status.clone();
+    voice_control::sync_voice_status(self);
+    if self.continuous_reading
+      && matches!(prev_status, voice::PlaybackStatus::Playing)
+      && matches!(self.voice_status, voice::PlaybackStatus::Idle)
+    {
+      // Chunk just ended → roll forward to the next paragraph.
+      let advanced = voice_control::advance_to_next_paragraph_for_continuous_reading(self);
+      if !advanced {
+        self.continuous_reading = false;
+      }
+    }
+  }
+}
+
+/// Standalone-binary event loop.  Drives the embed surface from inside
+/// tread itself so the standalone path and the embedded path share one
+/// implementation.  Trench has its own equivalent loop that interleaves
+/// reader events with feed events.
+fn standalone_loop(
   terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
   reader: &mut Reader,
   mut theme: Theme,
-  ctx: CmdCtx,
   kitty_supported: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
   let mut img_state = images::ImageState::default();
   loop {
     terminal.draw(|f| render::draw(f, reader, &theme))?;
 
-    // Post-draw image placement: ratatui's character buffer can't carry
-    // pixel data, so we paint Kitty `a=p` escapes onto stdout *after*
-    // the frame so they sit on top of the blank rows reserved by the
-    // Image VLs.  No-op when the host terminal doesn't speak the
-    // graphics protocol.
     if kitty_supported {
       let size = terminal.size()?;
-      let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
-      let (_, _, content_area, _, _) = render::split_layout(area, reader);
-      images::place_visible(reader, &mut img_state, content_area, kitty_supported);
-    }
-
-    // Voice playback runs on a background thread; we sync its status
-    // each tick so the status-bar spinner animates and the active-word
-    // highlight repaints.  `event::poll` with a 100ms timeout gives us
-    // both: keystrokes wake us instantly, and on idle we still tick
-    // through to refresh.  The continuous-reading auto-advance also
-    // hooks into the idle branch (chunk-end detection happens via
-    // status sync from Playing→Idle).
-    let prev_status = reader.voice_status.clone();
-    voice_control::sync_voice_status(reader);
-    if reader.continuous_reading
-      && matches!(prev_status, voice::PlaybackStatus::Playing)
-      && matches!(reader.voice_status, voice::PlaybackStatus::Idle)
-    {
-      // Chunk just ended → roll forward to the next paragraph.
-      let advanced = voice_control::advance_to_next_paragraph_for_continuous_reading(reader);
-      if !advanced {
-        reader.continuous_reading = false;
-      }
+      let area = Rect::new(0, 0, size.width, size.height);
+      after_draw(reader, &mut img_state, area, kitty_supported);
     }
 
     if !event::poll(std::time::Duration::from_millis(100))? {
-      // Idle tick — loop back to redraw with refreshed voice state.
+      // Idle tick — refresh voice state, then loop back to redraw.
+      reader.tick();
       continue;
     }
-    match event::read()? {
-      Event::Key(key) => {
-        // Any keystroke clears the previous command's error and dismisses
-        // any open popup so it doesn't linger across input.
-        reader.cmd_error = None;
-        if reader.popup.is_some() {
-          reader.popup = None;
-          continue;
-        }
-        match reader.mode {
-          Mode::Normal => {
-            if handle_normal(reader, key.code, key.modifiers) {
-              break;
-            }
-          }
-          Mode::Search => handle_search(reader, key.code),
-          Mode::Visual { .. } => handle_visual(reader, key.code),
-          Mode::AwaitingChar { kind } => handle_awaiting_char(reader, key.code, kind),
-          Mode::AwaitingMarkName { for_set } => handle_awaiting_mark_name(reader, key.code, for_set),
-          Mode::AwaitingG => handle_awaiting_g(reader, key.code),
-          Mode::AwaitingOperator { op } => handle_awaiting_operator(reader, key.code, op),
-          Mode::AwaitingTextObject { op, around } => handle_awaiting_text_object(reader, key.code, op, around),
-          Mode::Command => match handle_command(reader, key.code, &ctx) {
-            CommandResult::Continue => {}
-            CommandResult::Quit => break,
-            CommandResult::ChangeTheme(new) => theme = new,
-            CommandResult::OpenHelp => reader.help_visible = true,
-            CommandResult::Error(msg) => reader.cmd_error = Some(msg),
-            CommandResult::Reload => {
-              // Paper just rebuilt with fresh blocks → all kitty_ids
-              // are new.  Drop on-screen image placements so we don't
-              // try to reuse stale ids the terminal still has cached.
-              images::clear_all(&mut img_state);
-            }
-          },
-        }
-      }
-      Event::Mouse(mouse) => match mouse.kind {
-        MouseEventKind::ScrollDown => { for _ in 0..3 { reader.nav_down(); } }
-        MouseEventKind::ScrollUp   => { for _ in 0..3 { reader.nav_up(); } }
-        _ => {}
-      },
-      Event::Resize(w, h) => {
-        // Resize re-flows visual_lines, which can move every Image VL.
-        // Clear all placements so the next draw replaces them at fresh
-        // coordinates — re-emitting at old positions would stack ghosts.
-        images::clear_all(&mut img_state);
-        reader.resize(w as usize, h as usize);
-      }
-      Event::FocusLost => {
-        // tmux pane lost focus.  iTerm2 has no concept of panes, so
-        // image placements stay painted at absolute screen coords —
-        // bleeding into whatever pane is on top of ours.  Delete them
-        // all; FocusGained will replay on next draw.
+
+    let ev = event::read()?;
+    // Image-cache cleanup events: host-side mirror of the contract.
+    let needs_image_clear = matches!(&ev, Event::Resize(_, _) | Event::FocusLost);
+
+    match reader.handle_event(ev) {
+      ReaderAction::Quit => break,
+      ReaderAction::ChangeTheme(t) => theme = t,
+      ReaderAction::Reload => {
+        // Paper just rebuilt with fresh blocks → all kitty_ids are new.
+        // Drop on-screen image placements so we don't try to reuse
+        // stale ids the terminal still has cached.
         images::clear_all(&mut img_state);
       }
-      Event::FocusGained => {
-        // No explicit redraw needed — the next loop iteration calls
-        // terminal.draw and place_visible, and `clear_all` already
-        // emptied last_emitted, so every visible image is treated as
-        // first-time-visible and re-emitted.
-      }
-      _ => {}
+      ReaderAction::Error(msg) => reader.cmd_error = Some(msg),
+      ReaderAction::OpenHelp => reader.help_visible = true,
+      ReaderAction::Continue => {}
+    }
+
+    if needs_image_clear {
+      images::clear_all(&mut img_state);
     }
   }
   // Clear any lingering image placements so they don't bleed onto the
@@ -534,30 +600,30 @@ fn handle_awaiting_char(reader: &mut Reader, code: KeyCode, kind: FindKind) {
   reader.mode = Mode::Normal;
 }
 
-fn handle_command(reader: &mut Reader, code: KeyCode, ctx: &CmdCtx) -> CommandResult {
+fn handle_command(reader: &mut Reader, code: KeyCode) -> ReaderAction {
   match code {
     KeyCode::Esc => {
       reader.cmd_buf.clear();
       reader.mode = Mode::Normal;
-      CommandResult::Continue
+      ReaderAction::Continue
     }
     KeyCode::Enter => {
       let line = std::mem::take(&mut reader.cmd_buf);
       reader.mode = Mode::Normal;
-      commands::execute(reader, ctx, &line)
+      commands::execute(reader, &line)
     }
     KeyCode::Backspace => {
       if reader.cmd_buf.pop().is_none() {
         // Empty buffer: backspace exits command mode (matches search bar UX).
         reader.mode = Mode::Normal;
       }
-      CommandResult::Continue
+      ReaderAction::Continue
     }
     KeyCode::Char(c) => {
       reader.cmd_buf.push(c);
-      CommandResult::Continue
+      ReaderAction::Continue
     }
-    _ => CommandResult::Continue,
+    _ => ReaderAction::Continue,
   }
 }
 

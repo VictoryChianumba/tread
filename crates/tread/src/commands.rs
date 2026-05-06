@@ -1,8 +1,10 @@
 //! Ex-command parser and dispatcher for tread's `:` mode.
 //!
-//! `execute(reader, ctx, line)` is the single public entry point.  The
+//! `execute(reader, line)` is the single public entry point.  The host
 //! event loop calls it when the user presses Enter in `Mode::Command`,
-//! and reacts to the returned `CommandResult`.
+//! and reacts to the returned `ReaderAction`.  All per-session context
+//! (`arxiv_id`, `kitty_supported`) lives on the `Reader` itself, so the
+//! command surface needs nothing besides the buffer.
 //!
 //! ## Command surface
 //!
@@ -16,23 +18,20 @@ use ui_theme::{Theme, ThemeId};
 use crate::config;
 use crate::state::{PopupContent, Reader};
 
-/// Per-session context that commands consult.  Held outside `Reader` so
-/// it doesn't have to be threaded through every render path.
-#[derive(Debug, Clone, Default)]
-pub struct CmdCtx {
-  pub arxiv_id: Option<String>,
-  pub kitty_supported: bool,
-}
-
-/// Outcome of executing a command line.  The event loop reacts:
+/// Outcome of executing a command line, returned all the way up to the
+/// host event loop.  Renamed from `CommandResult` when tread became
+/// embeddable — `ReaderAction` is also what `Reader::handle_event`
+/// returns, so the host has one enum to match on regardless of whether
+/// the action came from a key, a `:` command, or an internal trigger.
+///
 /// - `Continue`: stay in the loop, no other change
-/// - `Quit`: break out, save state, exit
-/// - `ChangeTheme`: swap the loop's local `theme`
+/// - `Quit`: host should close the reader / tab
+/// - `ChangeTheme`: host should update its active theme and propagate
 /// - `OpenHelp`: set `reader.help_visible = true`
 /// - `Error(msg)`: stash on `reader.cmd_error` for the status line
-/// - `Reload`: paper data was just replaced; event loop must clear
-///   image-cache state since old kitty_ids no longer match the new blocks
-pub enum CommandResult {
+/// - `Reload`: paper data was just replaced; host must clear image-cache
+///   state since old kitty_ids no longer match the new blocks
+pub enum ReaderAction {
   Continue,
   Quit,
   ChangeTheme(Theme),
@@ -43,10 +42,10 @@ pub enum CommandResult {
 
 /// Top-level dispatch.  Splits the command line into name + args, then
 /// matches against the bare-integer form, then the command table.
-pub fn execute(reader: &mut Reader, ctx: &CmdCtx, line: &str) -> CommandResult {
+pub fn execute(reader: &mut Reader, line: &str) -> ReaderAction {
   let trimmed = line.trim();
   if trimmed.is_empty() {
-    return CommandResult::Continue;
+    return ReaderAction::Continue;
   }
 
   // Bare integer: `:42` → go to line N.
@@ -62,14 +61,14 @@ pub fn execute(reader: &mut Reader, ctx: &CmdCtx, line: &str) -> CommandResult {
   let n = name.as_str();
   for (canonical, aliases, handler) in command_table() {
     if n == *canonical || aliases.iter().any(|a| *a == n) {
-      return handler(reader, ctx, &args);
+      return handler(reader, &args);
     }
   }
 
-  CommandResult::Error(format!("unknown command: {name}"))
+  ReaderAction::Error(format!("unknown command: {name}"))
 }
 
-type Handler = fn(&mut Reader, &CmdCtx, &[&str]) -> CommandResult;
+type Handler = fn(&mut Reader, &[&str]) -> ReaderAction;
 
 fn command_table() -> &'static [(&'static str, &'static [&'static str], Handler)] {
   &[
@@ -98,45 +97,45 @@ fn command_table() -> &'static [(&'static str, &'static [&'static str], Handler)
 /// Synchronous — the UI freezes for ~2s while the network round-trip
 /// runs.  No-op when no paper is loaded (e.g. when running the reader
 /// against a local file in the future).
-fn cmd_reload(reader: &mut Reader, ctx: &CmdCtx, _args: &[&str]) -> CommandResult {
-  let Some(id) = &ctx.arxiv_id else {
-    return CommandResult::Error("no paper loaded — :reload requires an arxiv id".to_string());
+fn cmd_reload(reader: &mut Reader, _args: &[&str]) -> ReaderAction {
+  let Some(id) = reader.arxiv_id.clone() else {
+    return ReaderAction::Error("no paper loaded — :reload requires an arxiv id".to_string());
   };
-  match crate::fetch_paper(id, ctx.kitty_supported) {
+  match crate::fetch_paper(&id, reader.kitty_supported) {
     Ok(data) => {
       reader.reload_with(data.blocks, data.bibitems);
-      CommandResult::Reload
+      ReaderAction::Reload
     }
-    Err(e) => CommandResult::Error(format!("reload: {e}")),
+    Err(e) => ReaderAction::Error(format!("reload: {e}")),
   }
 }
 
 // ── Quit / aliases ───────────────────────────────────────────────────────────
 
-fn cmd_quit(_: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
-  CommandResult::Quit
+fn cmd_quit(_: &mut Reader, _: &[&str]) -> ReaderAction {
+  ReaderAction::Quit
 }
 
-fn cmd_help(_: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
-  CommandResult::OpenHelp
+fn cmd_help(_: &mut Reader, _: &[&str]) -> ReaderAction {
+  ReaderAction::OpenHelp
 }
 
-fn cmd_toc(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
+fn cmd_toc(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   reader.toggle_toc();
-  CommandResult::Continue
+  ReaderAction::Continue
 }
 
-fn cmd_back(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
+fn cmd_back(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   reader.nav_back();
-  CommandResult::Continue
+  ReaderAction::Continue
 }
 
 // ── Goto / sections ──────────────────────────────────────────────────────────
 
-fn goto_line(reader: &mut Reader, n_one_indexed: usize) -> CommandResult {
+fn goto_line(reader: &mut Reader, n_one_indexed: usize) -> ReaderAction {
   let total = reader.total_lines();
   if total == 0 {
-    return CommandResult::Error("empty document".to_string());
+    return ReaderAction::Error("empty document".to_string());
   }
   let target = n_one_indexed.saturating_sub(1).min(total - 1);
   reader.push_nav_mark();
@@ -148,16 +147,16 @@ fn goto_line(reader: &mut Reader, n_one_indexed: usize) -> CommandResult {
   reader.cursor_y = target.saturating_sub(reader.offset);
   reader.cursor_x = 0;
   reader.desired_column = 0;
-  CommandResult::Continue
+  ReaderAction::Continue
 }
 
-fn cmd_goto(reader: &mut Reader, _: &CmdCtx, args: &[&str]) -> CommandResult {
+fn cmd_goto(reader: &mut Reader, args: &[&str]) -> ReaderAction {
   if args.is_empty() {
-    return CommandResult::Error("goto: missing argument".to_string());
+    return ReaderAction::Error("goto: missing argument".to_string());
   }
   let arg = args.join(" ");
   if reader.sections.is_empty() {
-    return CommandResult::Error("no sections in this document".to_string());
+    return ReaderAction::Error("no sections in this document".to_string());
   }
   // First try numeric form ("3", "3.2", "3.2.1").
   let target = if arg.chars().next().map_or(false, |c| c.is_ascii_digit()) {
@@ -170,9 +169,9 @@ fn cmd_goto(reader: &mut Reader, _: &CmdCtx, args: &[&str]) -> CommandResult {
     Some(line) => {
       reader.push_nav_mark();
       jump_to_line(reader, line);
-      CommandResult::Continue
+      ReaderAction::Continue
     }
-    None => CommandResult::Error(format!("no section matching: {arg}")),
+    None => ReaderAction::Error(format!("no section matching: {arg}")),
   }
 }
 
@@ -183,15 +182,15 @@ fn section_starts_with(header: &str, prefix: &str) -> bool {
   token == prefix
 }
 
-fn cmd_abstract(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
+fn cmd_abstract(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   jump_to_section_named(reader, &["abstract"])
 }
 
-fn cmd_references(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
+fn cmd_references(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   jump_to_section_named(reader, &["references", "bibliography"])
 }
 
-fn jump_to_section_named(reader: &mut Reader, candidates: &[&str]) -> CommandResult {
+fn jump_to_section_named(reader: &mut Reader, candidates: &[&str]) -> ReaderAction {
   let target = reader.sections.iter().find(|s| {
     let lower = s.2.to_ascii_lowercase();
     candidates.iter().any(|c| lower.contains(c))
@@ -200,9 +199,9 @@ fn jump_to_section_named(reader: &mut Reader, candidates: &[&str]) -> CommandRes
     Some(line) => {
       reader.push_nav_mark();
       jump_to_line(reader, line);
-      CommandResult::Continue
+      ReaderAction::Continue
     }
-    None => CommandResult::Error(format!("no section: {}", candidates.join(" / "))),
+    None => ReaderAction::Error(format!("no section: {}", candidates.join(" / "))),
   }
 }
 
@@ -223,39 +222,39 @@ fn jump_to_line(reader: &mut Reader, line: usize) {
 
 // ── :set ─────────────────────────────────────────────────────────────────────
 
-fn cmd_set(_reader: &mut Reader, _: &CmdCtx, args: &[&str]) -> CommandResult {
+fn cmd_set(_reader: &mut Reader, args: &[&str]) -> ReaderAction {
   if args.is_empty() {
-    return CommandResult::Error("set: missing argument (e.g. theme=light)".to_string());
+    return ReaderAction::Error("set: missing argument (e.g. theme=light)".to_string());
   }
   let pair = args.join(" ");
   let Some((key, value)) = pair.split_once('=') else {
-    return CommandResult::Error("set: expected key=value".to_string());
+    return ReaderAction::Error("set: expected key=value".to_string());
   };
   let key = key.trim();
   let value = value.trim();
   match key {
     "theme" => set_theme(value),
-    other => CommandResult::Error(format!("set: unknown option: {other}")),
+    other => ReaderAction::Error(format!("set: unknown option: {other}")),
   }
 }
 
-fn set_theme(value: &str) -> CommandResult {
+fn set_theme(value: &str) -> ReaderAction {
   if value == "trench" {
     let mut cfg = config::load();
     cfg.theme_override = None;
     config::save(&cfg);
-    return CommandResult::ChangeTheme(config::resolve_theme());
+    return ReaderAction::ChangeTheme(config::resolve_theme());
   }
   match ThemeId::from_id(value) {
     Some(tid) => {
       let mut cfg = config::load();
       cfg.theme_override = Some(value.to_string());
       config::save(&cfg);
-      CommandResult::ChangeTheme(tid.theme())
+      ReaderAction::ChangeTheme(tid.theme())
     }
     None => {
       let names: Vec<&str> = ThemeId::all().iter().map(|t| t.label()).collect();
-      CommandResult::Error(format!(
+      ReaderAction::Error(format!(
         "unknown theme: {value}.  Try `trench` or one of: {}",
         names.join(", ")
       ))
@@ -265,7 +264,7 @@ fn set_theme(value: &str) -> CommandResult {
 
 // ── Marks / highlights / metadata popups ─────────────────────────────────────
 
-fn cmd_marks(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
+fn cmd_marks(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   let mut entries: Vec<(char, usize)> = reader.bookmarks.iter().map(|(&c, &l)| (c, l)).collect();
   entries.sort_by_key(|e| e.0);
   let lines: Vec<String> = if entries.is_empty() {
@@ -280,12 +279,12 @@ fn cmd_marks(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
     }).collect()
   };
   reader.popup = Some(PopupContent { title: "Marks".to_string(), lines });
-  CommandResult::Continue
+  ReaderAction::Continue
 }
 
-fn cmd_delmarks(reader: &mut Reader, _: &CmdCtx, args: &[&str]) -> CommandResult {
+fn cmd_delmarks(reader: &mut Reader, args: &[&str]) -> ReaderAction {
   if args.is_empty() {
-    return CommandResult::Error("delmarks: missing letter".to_string());
+    return ReaderAction::Error("delmarks: missing letter".to_string());
   }
   let mut removed = 0;
   for token in args {
@@ -296,13 +295,13 @@ fn cmd_delmarks(reader: &mut Reader, _: &CmdCtx, args: &[&str]) -> CommandResult
     }
   }
   if removed == 0 {
-    CommandResult::Error("delmarks: no matching marks".to_string())
+    ReaderAction::Error("delmarks: no matching marks".to_string())
   } else {
-    CommandResult::Continue
+    ReaderAction::Continue
   }
 }
 
-fn cmd_highlights(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
+fn cmd_highlights(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   let lines: Vec<String> = if reader.highlights.highlights.is_empty() {
     vec!["(no highlights — select in visual mode and press H)".to_string()]
   } else {
@@ -326,10 +325,10 @@ fn cmd_highlights(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult 
     }).collect()
   };
   reader.popup = Some(PopupContent { title: "Highlights".to_string(), lines });
-  CommandResult::Continue
+  ReaderAction::Continue
 }
 
-fn cmd_about(reader: &mut Reader, ctx: &CmdCtx, _: &[&str]) -> CommandResult {
+fn cmd_about(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   let mut lines: Vec<String> = Vec::new();
   if let Some(meta) = &reader.meta {
     if !meta.title.is_empty() {
@@ -339,7 +338,7 @@ fn cmd_about(reader: &mut Reader, ctx: &CmdCtx, _: &[&str]) -> CommandResult {
       lines.push(format!("Authors:  {}", meta.authors));
     }
   }
-  if let Some(id) = &ctx.arxiv_id {
+  if let Some(id) = &reader.arxiv_id {
     lines.push(format!("arXiv ID: {id}"));
     lines.push(format!("URL:      https://arxiv.org/abs/{id}"));
   }
@@ -347,23 +346,23 @@ fn cmd_about(reader: &mut Reader, ctx: &CmdCtx, _: &[&str]) -> CommandResult {
     lines.push("(no metadata available)".to_string());
   }
   reader.popup = Some(PopupContent { title: "About".to_string(), lines });
-  CommandResult::Continue
+  ReaderAction::Continue
 }
 
 // ── Clipboard / external ─────────────────────────────────────────────────────
 
-fn cmd_url(_reader: &mut Reader, ctx: &CmdCtx, _: &[&str]) -> CommandResult {
-  let Some(id) = &ctx.arxiv_id else {
-    return CommandResult::Error("no arxiv id available".to_string());
+fn cmd_url(reader: &mut Reader, _: &[&str]) -> ReaderAction {
+  let Some(id) = &reader.arxiv_id else {
+    return ReaderAction::Error("no arxiv id available".to_string());
   };
   let url = format!("https://arxiv.org/abs/{id}");
   crate::osc52_yank(&url);
-  CommandResult::Continue
+  ReaderAction::Continue
 }
 
-fn cmd_cite(reader: &mut Reader, ctx: &CmdCtx, _: &[&str]) -> CommandResult {
-  let Some(id) = &ctx.arxiv_id else {
-    return CommandResult::Error("no arxiv id available".to_string());
+fn cmd_cite(reader: &mut Reader, _: &[&str]) -> ReaderAction {
+  let Some(id) = reader.arxiv_id.clone() else {
+    return ReaderAction::Error("no arxiv id available".to_string());
   };
   let mut entry = format!("@misc{{{id}");
   if let Some(meta) = &reader.meta {
@@ -376,25 +375,25 @@ fn cmd_cite(reader: &mut Reader, ctx: &CmdCtx, _: &[&str]) -> CommandResult {
   }
   entry.push_str(&format!(",\n  eprint={{{id}}},\n  archivePrefix={{arXiv}}\n}}"));
   crate::osc52_yank(&entry);
-  CommandResult::Continue
+  ReaderAction::Continue
 }
 
-fn cmd_open(_reader: &mut Reader, ctx: &CmdCtx, _: &[&str]) -> CommandResult {
-  let Some(id) = &ctx.arxiv_id else {
-    return CommandResult::Error("no arxiv id available".to_string());
+fn cmd_open(reader: &mut Reader, _: &[&str]) -> ReaderAction {
+  let Some(id) = &reader.arxiv_id else {
+    return ReaderAction::Error("no arxiv id available".to_string());
   };
   let url = format!("https://arxiv.org/abs/{id}");
   // macOS ships `open`; Linux ships `xdg-open`.  Try macOS first.
   let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
   match std::process::Command::new(opener).arg(&url).spawn() {
-    Ok(_) => CommandResult::Continue,
-    Err(e) => CommandResult::Error(format!("open failed: {e}")),
+    Ok(_) => ReaderAction::Continue,
+    Err(e) => ReaderAction::Error(format!("open failed: {e}")),
   }
 }
 
 // ── Diagnostics ──────────────────────────────────────────────────────────────
 
-fn cmd_placement(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
+fn cmd_placement(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   // Walk the block list, find each Matrix group, and report its current
   // location (block idx + caption snippet).  Useful for inspecting whether
   // PDF-anchor placement landed where expected.
@@ -418,88 +417,91 @@ fn cmd_placement(reader: &mut Reader, _: &CmdCtx, _: &[&str]) -> CommandResult {
     lines.push("(no Matrix blocks in document)".to_string());
   }
   reader.popup = Some(PopupContent { title: "Table placement".to_string(), lines });
-  CommandResult::Continue
+  ReaderAction::Continue
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
 
-  fn ctx() -> CmdCtx { CmdCtx { arxiv_id: Some("1706.03762".to_string()), kitty_supported: false } }
-
   fn dummy_reader() -> Reader {
     use doc_model::Block;
-    Reader::new(vec![Block::Line("hello".to_string()), Block::Line("world".to_string())], 80, 24)
+    let mut r = Reader::new(
+      vec![Block::Line("hello".to_string()), Block::Line("world".to_string())],
+      80, 24,
+    );
+    r.arxiv_id = Some("1706.03762".to_string());
+    r
   }
 
   #[test]
   fn empty_command_is_noop() {
     let mut r = dummy_reader();
-    assert!(matches!(execute(&mut r, &ctx(), ""), CommandResult::Continue));
-    assert!(matches!(execute(&mut r, &ctx(), "   "), CommandResult::Continue));
+    assert!(matches!(execute(&mut r, ""), ReaderAction::Continue));
+    assert!(matches!(execute(&mut r, "   "), ReaderAction::Continue));
   }
 
   #[test]
   fn unknown_command_errors() {
     let mut r = dummy_reader();
-    let out = execute(&mut r, &ctx(), "frobnicate");
-    assert!(matches!(out, CommandResult::Error(_)));
+    let out = execute(&mut r, "frobnicate");
+    assert!(matches!(out, ReaderAction::Error(_)));
   }
 
   #[test]
   fn quit_returns_quit() {
     let mut r = dummy_reader();
-    assert!(matches!(execute(&mut r, &ctx(), "q"), CommandResult::Quit));
-    assert!(matches!(execute(&mut r, &ctx(), "quit"), CommandResult::Quit));
-    assert!(matches!(execute(&mut r, &ctx(), "exit"), CommandResult::Quit));
+    assert!(matches!(execute(&mut r, "q"), ReaderAction::Quit));
+    assert!(matches!(execute(&mut r, "quit"), ReaderAction::Quit));
+    assert!(matches!(execute(&mut r, "exit"), ReaderAction::Quit));
   }
 
   #[test]
   fn help_returns_open_help() {
     let mut r = dummy_reader();
-    assert!(matches!(execute(&mut r, &ctx(), "help"), CommandResult::OpenHelp));
-    assert!(matches!(execute(&mut r, &ctx(), "h"), CommandResult::OpenHelp));
+    assert!(matches!(execute(&mut r, "help"), ReaderAction::OpenHelp));
+    assert!(matches!(execute(&mut r, "h"), ReaderAction::OpenHelp));
   }
 
   #[test]
   fn bare_integer_jumps_to_line() {
     let mut r = dummy_reader();
-    assert!(matches!(execute(&mut r, &ctx(), "2"), CommandResult::Continue));
+    assert!(matches!(execute(&mut r, "2"), ReaderAction::Continue));
     assert_eq!(r.current_line(), 1); // 1-indexed → line 2 = index 1
   }
 
   #[test]
   fn integer_clamps_to_total() {
     let mut r = dummy_reader();
-    execute(&mut r, &ctx(), "9999");
+    execute(&mut r, "9999");
     assert_eq!(r.current_line(), r.total_lines() - 1);
   }
 
   #[test]
   fn set_theme_unknown_errors() {
     let mut r = dummy_reader();
-    let out = execute(&mut r, &ctx(), "set theme=nonsense");
-    assert!(matches!(out, CommandResult::Error(_)));
+    let out = execute(&mut r, "set theme=nonsense");
+    assert!(matches!(out, ReaderAction::Error(_)));
   }
 
   #[test]
   fn set_theme_known_returns_change() {
     let mut r = dummy_reader();
-    let out = execute(&mut r, &ctx(), "set theme=light");
-    assert!(matches!(out, CommandResult::ChangeTheme(_)));
+    let out = execute(&mut r, "set theme=light");
+    assert!(matches!(out, ReaderAction::ChangeTheme(_)));
   }
 
   #[test]
   fn set_missing_eq_errors() {
     let mut r = dummy_reader();
-    let out = execute(&mut r, &ctx(), "set theme light");
-    assert!(matches!(out, CommandResult::Error(_)));
+    let out = execute(&mut r, "set theme light");
+    assert!(matches!(out, ReaderAction::Error(_)));
   }
 
   #[test]
   fn delmarks_no_args_errors() {
     let mut r = dummy_reader();
-    let out = execute(&mut r, &ctx(), "delmarks");
-    assert!(matches!(out, CommandResult::Error(_)));
+    let out = execute(&mut r, "delmarks");
+    assert!(matches!(out, ReaderAction::Error(_)));
   }
 }

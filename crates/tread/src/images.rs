@@ -46,7 +46,7 @@ use crate::state::Reader;
 /// per idle frame (mouse motion, focus events, key repeats that don't
 /// change scroll position).
 #[derive(Default)]
-pub(crate) struct ImageState {
+pub struct ImageState {
   /// Decoded PNG bytes by kitty_id.  Loaded lazily on first visibility.
   /// `None` marks an image we tried to load and failed (missing file,
   /// bad format) — caching the negative result avoids retrying every
@@ -65,7 +65,7 @@ pub(crate) struct ImageState {
 /// transmit (first time) and place each one at its current screen row.
 /// No-op if `supported == false` — keeps the hot path cheap on
 /// non-graphics terminals and on prose-only papers.
-pub(crate) fn place_visible(
+pub fn place_visible(
   reader: &Reader,
   state: &mut ImageState,
   content_area: Rect,
@@ -236,7 +236,7 @@ pub(crate) fn place_visible(
 /// the user's shell after the alt-screen tears down.  Also resets
 /// `last_emitted` since the cached coordinates are about to become
 /// invalid (resize re-flows visual_lines; exit closes the alt screen).
-pub(crate) fn clear_all(state: &mut ImageState) {
+pub fn clear_all(state: &mut ImageState) {
   for id in state.prev_visible.drain() {
     let _ = delete_placement(id);
   }

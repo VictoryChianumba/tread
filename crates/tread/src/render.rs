@@ -37,7 +37,7 @@ pub fn draw(frame: &mut Frame, reader: &Reader, t: &Theme) {
   }
 }
 
-pub(crate) fn split_layout(
+pub fn split_layout(
   area: Rect,
   reader: &Reader,
 ) -> (Option<Rect>, Option<Rect>, Rect, Rect, Option<Rect>) {

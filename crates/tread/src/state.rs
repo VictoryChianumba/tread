@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use doc_model::{Block, VisualLine, VisualLineKind, build_visual_lines};
 
 use crate::highlights::HighlightSet;
+use crate::PaperData;
 
 pub const TOC_WIDTH: usize = 28;
 
@@ -139,12 +141,30 @@ pub struct Reader {
   /// graceful.
   pub image_paths: HashMap<u32, std::path::PathBuf>,
 
+  /// arXiv id this Reader is rendering, or `None` when running against a
+  /// non-arxiv source.  Used by `:reload`, `:url`, `:cite`, `:open`, and
+  /// the persistence layer (per-paper progress / marks / highlights).
+  pub arxiv_id: Option<String>,
+  /// Whether the host terminal speaks the Kitty graphics protocol.  Used
+  /// by `:reload` to decide between absolute image paths and degraded
+  /// captions.  Set once at construction; doesn't change at runtime.
+  pub kitty_supported: bool,
+
   // ── Voice / TTS playback state ──────────────────────────────────────────
   // All fields are `None` / `false` / `Idle` when voice is inactive.  The
-  // controller is wired post-construction in `lib.rs::run` once the env
-  // API key is read; tests can leave it `None`.
-  /// Background TTS playback controller, or `None` when audio init failed.
-  pub voice_controller: Option<crate::voice::PlaybackController>,
+  // controller is shared (Arc) so a host TUI can give the same audio
+  // thread to every reader tab — only one paper speaks at a time across
+  // tabs.  Per-tab playback bookkeeping (status, started_at, …) stays on
+  // each Reader.  Standalone tread wraps its single controller in an Arc
+  // too so the contract is uniform.
+  /// Background TTS playback controller (shared via Arc), or `None` when
+  /// audio init failed or voice was disabled by the host.
+  pub voice_controller: Option<Arc<crate::voice::PlaybackController>>,
+  /// Session id stamped by `voice_controller.start(...)` when this
+  /// Reader requested playback.  Compared against the controller's
+  /// current session each tick: a mismatch means another Reader (in
+  /// another tab) preempted us, so we silently exit `reading_mode`.
+  pub voice_started_session: Option<u64>,
   /// Last-synced playback status; refreshed each tick from the
   /// controller's shared `Arc<Mutex>`.
   pub voice_status: crate::voice::PlaybackStatus,
@@ -241,10 +261,13 @@ impl Reader {
       cmd_error: None,
       popup: None,
       image_paths,
+      arxiv_id: None,
+      kitty_supported: false,
       // Voice fields default to "no playback in progress."  The
-      // controller is wired in lib.rs::run after the API key + config
-      // are loaded; leaving it None here lets tests skip audio entirely.
+      // controller is wired in `Reader::init` (or post-construction by
+      // tests); leaving it None here lets tests skip audio entirely.
       voice_controller: None,
+      voice_started_session: None,
       voice_status: crate::voice::PlaybackStatus::Idle,
       voice_error: None,
       voice_para_start: 0,
@@ -254,6 +277,78 @@ impl Reader {
       reading_mode: false,
       continuous_reading: false,
     }
+  }
+
+  /// Embed-surface constructor.  Replaces ad-hoc post-construction
+  /// wiring (meta, voice, progress restore) that used to live inside
+  /// `run_with_theme`.  Standalone tread and host TUIs (trench) both
+  /// build a Reader through this single entry point.
+  ///
+  /// Arguments:
+  /// - `paper`: blocks + bibitems + asset_dir as returned by `fetch_paper`.
+  ///   `asset_dir` is consumed — it's only useful during fetch / parse,
+  ///   not during reading.
+  /// - `meta`: optional title + authors for the header bar.
+  /// - `progress_key`: arXiv id (or any opaque key).  When `Some`, the
+  ///   reader restores prior reading position, marks, and highlights;
+  ///   the same key is used by `save_progress` on exit.  When `None`,
+  ///   no persistence happens.
+  /// - `width` / `height`: terminal area in cells.
+  /// - `kitty_supported`: whether to show inline pixel figures.
+  /// - `voice_controller`: shared TTS playback handle.  Pass `None` for
+  ///   a Reader that doesn't support audio.
+  pub fn init(
+    paper: PaperData,
+    meta: Option<PaperMeta>,
+    progress_key: Option<String>,
+    width: u16,
+    height: u16,
+    kitty_supported: bool,
+    voice_controller: Option<Arc<crate::voice::PlaybackController>>,
+  ) -> Self {
+    let mut reader = Self::new_with_bibitems(
+      paper.blocks,
+      width as usize,
+      height as usize,
+      paper.bibitems,
+    );
+    reader.meta = meta;
+    reader.arxiv_id = progress_key.clone();
+    reader.kitty_supported = kitty_supported;
+    reader.voice_controller = voice_controller;
+
+    if let Some(ref key) = progress_key {
+      let map = crate::progress::load();
+      if let Some(p) = map.get(key) {
+        let max_offset = reader.total_lines().saturating_sub(1);
+        reader.offset = p.offset.min(max_offset);
+      }
+      reader.bookmarks = crate::bookmarks::load(key).named;
+      reader.highlights = crate::highlights::load(key);
+    }
+
+    reader
+  }
+
+  /// Persist this paper's reading position, bookmarks, and highlights.
+  /// No-op when no `arxiv_id` is set.  Hosts call this on tab close /
+  /// clean exit; safe to call multiple times.
+  pub fn save_progress(&self) {
+    let Some(key) = &self.arxiv_id else { return };
+    let mut map = crate::progress::load();
+    map.insert(
+      key.clone(),
+      crate::progress::ReaderProgress { offset: self.offset },
+    );
+    crate::progress::save(&map);
+    crate::bookmarks::save(
+      key,
+      &crate::bookmarks::BookmarkSet {
+        marks: Vec::new(),
+        named: self.bookmarks.clone(),
+      },
+    );
+    crate::highlights::save(key, &self.highlights);
   }
 
   /// Replace the loaded paper with freshly-fetched blocks + bibitems
