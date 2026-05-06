@@ -10,8 +10,7 @@ use ui_theme::Theme;
 
 use crate::state::{Mode, Reader, TOC_WIDTH};
 
-pub fn draw(frame: &mut Frame, reader: &Reader, t: &Theme) {
-  let area = frame.area();
+pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
   let (header_area, toc_area, content_area, status_area, search_area) =
     split_layout(area, reader);
 

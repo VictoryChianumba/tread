@@ -24,7 +24,6 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use state::{FindKind, Mode, Operator};
 use std::io;
-use ui_theme::Theme;
 
 // Public embed surface — host TUIs (trench) and the standalone tread
 // binary both build against these.  See `crates/tread/CLAUDE.md` for
@@ -34,6 +33,13 @@ pub use state::{Reader, PaperMeta};
 pub use commands::ReaderAction;
 pub use images::ImageState;
 pub use voice::PlaybackController;
+// Re-export the ui_theme crate so embedding hosts can name `tread::Theme`
+// (and its `Color` enum) without taking a separate path-dep on the same
+// crate.  When a host's own theme module diverged from tread's, an
+// adapter on the host side maps host::Theme → tread::Theme — see
+// trench/src/app.rs::theme_for_tread for the trench-side converter.
+pub use ui_theme;
+pub use ui_theme::Theme;
 
 /// What `fetch_paper` returns: everything the reader needs to build/refresh
 /// its block tree and bib lookups for one arXiv paper.  The `asset_dir`
@@ -43,6 +49,28 @@ pub struct PaperData {
   pub blocks: Vec<Block>,
   pub bibitems: HashMap<String, String>,
   pub asset_dir: std::path::PathBuf,
+}
+
+impl PaperData {
+  /// Build a `PaperData` from pre-extracted plain-text lines.  Used by
+  /// host TUIs (trench) to embed tread for non-arXiv content sources —
+  /// PDF / EPUB / HTML / local files where the host has already done
+  /// the extraction and only needs a typed reader on the resulting
+  /// `Vec<String>`.  Each input line becomes one `Block::Line`; no
+  /// math, no tables, no images, no cross-refs.  `:reload`, `:cite`,
+  /// `:url`, `:open` are no-ops with a sensible error (they all
+  /// require an arxiv_id, which `Reader::init` leaves unset for this
+  /// path — pass `progress_key = None`).
+  ///
+  /// All non-prose Reader features still work: navigation, marks,
+  /// highlights, search, themes, voice, text objects.
+  pub fn from_plain_lines(lines: Vec<String>) -> Self {
+    Self {
+      blocks: lines.into_iter().map(Block::Line).collect(),
+      bibitems: HashMap::new(),
+      asset_dir: std::path::PathBuf::new(),
+    }
+  }
 }
 
 /// Fetch + parse + post-process a paper.  Mirrors the bootstrap steps
@@ -174,10 +202,11 @@ pub fn after_draw(reader: &Reader, state: &mut ImageState, area: Rect, kitty_sup
 }
 
 /// Public draw entry point — wraps `render::draw` so hosts don't need
-/// to import `render`.  Same signature as the closure body in
-/// `terminal.draw(|f| ...)`.
-pub fn draw(frame: &mut ratatui::Frame, reader: &Reader, theme: &Theme) {
-  render::draw(frame, reader, theme);
+/// to import `render`.  Hosts pass the sub-rectangle they want the
+/// reader to occupy (e.g. one half of a split pane); standalone tread
+/// passes `frame.area()` for the whole terminal.
+pub fn draw(frame: &mut ratatui::Frame, area: Rect, reader: &Reader, theme: &Theme) {
+  render::draw(frame, area, reader, theme);
 }
 
 /// Clear the host-owned image cache.  Call after `:reload` returns
@@ -253,7 +282,7 @@ impl Reader {
       Event::Resize(w, h) => {
         // Reflow visual_lines for the new size.  The host is responsible
         // for clearing its image cache — see method docs.
-        self.resize(w as usize, h as usize);
+        self.resize(w, h);
         ReaderAction::Continue
       }
       // FocusLost / FocusGained / Paste: no Reader-side state change
@@ -269,9 +298,22 @@ impl Reader {
   /// on `event::poll` timeout in their main loop) so the loading
   /// spinner animates and the active-word highlight repaints during
   /// playback.  Cheap when `voice_controller` is None.
-  pub fn tick(&mut self) {
+  ///
+  /// Returns `true` if the tick mutated user-visible state (voice
+  /// status / active word / paragraph advance) so the host can mark
+  /// its own dirty flag and redraw on the next frame.  Returns
+  /// `false` on a fully idle tick — hosts can skip redrawing.
+  pub fn tick(&mut self) -> bool {
+    if self.voice_controller.is_none() {
+      return false;
+    }
     let prev_status = self.voice_status.clone();
+    let prev_started_at = self.voice_started_at;
+    let prev_chars_before = self.voice_chars_before;
     voice_control::sync_voice_status(self);
+    let mut changed = self.voice_status != prev_status
+      || self.voice_started_at != prev_started_at
+      || self.voice_chars_before != prev_chars_before;
     if self.continuous_reading
       && matches!(prev_status, voice::PlaybackStatus::Playing)
       && matches!(self.voice_status, voice::PlaybackStatus::Idle)
@@ -281,7 +323,15 @@ impl Reader {
       if !advanced {
         self.continuous_reading = false;
       }
+      changed = true;
     }
+    // While voice is actively playing, the active-word highlight
+    // moves continuously based on wall-clock time, so every tick
+    // changes visible state even if no field flipped.
+    if matches!(self.voice_status, voice::PlaybackStatus::Playing | voice::PlaybackStatus::Loading) {
+      changed = true;
+    }
+    changed
   }
 }
 
@@ -297,7 +347,7 @@ fn standalone_loop(
 ) -> Result<(), Box<dyn std::error::Error>> {
   let mut img_state = images::ImageState::default();
   loop {
-    terminal.draw(|f| render::draw(f, reader, &theme))?;
+    terminal.draw(|f| render::draw(f, f.area(), reader, &theme))?;
 
     if kitty_supported {
       let size = terminal.size()?;

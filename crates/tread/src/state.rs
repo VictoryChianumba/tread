@@ -330,6 +330,15 @@ impl Reader {
     reader
   }
 
+  /// Whether the reader is in Normal mode (i.e. not in Search /
+  /// Visual / Command / any awaiting one-shot mode).  Hosts use this
+  /// to decide whether keys like `Esc` should fall through to the
+  /// host's own back-out logic vs being consumed by the reader to
+  /// cancel an in-progress mode.
+  pub fn is_normal_mode(&self) -> bool {
+    matches!(self.mode, Mode::Normal)
+  }
+
   /// Persist this paper's reading position, bookmarks, and highlights.
   /// No-op when no `arxiv_id` is set.  Hosts call this on tab close /
   /// clean exit; safe to call multiple times.
@@ -400,11 +409,21 @@ impl Reader {
     content_width_for(self.width, self.toc_visible)
   }
 
-  pub fn resize(&mut self, width: usize, height: usize) {
-    self.width = width;
-    self.height = height;
+  /// Reflow visual lines for a new terminal size.  Embedded hosts
+  /// (trench) call this on every frame so the reader follows pane-
+  /// size changes; standalone tread calls it on `Event::Resize`.
+  /// Cheap when the dimensions match the cached size — the reflow is
+  /// only re-run when something actually changed.
+  pub fn resize(&mut self, width: u16, height: u16) {
+    let w = width as usize;
+    let h = height as usize;
+    if self.width == w && self.height == h {
+      return;
+    }
+    self.width = w;
+    self.height = h;
     let cw = self.content_width();
-    self.visual_lines = build_visual_lines(&self.blocks, cw, height);
+    self.visual_lines = build_visual_lines(&self.blocks, cw, h);
     self.sections = build_sections(&self.visual_lines);
     let (ll, be, bel) = build_link_indexes(&self.blocks, &self.visual_lines);
     self.label_lines = ll;
