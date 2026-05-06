@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod highlights;
 mod images;
+mod markdown;
 mod nav;
 mod progress;
 mod render;
@@ -67,6 +68,31 @@ impl PaperData {
   pub fn from_plain_lines(lines: Vec<String>) -> Self {
     Self {
       blocks: lines.into_iter().map(Block::Line).collect(),
+      bibitems: HashMap::new(),
+      asset_dir: std::path::PathBuf::new(),
+    }
+  }
+
+  /// Build a `PaperData` from a markdown source string.  Headers,
+  /// lists, code blocks, blockquotes, links, bold/italic/inline-code
+  /// styling, and rules all map to their `doc-model::Block` /
+  /// `InlineSpan` equivalents.  Unlocks GitHub READMEs, generic
+  /// markdown READMEs, blog posts that ship as `.md`, and any host
+  /// content already in markdown form.
+  ///
+  /// Out of scope (deliberately):
+  /// - Math: markdown has no standard syntax; mixing TeX with
+  ///   shell-prompt-style code samples in fences is fragile.  v2
+  ///   if needed.
+  /// - Image fetching: tread doesn't speak HTTP for image bodies, so
+  ///   `![alt](url)` degrades to an italic `[Image: alt]` placeholder.
+  ///   Hosts that want pixel images should pre-fetch and inject via
+  ///   the arxiv-style image_paths flow (v2).
+  /// - Tables: pulldown-cmark emits them but tread's current Matrix
+  ///   block expects LaTeX-style cells; v2 backlog.
+  pub fn from_markdown(md: &str) -> Self {
+    Self {
+      blocks: markdown::parse(md),
       bibitems: HashMap::new(),
       asset_dir: std::path::PathBuf::new(),
     }
