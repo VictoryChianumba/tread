@@ -107,6 +107,7 @@ pub fn handle_voice_keys(reader: &mut Reader, key: KeyEvent) -> bool {
         vc.stop();
         reader.voice_started_at = None;
       }
+      reader.voice_started_session = None;
       reader.reading_mode = false;
       reader.continuous_reading = false;
       true
@@ -255,8 +256,39 @@ fn find_word_at(s: &str, col: usize) -> (usize, usize) {
 /// `PlaybackController`'s shared `Arc<Mutex>` state.  Loading→Idle is
 /// suppressed so a quick network round-trip doesn't flicker the
 /// status bar through Idle before reaching Playing.
+///
+/// Cross-tab preemption: when this Reader requested playback it
+/// stamped `voice_started_session` from the controller's session
+/// counter.  If the controller is now playing a *different* session
+/// (because another Reader, in another tab, called `start()` after
+/// us), the controller's `session_id()` no longer matches ours —
+/// silently exit reading mode.  Status / dim / word-highlight all
+/// drop to inactive without surfacing an error.
 pub fn sync_voice_status(reader: &mut Reader) {
   let Some(vc) = &reader.voice_controller else { return };
+
+  // Preemption check: a Reader that started playback owns the
+  // controller until either it ends naturally (session→None) or
+  // another Reader bumps the session.  If we held a session and the
+  // controller no longer reflects it, fold our reading mode silently.
+  if let Some(my_session) = reader.voice_started_session {
+    let current = vc.session_id();
+    if !matches!(current, Some(id) if id == my_session) && current.is_some() {
+      // A different Reader is now playing.  Exit reading mode with
+      // no error — this is expected behaviour, not a failure.
+      reader.reading_mode = false;
+      reader.continuous_reading = false;
+      reader.voice_status = PlaybackStatus::Idle;
+      reader.voice_started_at = None;
+      reader.voice_started_session = None;
+      return;
+    }
+    // current == None means natural end of playback (could be ours
+    // ending, in which case the rest of this function handles the
+    // Playing→Idle transition).  current == Some(my_session) means
+    // we're still the active speaker.  Both fall through.
+  }
+
   let controller_status = vc.status();
   let should_update = !matches!(
     (&reader.voice_status, &controller_status),
@@ -289,7 +321,8 @@ pub fn sync_voice_status(reader: &mut Reader) {
 /// Initiate playback of `text` covering the visual-line range
 /// `[doc_start_line, doc_end_line]`.  No-op (with error message) when
 /// the controller isn't initialised — typically because audio init
-/// failed at startup.
+/// failed at startup.  Records the new session id on the Reader so
+/// `sync_voice_status` can detect cross-tab preemption.
 pub fn voice_start(
   reader: &mut Reader,
   text: String,
@@ -303,7 +336,8 @@ pub fn voice_start(
     reader.voice_para_end = doc_end_line;
     reader.voice_started_at = None;
     reader.voice_chars_before = 0;
-    vc.start(text, doc_start_line, doc_end_line);
+    let session_id = vc.start(text, doc_start_line, doc_end_line);
+    reader.voice_started_session = Some(session_id);
   } else {
     reader.voice_error = Some("voice not initialised".to_string());
   }
