@@ -79,6 +79,15 @@ impl PaperData {
 /// paths (or degrade to captions on non-graphics terminals), lift table
 /// floats to PDF-rendered position.  Network-bound; runs synchronously
 /// so the caller will block for ~2s on a typical paper.
+/// Extract an arXiv id from an URL or bare-id string.  Returns `None`
+/// if the input doesn't look like an arXiv reference.  Hosts use this
+/// to decide whether a paper should route through `fetch_paper`
+/// (LaTeX source, full math/tables/figures) or fall back to plain-
+/// text ingestion.  Wraps `arxiv_render::fetch::extract_id`.
+pub fn extract_arxiv_id(url_or_id: &str) -> Option<String> {
+  arxiv_render::fetch::extract_id(url_or_id)
+}
+
 pub fn fetch_paper(id: &str, kitty_supported: bool) -> Result<PaperData, String> {
   use arxiv_render::{fetch, parse, pdf_anchors, placement};
 
