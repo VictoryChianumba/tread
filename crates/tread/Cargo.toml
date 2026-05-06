@@ -24,6 +24,10 @@ ui-theme = { path = "../ui-theme" }
 # Markdown ingestion (B1).  Same crate trench already uses elsewhere,
 # so workspace dep resolution stays unified.
 pulldown-cmark = "0.12"
+# PDF ingestion (B2).  Same crate cli-pdf-to-text wraps; we call it
+# via bytes (not a path) so hosts can pass in-memory buffers from
+# their HTTP layer without temp-file dancing.
+pdf-extract = "0.7"
 # Voice / TTS subsystem.
 rodio = "0.19"
 ureq = { version = "2.12", features = ["json"] }

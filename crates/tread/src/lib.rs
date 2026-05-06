@@ -5,6 +5,7 @@ mod highlights;
 mod images;
 mod markdown;
 mod nav;
+mod pdf;
 mod progress;
 mod render;
 mod state;
@@ -96,6 +97,24 @@ impl PaperData {
       bibitems: HashMap::new(),
       asset_dir: std::path::PathBuf::new(),
     }
+  }
+
+  /// Build a `PaperData` from in-memory PDF bytes.  Wraps the
+  /// `pdf_extract` crate (same dep `cli-pdf-to-text` used in trench's
+  /// old pipeline) so a host can pass bytes from its HTTP layer
+  /// without writing to disk.  Each output line maps to a
+  /// `Block::Line` — heuristic structure detection (headers, lists,
+  /// columns) is deferred to v2 to avoid mis-parsing reading order.
+  ///
+  /// Errors when the buffer is empty, corrupt, or password-protected.
+  /// Hosts can fall back to `from_plain_lines` with a notification.
+  pub fn from_pdf_bytes(bytes: &[u8]) -> Result<Self, String> {
+    let blocks = pdf::pdf_to_blocks(bytes)?;
+    Ok(Self {
+      blocks,
+      bibitems: HashMap::new(),
+      asset_dir: std::path::PathBuf::new(),
+    })
   }
 }
 
