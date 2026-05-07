@@ -224,6 +224,20 @@ impl PaperData {
 /// paths (or degrade to captions on non-graphics terminals), lift table
 /// floats to PDF-rendered position.  Network-bound; runs synchronously
 /// so the caller will block for ~2s on a typical paper.
+/// True when the host terminal speaks the Kitty graphics protocol —
+/// i.e. tread can render figures as actual pixel images via APC
+/// escapes after each draw.  Wraps `kitty_graphics::detect()` so
+/// embedding hosts (trench) don't need a separate path-dep on
+/// `kitty-graphics`.  Standalone tread calls this in main.rs;
+/// embedding hosts call it once at startup and pass the bool into
+/// `Reader::init` plus the per-frame `tread::after_draw`.
+pub fn detect_kitty_supported() -> bool {
+  matches!(
+    kitty_graphics::detect(),
+    kitty_graphics::Capability::Supported
+  )
+}
+
 /// Extract an arXiv id from an URL or bare-id string.  Returns `None`
 /// if the input doesn't look like an arXiv reference.  Hosts use this
 /// to decide whether a paper should route through `fetch_paper`
