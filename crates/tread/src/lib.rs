@@ -1,6 +1,7 @@
 mod bookmarks;
 mod commands;
 mod config;
+mod epub;
 mod highlights;
 mod images;
 mod markdown;
@@ -110,6 +111,30 @@ impl PaperData {
   /// Hosts can fall back to `from_plain_lines` with a notification.
   pub fn from_pdf_bytes(bytes: &[u8]) -> Result<Self, String> {
     let blocks = pdf::pdf_to_blocks(bytes)?;
+    Ok(Self {
+      blocks,
+      bibitems: HashMap::new(),
+      asset_dir: std::path::PathBuf::new(),
+    })
+  }
+
+  /// Build a `PaperData` from in-memory EPUB bytes.  Wraps the
+  /// `epub` and `html2text` crates (same deps `cli-epub-to-text`
+  /// used) so a host can pass a buffer fetched from any source.
+  /// Each spine item becomes a chapter with a `Block::Header` (using
+  /// the EPUB's NavPoint label when available, else the idref),
+  /// followed by line-by-line content.  Paragraph breaks are
+  /// preserved as `Block::Blank`.
+  ///
+  /// Out of scope (v2 backlog):
+  /// - Inline images: EPUB images live as separate manifest
+  ///   resources, would need integration with the image_paths flow.
+  /// - Encryption: surfaces as parse error; tread doesn't support
+  ///   DRM key handling.
+  /// - Adaptive wrap: html2text wraps at a fixed 110 cols today;
+  ///   v2 routes raw HTML through `from_html` once that lands.
+  pub fn from_epub_bytes(bytes: &[u8]) -> Result<Self, String> {
+    let blocks = epub::epub_to_blocks(bytes)?;
     Ok(Self {
       blocks,
       bibitems: HashMap::new(),

@@ -28,6 +28,12 @@ pulldown-cmark = "0.12"
 # via bytes (not a path) so hosts can pass in-memory buffers from
 # their HTTP layer without temp-file dancing.
 pdf-extract = "0.7"
+# EPUB ingestion (B3).  Same crates cli-epub-to-text wraps.
+# `epub` parses spine + resources; `html2text` converts each chapter's
+# XHTML body to plain text.  Feed the bytes through Cursor for the
+# in-memory entry point.
+epub = "2.1"
+html2text = "0.15"
 # Voice / TTS subsystem.
 rodio = "0.19"
 ureq = { version = "2.12", features = ["json"] }
