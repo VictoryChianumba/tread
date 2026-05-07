@@ -28,12 +28,11 @@ pulldown-cmark = "0.12"
 # via bytes (not a path) so hosts can pass in-memory buffers from
 # their HTTP layer without temp-file dancing.
 pdf-extract = "0.7"
-# EPUB ingestion (B3).  Same crates cli-epub-to-text wraps.
-# `epub` parses spine + resources; `html2text` converts each chapter's
-# XHTML body to plain text.  Feed the bytes through Cursor for the
-# in-memory entry point.
+# EPUB ingestion (B3).  `epub` parses the spine + resources from
+# in-memory bytes via Cursor; chapter XHTML then walks through
+# tread's own html module (#42) for the same structured rendering
+# as standalone HTML — replaces the old `html2text` 110-col flatten.
 epub = "2.1"
-html2text = "0.15"
 # HTML ingestion (B4).  scraper wraps html5ever — robust standard
 # parser used across the Rust ecosystem.  We walk the resulting DOM
 # and emit tread blocks (Header / StyledLine / ListItem / CodeBlock

@@ -1,33 +1,25 @@
 //! EPUB → tread `Block` conversion.
 //!
-//! Wraps the same `epub` + `html2text` crates the old
-//! `cli-epub-to-text` used.  `epub::EpubDoc::from_reader` accepts a
-//! `Cursor<Vec<u8>>`, so the host can pass an in-memory buffer with
-//! no temp-file dancing — same shape as `from_pdf_bytes`.
+//! Wraps the `epub` crate (same dep `cli-epub-to-text` used) +
+//! tread's own `html` module so chapter XHTML walks through the
+//! same DOM walker as web HTML — meaning headings / lists / code
+//! blocks / blockquotes / inline styles all render structured at
+//! the terminal's actual width, not pre-wrapped to a fixed 110.
 //!
 //! Output strategy: each spine item (chapter) becomes
 //!   - `Block::Header { level: 1, text: <chapter title or fallback> }`
-//!   - `Block::Line` per non-empty text line from html2text
-//!   - `Block::Blank` between empty-line groups (paragraph breaks)
+//!   - the blocks emitted by `html::html_to_blocks` for that chapter
 //!   - `Block::Blank` between chapters
-//!
-//! `html2text` already wraps to a fixed column width — we keep that
-//! width modest (110) so most terminals render without further wrap.
-//! v2: feed raw HTML to `from_html` once that lands so the wrap
-//! width matches the reader's pane width dynamically.
 //!
 //! Chapter titles come from the EPUB navigation table when we can
 //! match the spine `idref` to a `NavPoint`; otherwise fall back to
-//! the idref string (better than nothing and consistent with what
-//! cli-epub-to-text exposed).
+//! the idref string.
 
 use std::collections::HashMap;
 use std::io::Cursor;
 
 use doc_model::Block;
 use epub::doc::EpubDoc;
-
-const HTML_WRAP_COLS: usize = 110;
 
 /// Convert EPUB bytes to a tread `Block` stream.  Errors when the
 /// buffer isn't a valid EPUB, can't be unzipped, or contains no
@@ -54,12 +46,13 @@ pub fn epub_to_blocks(bytes: &[u8]) -> Result<Vec<Block>, String> {
       Some((bytes, _)) => bytes,
       None => continue, // skip silently — non-essential or malformed entry
     };
-    let text = match html2text::from_read(resource.as_slice(), HTML_WRAP_COLS) {
-      Ok(t) => t,
-      Err(_) => continue, // skip an unparseable chapter rather than failing whole doc
+    let xhtml = match std::str::from_utf8(&resource) {
+      Ok(s) => s,
+      Err(_) => continue, // non-UTF-8 chapter — skip rather than fail whole doc
     };
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+
+    let chapter_blocks = crate::html::html_to_blocks(xhtml);
+    if chapter_blocks.is_empty() {
       continue;
     }
 
@@ -69,27 +62,10 @@ pub fn epub_to_blocks(bytes: &[u8]) -> Result<Vec<Block>, String> {
       .unwrap_or_else(|| idref.clone());
     out.push(Block::Header { level: 1, text: header_text });
     out.push(Block::Blank);
-
-    // Convert one chapter's text into Line/Blank blocks.  Sequences
-    // of blank input lines collapse to a single Block::Blank so
-    // paragraph spacing stays even.
-    let mut last_was_blank = false;
-    for line in trimmed.lines() {
-      let stripped = line.trim_end();
-      if stripped.is_empty() {
-        if !last_was_blank {
-          out.push(Block::Blank);
-          last_was_blank = true;
-        }
-      } else {
-        out.push(Block::Line(stripped.to_string()));
-        last_was_blank = false;
-      }
-    }
-    // Blank between chapters.  If the last block we emitted was
-    // already a blank we still want a clear chapter break, so push
-    // unconditionally — render-time consecutive blanks render as
-    // one visible empty row.
+    out.extend(chapter_blocks);
+    // Blank between chapters.  Consecutive Blank blocks render as
+    // one visible empty row, so this is safe even if the chapter
+    // ended with a blank.
     out.push(Block::Blank);
   }
 
