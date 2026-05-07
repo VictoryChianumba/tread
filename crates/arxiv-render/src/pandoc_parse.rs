@@ -428,8 +428,20 @@ fn walk_blocks(
                     classes.iter().any(|cl| cl.as_str() == Some("thebibliography"))
                 });
                 if is_thebib {
-                    out.extend(synthesize_bibliography());
-                    continue;
+                    // synthesize_bibliography reads from BIBITEMS_ORDERED
+                    // (filled by extract_bibitems' \bibitem{key} scan).
+                    // Papers using \bibliography{file.bib} (BibLaTeX,
+                    // bibtex external) leave BIBITEMS_ORDERED empty,
+                    // so synthesize would return [] and the user sees
+                    // a blank bibliography body.  Fall through to walk
+                    // the inner Paras instead — anchored cite-jumping
+                    // is lost but the entries are at least visible.
+                    let has_bibitems = BIBITEMS_ORDERED.with(|b| !b.borrow().is_empty());
+                    if has_bibitems {
+                        out.extend(synthesize_bibliography());
+                        continue;
+                    }
+                    // Else fall through to default inner-walk below.
                 }
                 if let Some(inner) = c[1].as_array() {
                     out.extend(walk_blocks(inner, list_depth, specs, counters));
