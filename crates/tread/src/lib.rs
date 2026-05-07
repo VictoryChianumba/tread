@@ -141,6 +141,52 @@ impl PaperData {
       asset_dir: std::path::PathBuf::new(),
     })
   }
+
+  /// Build a `PaperData` from a local file path.  Reads the file
+  /// once, sniffs the extension (case-insensitive), and dispatches
+  /// to the matching `from_*` builder.  Unknown / missing extensions
+  /// fall back to `from_plain_lines` so any text file still opens.
+  ///
+  /// Extension dispatch:
+  /// - `.md`, `.markdown`           → from_markdown
+  /// - `.pdf`                       → from_pdf_bytes
+  /// - `.epub`                      → from_epub_bytes
+  /// - `.html`, `.htm`              → from_plain_lines for now
+  ///                                  (auto-upgrades to from_html when B4 lands)
+  /// - `.txt` / unknown / no ext    → from_plain_lines
+  ///
+  /// Errors propagate from the underlying builder (parse failures,
+  /// empty buffers, …) plus an I/O error if the file can't be read.
+  /// Hosts that want richer error context wrap this with their own.
+  pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
+    let path = path.as_ref();
+    let bytes = std::fs::read(path)
+      .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let ext = path
+      .extension()
+      .and_then(|e| e.to_str())
+      .map(|e| e.to_ascii_lowercase());
+    match ext.as_deref() {
+      Some("pdf") => Self::from_pdf_bytes(&bytes),
+      Some("epub") => Self::from_epub_bytes(&bytes),
+      Some("md") | Some("markdown") => {
+        let text = String::from_utf8(bytes)
+          .map_err(|e| format!("{}: invalid UTF-8 ({e})", path.display()))?;
+        Ok(Self::from_markdown(&text))
+      }
+      _ => {
+        // .html / .htm / .txt / unknown / none — read as text and
+        // emit one Block::Line per line.  HTML upgrades when B4
+        // lands; for now tags appear as visible text but content
+        // is at least readable.
+        let text = String::from_utf8(bytes)
+          .map_err(|e| format!("{}: invalid UTF-8 ({e})", path.display()))?;
+        let lines: Vec<String> =
+          text.split('\n').map(|l| l.trim_end().to_string()).collect();
+        Ok(Self::from_plain_lines(lines))
+      }
+    }
+  }
 }
 
 /// Fetch + parse + post-process a paper.  Mirrors the bootstrap steps

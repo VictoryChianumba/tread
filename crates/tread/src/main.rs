@@ -1,27 +1,18 @@
-use arxiv_render::fetch;
+use std::path::Path;
 
 fn main() {
   let arg = std::env::args().nth(1).unwrap_or_default();
   if arg.is_empty() {
-    eprintln!("usage: tread <arxiv-id-or-url>");
+    eprintln!(
+      "usage: tread <arxiv-id-or-url> | tread <path-to-file>\n\n\
+       Local files: .md / .markdown, .pdf, .epub, .html, .txt"
+    );
     std::process::exit(1);
   }
-
-  let id = match fetch::extract_id(&arg) {
-    Some(id) => id,
-    None => {
-      eprintln!("error: could not extract a valid arXiv ID from {:?}", arg);
-      std::process::exit(1);
-    }
-  };
 
   // Detect terminal capability up front — gates all inline-graphics work.
   let kitty_capability = kitty_graphics::detect();
   eprintln!("kitty graphics: {:?}", kitty_capability);
-  // Inside tmux, kitty escapes are wrapped in the tmux passthrough
-  // envelope automatically — but tmux drops them unless the user has
-  // `set -g allow-passthrough on`.  Print a one-time hint so a missing
-  // figure doesn't read as silent breakage.
   if kitty_graphics::in_tmux() && matches!(kitty_capability, kitty_graphics::Capability::Supported) {
     eprintln!(
       "tmux detected: for inline graphics add to ~/.tmux.conf:\n  \
@@ -29,19 +20,33 @@ fn main() {
        set -g focus-events on         (lets the reader clear images on pane switch)"
     );
   }
-
   let kitty_supported = matches!(kitty_capability, kitty_graphics::Capability::Supported);
 
-  eprintln!("fetching source for arXiv:{id} ...");
+  // Two routing branches: existing file path on disk wins over arxiv-id
+  // detection (arxiv ids look like 1706.03762 — also a valid path
+  // shape, so explicit existence-check first avoids surprises).
+  let path = Path::new(&arg);
+  if path.exists() && path.is_file() {
+    open_local_file(path, kitty_supported);
+  } else if let Some(id) = tread::extract_arxiv_id(&arg) {
+    open_arxiv(&id, kitty_supported);
+  } else {
+    eprintln!(
+      "error: {arg:?} is neither an existing file nor a valid arXiv ID/URL"
+    );
+    std::process::exit(1);
+  }
+}
 
-  let data = match tread::fetch_paper(&id, kitty_supported) {
+fn open_arxiv(id: &str, kitty_supported: bool) {
+  eprintln!("fetching source for arXiv:{id} ...");
+  let data = match tread::fetch_paper(id, kitty_supported) {
     Ok(d) => d,
     Err(e) => {
       eprintln!("error: {e}");
       std::process::exit(1);
     }
   };
-
   let image_count: usize = data.blocks.iter().map(|b| match b {
     doc_model::Block::Image { .. } => 1,
     doc_model::Block::ImageRow { items, .. } => items.len(),
@@ -51,8 +56,40 @@ fn main() {
     "{} blocks ({} images, {} bibitems) — launching reader ...",
     data.blocks.len(), image_count, data.bibitems.len()
   );
+  if let Err(e) = tread::run(data.blocks, None, Some(id.to_string()), data.bibitems) {
+    eprintln!("reader error: {e}");
+    std::process::exit(1);
+  }
+}
 
-  if let Err(e) = tread::run(data.blocks, None, Some(id), data.bibitems) {
+fn open_local_file(path: &Path, _kitty_supported: bool) {
+  eprintln!("opening local file: {} ...", path.display());
+  let data = match tread::PaperData::from_path(path) {
+    Ok(d) => d,
+    Err(e) => {
+      eprintln!("error: {e}");
+      std::process::exit(1);
+    }
+  };
+  // Use the canonicalized absolute path as the persistence key so
+  // marks / highlights / cursor survive across invocations of the
+  // same file.  Unique per file; consistent with how arxiv uses ids.
+  let progress_key = std::fs::canonicalize(path)
+    .ok()
+    .and_then(|p| p.to_str().map(str::to_string));
+  // Synthesize a header-bar title from the file stem.  Authors empty.
+  let meta = path
+    .file_stem()
+    .and_then(|s| s.to_str())
+    .map(|stem| tread::PaperMeta {
+      title: stem.to_string(),
+      authors: String::new(),
+    });
+  eprintln!(
+    "{} blocks — launching reader ...",
+    data.blocks.len()
+  );
+  if let Err(e) = tread::run(data.blocks, meta, progress_key, data.bibitems) {
     eprintln!("reader error: {e}");
     std::process::exit(1);
   }
