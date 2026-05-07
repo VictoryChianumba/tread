@@ -79,6 +79,21 @@ struct Walker {
   /// True while we're inside <blockquote>; <p>/<div>/etc. defer
   /// their flush so the surrounding blockquote sees the spans.
   in_quote: bool,
+  /// Active table being built.  `None` outside any <table>; `Some`
+  /// from <table> open to </table> close.  Cell content is
+  /// collected as plain text (Block::Matrix's shape) — inline
+  /// styles inside cells are deliberately dropped, matching how
+  /// the arxiv path renders.  Nested tables are rare and currently
+  /// flatten to outer-cell text.
+  table: Option<TableState>,
+}
+
+#[derive(Default)]
+struct TableState {
+  rows: Vec<Vec<(String, usize)>>,
+  current_row: Vec<(String, usize)>,
+  /// Text accumulator for the current <td>/<th>.
+  current_cell: String,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -331,45 +346,68 @@ impl Walker {
           ..InlineSpan::default()
         });
       }
-      // Tables: flatten for now.  Each <tr>'s cells become a
-      // paragraph; <th> rows render with bold cells.  v2 maps to
-      // Block::Matrix once cell-shape conversion lands.
       "table" => {
         self.flush_paragraph();
+        // Nested tables: skip the inner one entirely — Matrix doesn't
+        // nest, and rendering the cells of the outer table doesn't
+        // need the inner structure.
+        if self.table.is_some() {
+          return;
+        }
+        self.table = Some(TableState::default());
         self.walk_children(el);
-        self.flush_paragraph();
+        if let Some(state) = self.table.take() {
+          if !state.rows.is_empty() {
+            self.blocks.push(Block::Matrix {
+              rows: state.rows,
+              vertical_rules: Vec::new(), // HTML has no per-column rules
+            });
+            self.blocks.push(Block::Blank);
+          }
+        }
       }
       "thead" | "tbody" | "tfoot" | "colgroup" => {
         self.walk_children(el);
       }
       "tr" => {
-        self.flush_paragraph();
+        if let Some(state) = self.table.as_mut() {
+          state.current_row.clear();
+        }
         self.walk_children(el);
-        self.flush_paragraph();
-      }
-      "td" => {
-        self.walk_children(el);
-        // Separate cells by " | " so a flat row reads as cells.
-        if !self.pending.is_empty() {
-          let last_text = self.pending.last().map(|s| s.text.clone()).unwrap_or_default();
-          if !last_text.ends_with(" | ") {
-            self.pending.push(InlineSpan {
-              text: " | ".to_string(),
-              ..InlineSpan::default()
-            });
+        if let Some(state) = self.table.as_mut() {
+          if !state.current_row.is_empty() {
+            let row = std::mem::take(&mut state.current_row);
+            state.rows.push(row);
           }
         }
       }
-      "th" => {
-        let prev = self.style.bold;
-        self.style.bold = true;
-        self.walk_children(el);
-        self.style.bold = prev;
-        if !self.pending.is_empty() {
-          self.pending.push(InlineSpan {
-            text: " | ".to_string(),
-            ..InlineSpan::default()
-          });
+      "td" | "th" => {
+        if self.table.is_some() {
+          let colspan = el
+            .value()
+            .attr("colspan")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1)
+            .max(1);
+          // Collect cell text via the existing helper, which already
+          // handles <br> as newline and skips script/style.
+          let mut buf = String::new();
+          collect_text(el, &mut buf, /* in_pre */ false);
+          let text = buf.trim().to_string();
+          if let Some(state) = self.table.as_mut() {
+            state.current_row.push((text, colspan));
+            state.current_cell.clear();
+          }
+        } else {
+          // Stray <td>/<th> outside a <table> — render as a regular
+          // paragraph so we don't drop content silently.  The bold
+          // applies for <th>; <td> stays unstyled.
+          let prev = self.style.bold;
+          if name == "th" {
+            self.style.bold = true;
+          }
+          self.walk_children(el);
+          self.style.bold = prev;
         }
       }
       // Default: recurse with current state — handles spans, divs,
@@ -598,6 +636,48 @@ let x = 1;</code></pre>"#,
       })
       .collect();
     assert!(!text.contains("   "), "got: {text}");
+  }
+
+  #[test]
+  fn table_emits_matrix_block_with_rows() {
+    let blocks = parse(
+      "<table><tr><th>Name</th><th>Score</th></tr>\
+       <tr><td>Alice</td><td>10</td></tr>\
+       <tr><td>Bob</td><td>20</td></tr></table>",
+    );
+    let m = blocks.iter().find_map(|b| match b {
+      Block::Matrix { rows, .. } => Some(rows.clone()),
+      _ => None,
+    });
+    let rows = m.expect("expected Matrix block");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0][0].0, "Name");
+    assert_eq!(rows[0][1].0, "Score");
+    assert_eq!(rows[1][0].0, "Alice");
+    assert_eq!(rows[2][1].0, "20");
+  }
+
+  #[test]
+  fn table_colspan_attribute_carried_through() {
+    let blocks = parse(
+      r#"<table><tr><td colspan="2">spanned</td><td>tail</td></tr></table>"#,
+    );
+    let rows = blocks
+      .iter()
+      .find_map(|b| match b {
+        Block::Matrix { rows, .. } => Some(rows.clone()),
+        _ => None,
+      })
+      .expect("expected Matrix");
+    assert_eq!(rows[0][0], ("spanned".to_string(), 2));
+    assert_eq!(rows[0][1], ("tail".to_string(), 1));
+  }
+
+  #[test]
+  fn empty_table_skipped() {
+    // <table></table> with no rows shouldn't emit a Matrix.
+    let blocks = parse("<p>before</p><table></table><p>after</p>");
+    assert!(!blocks.iter().any(|b| matches!(b, Block::Matrix { .. })));
   }
 
   #[test]

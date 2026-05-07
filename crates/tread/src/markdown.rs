@@ -65,6 +65,19 @@ struct Walker {
   in_quote: bool,
   /// Inside an item: when the item closes, flush as ListItem.
   in_item: bool,
+  /// Active table state.  pulldown-cmark emits TableHead / TableRow
+  /// / TableCell events; we accumulate cells per row and emit
+  /// Block::Matrix on the closing TableEnd.  Cell content is plain
+  /// text — Block::Matrix doesn't carry inline spans, same as the
+  /// HTML walker and the arxiv path.
+  table: Option<TableState>,
+}
+
+#[derive(Default)]
+struct TableState {
+  rows: Vec<Vec<(String, usize)>>,
+  current_row: Vec<(String, usize)>,
+  current_cell: String,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -152,6 +165,20 @@ impl Walker {
       Tag::Link { dest_url, .. } => {
         self.link_url = Some(dest_url.into_string());
       }
+      Tag::Table(_) => {
+        self.flush_pending();
+        self.table = Some(TableState::default());
+      }
+      Tag::TableHead | Tag::TableRow => {
+        if let Some(state) = self.table.as_mut() {
+          state.current_row.clear();
+        }
+      }
+      Tag::TableCell => {
+        if let Some(state) = self.table.as_mut() {
+          state.current_cell.clear();
+        }
+      }
       Tag::Image { dest_url: _, title, .. } => {
         // Tread doesn't fetch image bytes from URLs, so degrade to a
         // visible placeholder.  Local images would need the host to
@@ -237,6 +264,31 @@ impl Walker {
       TagEnd::Strong => self.style.bold = false,
       TagEnd::Strikethrough => self.style.strikethrough = false,
       TagEnd::Link => self.link_url = None,
+      TagEnd::Table => {
+        if let Some(state) = self.table.take() {
+          if !state.rows.is_empty() {
+            self.blocks.push(Block::Matrix {
+              rows: state.rows,
+              vertical_rules: Vec::new(),
+            });
+            self.blocks.push(Block::Blank);
+          }
+        }
+      }
+      TagEnd::TableHead | TagEnd::TableRow => {
+        if let Some(state) = self.table.as_mut() {
+          if !state.current_row.is_empty() {
+            let row = std::mem::take(&mut state.current_row);
+            state.rows.push(row);
+          }
+        }
+      }
+      TagEnd::TableCell => {
+        if let Some(state) = self.table.as_mut() {
+          let text = std::mem::take(&mut state.current_cell);
+          state.current_row.push((text.trim().to_string(), 1));
+        }
+      }
       _ => {}
     }
   }
@@ -244,6 +296,12 @@ impl Walker {
   fn text(&mut self, text: String) {
     if let Some(cb) = self.code_block.as_mut() {
       cb.buf.push_str(&text);
+      return;
+    }
+    // Inside a table cell, text accumulates into the cell buffer
+    // (Block::Matrix takes plain Strings, not styled spans).
+    if let Some(state) = self.table.as_mut() {
+      state.current_cell.push_str(&text);
       return;
     }
     self.pending.push(InlineSpan {
@@ -407,5 +465,29 @@ mod tests {
   #[test]
   fn at_least_one_block_for_simple_doc() {
     assert!(block_count("# Title\n\nSome text.") >= 2);
+  }
+
+  #[test]
+  fn pipe_table_emits_matrix_block_with_rows() {
+    let md = "\
+| Name  | Score |
+|-------|-------|
+| Alice | 10    |
+| Bob   | 20    |
+";
+    let blocks = parse(md);
+    let rows = blocks
+      .iter()
+      .find_map(|b| match b {
+        Block::Matrix { rows, .. } => Some(rows.clone()),
+        _ => None,
+      })
+      .expect("expected Matrix block from pipe table");
+    // Header + two body rows.
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0][0].0, "Name");
+    assert_eq!(rows[0][1].0, "Score");
+    assert_eq!(rows[1][0].0, "Alice");
+    assert_eq!(rows[2][1].0, "20");
   }
 }
