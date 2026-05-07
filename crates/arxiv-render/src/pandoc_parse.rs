@@ -605,46 +605,81 @@ fn walk_blocks(
 // ── Para → Block ──────────────────────────────────────────────────────────────
 
 fn para_to_block(inlines: &[Value], counters: &mut SectionCounters) -> Vec<Block> {
-    // Check for a lone DisplayMath inline (possibly surrounded by whitespace).
-    let meaningful: Vec<&Value> = inlines
+    // Find every DisplayMath inline in the stream.  arxiv source
+    // commonly puts equation environments inside text Paras without
+    // blank lines around them — pandoc reads that as one Para with
+    // [text, Math DisplayMath, text, ...].  We split such Paras so
+    // each equation renders centred on its own line with its
+    // equation number, and the surrounding prose flows around it
+    // as separate StyledLine blocks.  Lone DisplayMath (no prose
+    // around it) is the empty-surround case of the same code path.
+    let display_indices: Vec<usize> = inlines
         .iter()
-        .filter(|n| !matches!(n["t"].as_str(), Some("Space") | Some("SoftBreak")))
+        .enumerate()
+        .filter_map(|(i, n)| {
+            if n["t"].as_str() == Some("Math")
+                && n["c"][0]["t"].as_str() == Some("DisplayMath")
+            {
+                Some(i)
+            } else {
+                None
+            }
+        })
         .collect();
 
-    if meaningful.len() == 1 {
-        let node = meaningful[0];
-        if node["t"].as_str() == Some("Math")
-            && node["c"][0]["t"].as_str() == Some("DisplayMath")
-        {
-            let latex = node["c"][1].as_str().unwrap_or("");
-            // Pandoc keeps `\label{}` inside the raw math source — it's
-            // never lifted to attr.  Scan for it so `\ref{eq:X}` resolves.
-            let mut blocks: Vec<Block> = Vec::new();
-            if let Some(label) = extract_math_label(latex) {
-                blocks.push(Block::Anchor(label));
+    if display_indices.is_empty() {
+        // No display math at all — original prose path.
+        let spans = walk_inlines_spans(inlines);
+        if spans.is_empty() {
+            return vec![Block::Blank];
+        }
+        return vec![Block::StyledLine(spans)];
+    }
+
+    // Walk segments: prose-before each DisplayMath → StyledLine,
+    // then the math itself → DisplayMath, then continue with the
+    // remainder.  Trailing prose after the last DisplayMath flushes
+    // at the end.  Empty segments (whitespace-only) are dropped via
+    // walk_inlines_spans's existing filtering.
+    let mut out: Vec<Block> = Vec::new();
+    let mut cursor = 0usize;
+    for &di in &display_indices {
+        if cursor < di {
+            let before_spans = walk_inlines_spans(&inlines[cursor..di]);
+            if !before_spans.is_empty() {
+                out.push(Block::StyledLine(before_spans));
+                out.push(Block::Blank);
             }
-            let rendered = render_math(latex);
-            let lines: Vec<String> = rendered.lines().map(|l| l.to_string()).collect();
-            // Assign equation number based on env type.  Numbered envs
-            // (equation, align, gather, eqnarray, multline) bump the
-            // counter; starred variants and bare display-math like
-            // `\[…\]` don't.  v2 will handle `\notag`/`\nonumber`
-            // suppression of individual rows.
-            let count = equation_count_for_source(latex);
-            let num = if count > 0 { Some(counters.bump_equation(count) as usize) } else { None };
-            blocks.push(Block::DisplayMath { lines, num });
-            return blocks;
+        }
+        let math_node = &inlines[di];
+        let latex = math_node["c"][1].as_str().unwrap_or("");
+        if let Some(label) = extract_math_label(latex) {
+            out.push(Block::Anchor(label));
+        }
+        let rendered = render_math(latex);
+        let lines: Vec<String> = rendered.lines().map(|l| l.to_string()).collect();
+        let count = equation_count_for_source(latex);
+        let num = if count > 0 {
+            Some(counters.bump_equation(count) as usize)
+        } else {
+            None
+        };
+        out.push(Block::DisplayMath { lines, num });
+        cursor = di + 1;
+    }
+    // Trailing prose after the last DisplayMath, if any.
+    if cursor < inlines.len() {
+        let after_spans = walk_inlines_spans(&inlines[cursor..]);
+        if !after_spans.is_empty() {
+            out.push(Block::Blank);
+            out.push(Block::StyledLine(after_spans));
         }
     }
 
-    let spans = walk_inlines_spans(inlines);
-    if spans.is_empty() {
+    if out.is_empty() {
         return vec![Block::Blank];
     }
-
-    // Always use StyledLine so build_visual_lines wraps the text to terminal_width.
-    // Block::Line assumes the producer already wrapped it; Pandoc gives us full paragraphs.
-    vec![Block::StyledLine(spans)]
+    out
 }
 
 /// Scan a display-math LaTeX source for the first `\label{X}`.  Used to
@@ -1948,6 +1983,132 @@ pub(crate) fn parse_column_spec(spec: &str) -> Option<(usize, Vec<usize>)> {
         }
     }
     Some((col_count, rules))
+}
+
+#[cfg(test)]
+mod para_to_block_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn str_inline(s: &str) -> Value {
+        json!({"t": "Str", "c": s})
+    }
+    fn space() -> Value {
+        json!({"t": "Space"})
+    }
+    fn display_math(latex: &str) -> Value {
+        json!({"t": "Math", "c": [{"t": "DisplayMath"}, latex]})
+    }
+
+    fn block_kind(b: &Block) -> &'static str {
+        match b {
+            Block::Line(_) => "Line",
+            Block::DisplayMath { .. } => "DisplayMath",
+            Block::Header { .. } => "Header",
+            Block::Matrix { .. } => "Matrix",
+            Block::Blank => "Blank",
+            Block::StyledLine(_) => "StyledLine",
+            Block::ListItem { .. } => "ListItem",
+            Block::CodeBlock { .. } => "CodeBlock",
+            Block::Rule => "Rule",
+            Block::Quote(_) => "Quote",
+            Block::Anchor(_) => "Anchor",
+            Block::Image { .. } => "Image",
+            Block::ImageRow { .. } => "ImageRow",
+        }
+    }
+
+    #[test]
+    fn lone_display_math_emits_centered_block() {
+        // Regression coverage for the existing fast path.  A Para
+        // containing only a DisplayMath inline should produce a
+        // Block::DisplayMath, not a StyledLine.
+        let inlines = vec![display_math("x = y")];
+        let mut counters = SectionCounters::new();
+        let blocks = para_to_block(&inlines, &mut counters);
+        assert!(
+            blocks.iter().any(|b| matches!(b, Block::DisplayMath { .. })),
+            "expected DisplayMath block, got kinds: {:?}",
+            blocks.iter().map(block_kind).collect::<Vec<_>>()
+        );
+        assert!(!blocks.iter().any(|b| matches!(b, Block::StyledLine(_))));
+    }
+
+    #[test]
+    fn mixed_para_splits_text_math_text() {
+        // The bug: arxiv source like
+        //   "... cross-attention layers:
+        //    \begin{equation}Z = f(x)\end{equation}
+        //    When discussing..."
+        // (no blank lines around the equation) parses as ONE Para
+        // with inlines [text, Math DisplayMath, text].  The old fast
+        // path only recognized lone-DisplayMath, so the math
+        // rendered inline with the surrounding prose.  Now we split.
+        let inlines = vec![
+            str_inline("layers:"),
+            display_math("Z = f(x)"),
+            str_inline("When"),
+            space(),
+            str_inline("discussing..."),
+        ];
+        let mut counters = SectionCounters::new();
+        let blocks = para_to_block(&inlines, &mut counters);
+
+        let has_display_math = blocks
+            .iter()
+            .any(|b| matches!(b, Block::DisplayMath { .. }));
+        let before_styled = blocks.iter().any(|b| match b {
+            Block::StyledLine(spans) => {
+                spans.iter().any(|s| s.text.contains("layers"))
+            }
+            _ => false,
+        });
+        let after_styled = blocks.iter().any(|b| match b {
+            Block::StyledLine(spans) => {
+                spans.iter().any(|s| s.text.contains("discussing"))
+            }
+            _ => false,
+        });
+        let kinds: Vec<&str> = blocks.iter().map(block_kind).collect();
+        assert!(
+            has_display_math,
+            "expected a DisplayMath block; got kinds: {kinds:?}"
+        );
+        assert!(
+            before_styled,
+            "expected a StyledLine carrying the prose before the math; got kinds: {kinds:?}"
+        );
+        assert!(
+            after_styled,
+            "expected a StyledLine carrying the prose after the math; got kinds: {kinds:?}"
+        );
+
+        // Order check: before-text, then math, then after-text.
+        let before_idx = blocks
+            .iter()
+            .position(|b| matches!(b, Block::StyledLine(s) if s.iter().any(|x| x.text.contains("layers"))))
+            .expect("before idx");
+        let math_idx = blocks
+            .iter()
+            .position(|b| matches!(b, Block::DisplayMath { .. }))
+            .expect("math idx");
+        let after_idx = blocks
+            .iter()
+            .position(|b| matches!(b, Block::StyledLine(s) if s.iter().any(|x| x.text.contains("discussing"))))
+            .expect("after idx");
+        assert!(before_idx < math_idx, "before-text must precede math");
+        assert!(math_idx < after_idx, "math must precede after-text");
+    }
+
+    #[test]
+    fn empty_para_returns_blank() {
+        // Sanity: empty inline list still produces Block::Blank, not panic.
+        let inlines: Vec<Value> = vec![];
+        let mut counters = SectionCounters::new();
+        let blocks = para_to_block(&inlines, &mut counters);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(blocks[0], Block::Blank));
+    }
 }
 
 #[cfg(test)]
