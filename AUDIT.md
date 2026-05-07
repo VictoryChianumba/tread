@@ -94,3 +94,48 @@ Three Explore agents (May 2026 session):
 Plus one bash run: `./target/release/tread 2605.04035 → exit 0, 386 blocks, 19 images, 0 bibitems` — confirmed B3 reproduces and gave concrete evidence.
 
 Cross-referenced and deduplicated into the 27 items above.
+
+---
+
+## Z. Last-priority fix candidate — image-emit corruption ("AAAA walls")
+
+**Refines B8.** On `2605.04035` (and possibly other image-heavy papers), running standalone tread doesn't just produce blank gaps — it produces visible walls of `'A'` characters (sometimes other base64 alphabet chars) interspersed with the document text. Looks like a "crash car" render: text + random AAAA blocks scattered through the content area where figures should sit.
+
+### Root cause hypothesis
+
+The `'A'` walls are almost certainly the kitty graphics protocol payload being **printed as text instead of decoded as escape sequences**:
+
+1. The kitty graphics protocol wraps base64-encoded PNG bytes in APC escapes: `\x1b_G...,;<base64 payload>\x1b\\`.
+2. Base64's value-zero character is `'A'`. A long run of `'A'`s = a long run of zero bytes in the underlying image (very common: PNG zlib padding, transparent regions, image header padding).
+3. If the terminal doesn't process the escape — tmux passthrough off, malformed sequence, or the terminal lacks support — the payload appears in the text buffer instead of as pixels.
+
+### Why specific to 2605.04035 (not Attention)
+
+- 2605.04035's PDF figures convert to PNGs with heavy zero-padding (large white-background figures with sparse content). Their base64 has long `'A'` runs.
+- Attention paper figures convert to denser PNGs without obvious zero-runs, so the same bug — if present — produces a less-visible failure (just weird-looking absent figures rather than visible AAAA walls).
+- This means **the underlying bug may affect Attention too**, just less visibly.
+
+### Diagnostic candidates (order of likelihood)
+
+1. **Tmux passthrough disabled.** First check: `tmux show -g allow-passthrough`. If off, every kitty escape gets dumped as text. Cheapest possible fix. Tread's startup hint already flags this; user may have ignored.
+2. **Kitty escape framing bug for chunked images.** kitty-graphics protocol uses `m=1` (more) and `m=0` (last) for chunked emission. If chunking is broken at certain image sizes, the terminal sees an unterminated escape and gives up. Inspect `kitty-graphics/src/transmit.rs` chunking path.
+3. **Malformed payload from PNG conversion.** `pdftoppm` may produce PNGs that the terminal can't decode for these specific images. Test by manually viewing the cached PNGs at `~/.cache/tread/figures/`.
+4. **Capability over-detection.** Tread might be detecting kitty support when the actual terminal doesn't fully support it. Verify `kitty_graphics::detect()` logic — does it check for full kitty protocol support, or just "looks like iTerm2"?
+
+### Why this is deferred to last
+
+- Likely fixed serendipitously by the tmux passthrough config check (no code change required).
+- Investigation needs interactive runs in real terminals — hard to scope upfront.
+- Most other Tier 1 / 2 / 3 fixes are more deterministic and self-contained.
+
+### Implication for the active fix plan
+
+**S3 (wire `tread::after_draw` in trench) should follow this fix, not parallel it.** Wiring `after_draw` while this bug remains will propagate the AAAA walls into trench too, where they currently appear as blank gaps. Updating the plan ordering before working S3 is a one-line edit.
+
+### Reproduction sketch
+
+1. Run `./target/release/tread 2605.04035` in iTerm2 (likely inside tmux with passthrough off).
+2. Observe text + walls of `A` characters in the figure regions.
+3. Repeat with `tmux show -g allow-passthrough` confirmed `on` (or run outside tmux entirely) — likely fixes the symptom.
+
+If outside-tmux still shows AAAA walls, the bug is in tread/kitty-graphics, not tmux. That's the worth-investigating case.
