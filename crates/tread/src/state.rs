@@ -353,6 +353,24 @@ impl Reader {
     matches!(self.mode, Mode::Normal)
   }
 
+  /// Stop voice playback and clear every per-Reader voice flag.
+  /// Hosts call this when the user navigates away from the reader
+  /// (tab close, tab switch, leave-reader) so audio doesn't continue
+  /// after the source it was reading is no longer in focus.
+  /// Identical to the cleanup path the in-reader `Esc` keybinding
+  /// already runs, but exposed as a method so trench can trigger it
+  /// from its tab-management handlers without duplicating the field
+  /// reset logic.  Idempotent.
+  pub fn exit_voice_mode(&mut self) {
+    if let Some(vc) = &self.voice_controller {
+      vc.stop();
+    }
+    self.voice_started_at = None;
+    self.voice_started_session = None;
+    self.reading_mode = false;
+    self.continuous_reading = false;
+  }
+
   /// Persist this paper's reading position, bookmarks, and highlights.
   /// No-op when no `arxiv_id` is set.  Hosts call this on tab close /
   /// clean exit; safe to call multiple times.
