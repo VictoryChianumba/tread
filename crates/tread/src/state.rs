@@ -149,6 +149,15 @@ pub struct Reader {
   /// by `:reload` to decide between absolute image paths and degraded
   /// captions.  Set once at construction; doesn't change at runtime.
   pub kitty_supported: bool,
+  /// Saved reading-position offset waiting to be applied.  Set by
+  /// `Reader::init` when persistence has a stored offset for this
+  /// paper; consumed by the first `resize()` call once we know the
+  /// real terminal/pane dimensions and `visual_lines` has been
+  /// rebuilt at that width.  Without this defer, `init` would clamp
+  /// the saved offset against the placeholder 80×24 reflow's
+  /// `total_lines` and the user would land a few lines off where
+  /// they left.
+  pending_progress_offset: Option<usize>,
 
   // ── Voice / TTS playback state ──────────────────────────────────────────
   // All fields are `None` / `false` / `Idle` when voice is inactive.  The
@@ -263,6 +272,7 @@ impl Reader {
       image_paths,
       arxiv_id: None,
       kitty_supported: false,
+      pending_progress_offset: None,
       // Voice fields default to "no playback in progress."  The
       // controller is wired in `Reader::init` (or post-construction by
       // tests); leaving it None here lets tests skip audio entirely.
@@ -320,8 +330,12 @@ impl Reader {
     if let Some(ref key) = progress_key {
       let map = crate::progress::load();
       if let Some(p) = map.get(key) {
-        let max_offset = reader.total_lines().saturating_sub(1);
-        reader.offset = p.offset.min(max_offset);
+        // Defer the offset clamp until the first `resize()` call so
+        // it lands against the real terminal/pane width's reflow.
+        // Clamping here against the placeholder 80×24 visual_lines
+        // would put the user a few lines off saved position when
+        // the actual pane is wider or narrower.
+        reader.pending_progress_offset = Some(p.offset);
       }
       reader.bookmarks = crate::bookmarks::load(key).named;
       reader.highlights = crate::highlights::load(key);
@@ -418,6 +432,16 @@ impl Reader {
     let w = width as usize;
     let h = height as usize;
     if self.width == w && self.height == h {
+      // No reflow needed.  But if a pending saved-position offset is
+      // still waiting (e.g. host called resize with the same width
+      // it constructed at), apply it now anyway against the current
+      // visual_lines — at least the offset clamps against THIS
+      // width's total, which is closer to right than init's clamp.
+      if let Some(saved_offset) = self.pending_progress_offset.take() {
+        let max_offset = self.total_lines().saturating_sub(1);
+        self.offset = saved_offset.min(max_offset);
+        self.clamp_position();
+      }
       return;
     }
     self.width = w;
@@ -429,6 +453,16 @@ impl Reader {
     self.label_lines = ll;
     self.bib_entries = be;
     self.bib_entry_lines = bel;
+    // Apply any deferred saved-position offset against the new reflow
+    // BEFORE clamp_position() runs — clamp_position() is what would
+    // otherwise discard a saved offset that's larger than the new
+    // total_lines.  take() ensures this only fires on the first
+    // resize after init; subsequent resizes leave the user's
+    // current offset alone.
+    if let Some(saved_offset) = self.pending_progress_offset.take() {
+      let max_offset = self.total_lines().saturating_sub(1);
+      self.offset = saved_offset.min(max_offset);
+    }
     self.clamp_position();
   }
 
