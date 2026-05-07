@@ -34,6 +34,13 @@ pdf-extract = "0.7"
 # in-memory entry point.
 epub = "2.1"
 html2text = "0.15"
+# HTML ingestion (B4).  scraper wraps html5ever — robust standard
+# parser used across the Rust ecosystem.  We walk the resulting DOM
+# and emit tread blocks (Header / StyledLine / ListItem / CodeBlock
+# / Quote / Rule) so HTML content renders structured rather than
+# flattened to plain text.
+scraper = "0.20"
+ego-tree = "0.6"
 # Voice / TTS subsystem.
 rodio = "0.19"
 ureq = { version = "2.12", features = ["json"] }

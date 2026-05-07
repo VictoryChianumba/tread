@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod epub;
 mod highlights;
+mod html;
 mod images;
 mod markdown;
 mod nav;
@@ -142,6 +143,31 @@ impl PaperData {
     })
   }
 
+  /// Build a `PaperData` from an HTML document.  Walks the parsed
+  /// DOM (via `html5ever` through the `scraper` crate) and emits
+  /// the same Block tree the other paths produce — headers, lists,
+  /// code blocks, blockquotes, images-as-placeholders, links carry
+  /// their `href` on the span, inline bold/italic/monospace/strike.
+  ///
+  /// Hosts that pre-clean noisy pages with `readability` should
+  /// pass the cleaned HTML here.  Tread doesn't error on malformed
+  /// HTML — html5ever applies the standard browser repair, so at
+  /// worst this returns an empty Vec.
+  ///
+  /// Out of scope (v2 backlog):
+  /// - Tables: render flattened (one row per paragraph) rather
+  ///   than as Block::Matrix; cell-shape conversion is its own task.
+  /// - Inline images: degrade to `[Image: alt]` placeholders.
+  ///   Hosts that want pixel rendering need to download bytes and
+  ///   integrate with the image_paths flow.
+  pub fn from_html(html: &str) -> Self {
+    Self {
+      blocks: html::html_to_blocks(html),
+      bibitems: HashMap::new(),
+      asset_dir: std::path::PathBuf::new(),
+    }
+  }
+
   /// Build a `PaperData` from a local file path.  Reads the file
   /// once, sniffs the extension (case-insensitive), and dispatches
   /// to the matching `from_*` builder.  Unknown / missing extensions
@@ -151,8 +177,7 @@ impl PaperData {
   /// - `.md`, `.markdown`           → from_markdown
   /// - `.pdf`                       → from_pdf_bytes
   /// - `.epub`                      → from_epub_bytes
-  /// - `.html`, `.htm`              → from_plain_lines for now
-  ///                                  (auto-upgrades to from_html when B4 lands)
+  /// - `.html`, `.htm`              → from_html
   /// - `.txt` / unknown / no ext    → from_plain_lines
   ///
   /// Errors propagate from the underlying builder (parse failures,
@@ -174,11 +199,15 @@ impl PaperData {
           .map_err(|e| format!("{}: invalid UTF-8 ({e})", path.display()))?;
         Ok(Self::from_markdown(&text))
       }
+      Some("html") | Some("htm") => {
+        let text = String::from_utf8(bytes)
+          .map_err(|e| format!("{}: invalid UTF-8 ({e})", path.display()))?;
+        Ok(Self::from_html(&text))
+      }
       _ => {
-        // .html / .htm / .txt / unknown / none — read as text and
-        // emit one Block::Line per line.  HTML upgrades when B4
-        // lands; for now tags appear as visible text but content
-        // is at least readable.
+        // .txt / unknown / no ext — read as text and emit one
+        // Block::Line per line.  Best-effort fallback so any text
+        // file still opens.
         let text = String::from_utf8(bytes)
           .map_err(|e| format!("{}: invalid UTF-8 ({e})", path.display()))?;
         let lines: Vec<String> =
