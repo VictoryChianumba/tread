@@ -365,6 +365,193 @@ pub fn clear_images(state: &mut ImageState) {
   images::clear_all(state);
 }
 
+/// Fetch a URL and parse into `PaperData`, auto-detecting the format.
+/// One-call entry point for embedding hosts that don't want to manage
+/// the URL → format → builder chain themselves; standalone tread
+/// uses it for `tread <https://...>` invocations.
+///
+/// Detection order:
+/// 1. arXiv URL pattern via `extract_arxiv_id` → `fetch_paper`
+///    (gets the full LaTeX path with math / tables / figures).
+/// 2. URL path extension (`.pdf`, `.epub`, `.md`, `.markdown`,
+///    `.html`, `.htm`, `.txt`) — fast and reliable when present.
+/// 3. HTTP `Content-Type` header — fallback for clean URLs that
+///    don't expose a file extension.
+/// 4. Default: treat the body as HTML.  Browsers do the same when
+///    Content-Type is missing or generic.
+///
+/// Network-bound; runs synchronously like `fetch_paper` does.
+/// Hosts that need non-blocking ingestion should background this
+/// on a worker thread (see trench's existing fulltext pipeline).
+pub fn fetch_any(url: &str) -> Result<PaperData, String> {
+  // 1. arXiv fast path.  fetch_paper handles its own HTTP and
+  // returns a richer PaperData (bibitems, asset_dir for images).
+  if let Some(id) = extract_arxiv_id(url) {
+    let kitty_supported = matches!(
+      kitty_graphics::detect(),
+      kitty_graphics::Capability::Supported
+    );
+    return fetch_paper(&id, kitty_supported);
+  }
+
+  // 2. URL extension sniff before the HTTP roundtrip.
+  let path_part = url.split('?').next().unwrap_or(url);
+  let ext = std::path::Path::new(path_part)
+    .extension()
+    .and_then(|e| e.to_str())
+    .map(|e| e.to_ascii_lowercase());
+
+  // 3. Fetch the body.  ureq's call() returns Err for non-2xx, so
+  // we propagate that as a clean error string.
+  let resp = ureq::get(url)
+    .call()
+    .map_err(|e| format!("fetch {url}: {e}"))?;
+  let content_type = resp
+    .header("content-type")
+    .unwrap_or("")
+    .to_ascii_lowercase();
+
+  let mut bytes: Vec<u8> = Vec::new();
+  use std::io::Read;
+  resp
+    .into_reader()
+    .read_to_end(&mut bytes)
+    .map_err(|e| format!("read body of {url}: {e}"))?;
+
+  // 4. Pick a parser based on extension first, then Content-Type,
+  // then fall through to HTML.
+  let format = ext
+    .as_deref()
+    .and_then(format_from_extension)
+    .or_else(|| format_from_content_type(&content_type))
+    .unwrap_or(Format::Html);
+
+  match format {
+    Format::Pdf => PaperData::from_pdf_bytes(&bytes),
+    Format::Epub => PaperData::from_epub_bytes(&bytes),
+    Format::Markdown => {
+      let text = String::from_utf8(bytes)
+        .map_err(|e| format!("{url}: invalid UTF-8 ({e})"))?;
+      Ok(PaperData::from_markdown(&text))
+    }
+    Format::Html => {
+      let text = String::from_utf8(bytes)
+        .map_err(|e| format!("{url}: invalid UTF-8 ({e})"))?;
+      Ok(PaperData::from_html(&text))
+    }
+    Format::PlainText => {
+      let text = String::from_utf8(bytes)
+        .map_err(|e| format!("{url}: invalid UTF-8 ({e})"))?;
+      let lines: Vec<String> =
+        text.split('\n').map(|l| l.trim_end().to_string()).collect();
+      Ok(PaperData::from_plain_lines(lines))
+    }
+  }
+}
+
+#[derive(Clone, Copy)]
+enum Format {
+  Pdf,
+  Epub,
+  Markdown,
+  Html,
+  PlainText,
+}
+
+fn format_from_extension(ext: &str) -> Option<Format> {
+  Some(match ext {
+    "pdf" => Format::Pdf,
+    "epub" => Format::Epub,
+    "md" | "markdown" => Format::Markdown,
+    "html" | "htm" => Format::Html,
+    "txt" => Format::PlainText,
+    _ => return None,
+  })
+}
+
+fn format_from_content_type(ct: &str) -> Option<Format> {
+  // Strip any `; charset=…` suffix browsers append.
+  let base = ct.split(';').next().unwrap_or("").trim();
+  Some(match base {
+    "application/pdf" => Format::Pdf,
+    "application/epub+zip" => Format::Epub,
+    "text/markdown" | "text/x-markdown" => Format::Markdown,
+    "text/html" | "application/xhtml+xml" => Format::Html,
+    "text/plain" => Format::PlainText,
+    _ => return None,
+  })
+}
+
+#[cfg(test)]
+mod fetch_any_tests {
+  use super::*;
+
+  fn fmt_disc(f: Format) -> &'static str {
+    match f {
+      Format::Pdf => "pdf",
+      Format::Epub => "epub",
+      Format::Markdown => "markdown",
+      Format::Html => "html",
+      Format::PlainText => "txt",
+    }
+  }
+
+  #[test]
+  fn extension_dispatch_covers_known_formats() {
+    let cases = [
+      ("pdf", "pdf"),
+      ("epub", "epub"),
+      ("md", "markdown"),
+      ("markdown", "markdown"),
+      ("html", "html"),
+      ("htm", "html"),
+      ("txt", "txt"),
+    ];
+    for (ext, want) in cases {
+      let got = format_from_extension(ext)
+        .unwrap_or_else(|| panic!("ext {ext} returned None"));
+      assert_eq!(fmt_disc(got), want, "extension {ext}");
+    }
+  }
+
+  #[test]
+  fn extension_unknown_returns_none() {
+    assert!(format_from_extension("xyz").is_none());
+    assert!(format_from_extension("").is_none());
+  }
+
+  #[test]
+  fn content_type_dispatch_covers_known_mimes() {
+    let cases = [
+      ("application/pdf", "pdf"),
+      ("application/epub+zip", "epub"),
+      ("text/markdown", "markdown"),
+      ("text/x-markdown", "markdown"),
+      ("text/html", "html"),
+      ("application/xhtml+xml", "html"),
+      ("text/plain", "txt"),
+    ];
+    for (ct, want) in cases {
+      let got = format_from_content_type(ct)
+        .unwrap_or_else(|| panic!("ct {ct} returned None"));
+      assert_eq!(fmt_disc(got), want, "ct {ct}");
+    }
+  }
+
+  #[test]
+  fn content_type_charset_suffix_ignored() {
+    let f = format_from_content_type("text/html; charset=utf-8")
+      .expect("charset-suffixed text/html should resolve");
+    assert_eq!(fmt_disc(f), "html");
+  }
+
+  #[test]
+  fn content_type_unknown_returns_none() {
+    assert!(format_from_content_type("application/octet-stream").is_none());
+    assert!(format_from_content_type("").is_none());
+  }
+}
+
 /// Build a shared TTS playback controller from the saved voice config
 /// plus the env-only `ELEVENLABS_API_KEY`.  Hosts call this once at
 /// app startup and `clone()` the returned `Arc` into every Reader tab

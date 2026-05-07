@@ -22,18 +22,44 @@ fn main() {
   }
   let kitty_supported = matches!(kitty_capability, kitty_graphics::Capability::Supported);
 
-  // Two routing branches: existing file path on disk wins over arxiv-id
-  // detection (arxiv ids look like 1706.03762 — also a valid path
-  // shape, so explicit existence-check first avoids surprises).
+  // Routing precedence:
+  // 1. existing file path on disk (arxiv ids look like 1706.03762 —
+  //    a valid file path shape, so explicit existence wins);
+  // 2. arxiv id or arxiv URL — fast-path with `fetch_paper`;
+  // 3. any other http(s) URL — auto-format-detected via fetch_any.
   let path = Path::new(&arg);
   if path.exists() && path.is_file() {
     open_local_file(path, kitty_supported);
   } else if let Some(id) = tread::extract_arxiv_id(&arg) {
     open_arxiv(&id, kitty_supported);
+  } else if arg.starts_with("http://") || arg.starts_with("https://") {
+    open_url(&arg);
   } else {
     eprintln!(
-      "error: {arg:?} is neither an existing file nor a valid arXiv ID/URL"
+      "error: {arg:?} is neither an existing file, a valid arXiv ID/URL, \
+       nor an http(s) URL"
     );
+    std::process::exit(1);
+  }
+}
+
+fn open_url(url: &str) {
+  eprintln!("fetching {url} ...");
+  let data = match tread::fetch_any(url) {
+    Ok(d) => d,
+    Err(e) => {
+      eprintln!("error: {e}");
+      std::process::exit(1);
+    }
+  };
+  // Use the URL itself as the persistence key — same identity
+  // across re-opens of the same page so marks/highlights survive.
+  eprintln!(
+    "{} blocks — launching reader ...",
+    data.blocks.len()
+  );
+  if let Err(e) = tread::run(data.blocks, None, Some(url.to_string()), data.bibitems) {
+    eprintln!("reader error: {e}");
     std::process::exit(1);
   }
 }
