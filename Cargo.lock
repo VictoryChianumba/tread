@@ -95,6 +95,7 @@ dependencies = [
  "doc-model",
  "flate2",
  "kitty-graphics",
+ "log",
  "math-render",
  "reqwest",
  "serde_json",

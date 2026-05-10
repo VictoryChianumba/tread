@@ -44,7 +44,12 @@ pub fn lift_tables(blocks: Vec<Block>, anchors: &[TableAnchor]) -> Vec<Block> {
     let group_idx = match anchor.table_number.checked_sub(1) {
       Some(i) if i < groups.len() => i,
       _ => {
-        eprintln!(
+        // log::debug! instead of eprintln! — when this crate is
+        // embedded in a TUI host (trench) that has already entered
+        // alt-screen, eprintln writes land directly on the terminal
+        // and bypass ratatui's buffer, leaving stray text the next
+        // diff-paint never overwrites.
+        log::debug!(
           "placement: Table {} has no matching parsed Matrix group ({} groups in source)",
           anchor.table_number, groups.len()
         );
@@ -54,13 +59,13 @@ pub fn lift_tables(blocks: Vec<Block>, anchors: &[TableAnchor]) -> Vec<Block> {
     match find_anchor_target(&blocks, &groups, &anchor.anchor_preview) {
       Some(t) => {
         targets[group_idx] = Some(t);
-        eprintln!(
+        log::debug!(
           "placement: Table {} → block {} (anchor «{}»)",
           anchor.table_number, t, anchor.anchor_preview
         );
       }
       None => {
-        eprintln!(
+        log::debug!(
           "placement: Table {} anchor «{}» did not match any block; leaving in source order",
           anchor.table_number, anchor.anchor_preview
         );
