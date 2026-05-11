@@ -32,16 +32,12 @@ use ratatui::layout::Rect;
 
 use crate::state::Reader;
 
-/// Keep single-shot Kitty payloads within the empirically safe window
-/// for the current tmux/iTerm2 passthrough path.  `transmit_and_place`
-/// sends one unchunked base64 APC sequence; working paper figures are
-/// typically <= ~150–300 KB raw PNG, while many missing figures were
-/// still ~850–930 KB after the first normalization attempt.  This cap
-/// deliberately stays below the `transmit.rs` note that the current
-/// path is only proven for roughly 150–500 KB encoded payloads; raising
-/// it again likely requires chunked APC support or a different protocol
-/// variant instead of a larger round-number budget.
-const MAX_INLINE_PNG_BYTES: usize = 300_000;
+// `kitty_graphics::transmit_byte_cap()` returns the raw-PNG ceiling for
+// the active terminal: the conservative 300 KB used to be a const here,
+// but the cap is really an iTerm2 single-APC constraint — native Kitty
+// (when not inside tmux) tolerates much larger payloads, so we let the
+// detection layer decide.  See that function's docs for the full
+// rationale and override behaviour.
 
 /// Frame-to-frame image bookkeeping for the post-draw injector.
 ///
@@ -292,7 +288,7 @@ fn resolve_png(path: &Path) -> std::io::Result<Vec<u8>> {
 }
 
 fn normalize_png_for_terminal(path: &Path, png_bytes: Vec<u8>) -> std::io::Result<Vec<u8>> {
-  normalize_png_for_terminal_with_limit(path, png_bytes, MAX_INLINE_PNG_BYTES)
+  normalize_png_for_terminal_with_limit(path, png_bytes, kitty_graphics::transmit_byte_cap())
 }
 
 fn normalize_png_for_terminal_with_limit(

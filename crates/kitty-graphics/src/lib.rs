@@ -106,6 +106,37 @@ pub fn in_tmux() -> bool {
   std::env::var_os("TMUX").is_some()
 }
 
+/// Maximum *raw PNG* bytes we'll feed into a single `transmit_and_place`
+/// call.  The normalizer downscales anything larger to fit.
+///
+/// The cap is iTerm2-shaped, not Kitty-shaped: iTerm2's protocol
+/// implementation silently drops continuation chunks of an APC sequence
+/// (see `transmit.rs`), so the whole payload has to fit in one
+/// unchunked APC.  Empirically that's good for ~150–500 KB encoded
+/// (≈300 KB raw PNG after base64 expansion + tmux DCS overhead).
+///
+/// Native Kitty's parser has no equivalent single-APC restriction, so
+/// when we know we're on the unwrapped native path — `KITTY_WINDOW_ID`
+/// set and **not** inside tmux — we raise the cap so larger paper
+/// figures (the 850–930 KB cases noted in `images.rs`) render at their
+/// source fidelity instead of being downscaled.
+///
+/// Override: `TREAD_DISABLE_KITTY_GRAPHICS` already forces the path off
+/// entirely; this function deliberately doesn't take an override of its
+/// own — if the larger cap ever misbehaves on a specific Kitty build,
+/// the user can drop into tmux to fall back to the conservative cap.
+pub fn transmit_byte_cap() -> usize {
+  const DEFAULT_CAP: usize = 300_000;
+  const NATIVE_KITTY_CAP: usize = 1_000_000;
+  if in_tmux() {
+    return DEFAULT_CAP;
+  }
+  if std::env::var_os("KITTY_WINDOW_ID").is_some() {
+    return NATIVE_KITTY_CAP;
+  }
+  DEFAULT_CAP
+}
+
 /// Like `iterm2_at_least_3_5` but reads `TERM_PROGRAM_VERSION` instead
 /// of `LC_TERMINAL_VERSION`.  iTerm2 sets both, but `LC_*` doesn't
 /// propagate through tmux while `TERM_PROGRAM*` does (tmux's
@@ -176,6 +207,7 @@ mod tests {
     "LC_TERMINAL",
     "LC_TERMINAL_VERSION",
     "TERM",
+    "TMUX",
   ];
 
   #[test]
@@ -233,5 +265,29 @@ mod tests {
     let _lock = EnvLock::new(ENV_KEYS);
     unsafe { std::env::set_var("TERM", "xterm-256color"); }
     assert_eq!(detect(), Capability::Unsupported);
+  }
+
+  #[test]
+  fn transmit_cap_native_kitty_no_tmux_is_large() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    unsafe { std::env::set_var("KITTY_WINDOW_ID", "1"); }
+    assert_eq!(transmit_byte_cap(), 1_000_000);
+  }
+
+  #[test]
+  fn transmit_cap_kitty_inside_tmux_falls_back() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    unsafe {
+      std::env::set_var("KITTY_WINDOW_ID", "1");
+      std::env::set_var("TMUX", "/tmp/tmux-1000/default,1,0");
+    }
+    assert_eq!(transmit_byte_cap(), 300_000);
+  }
+
+  #[test]
+  fn transmit_cap_other_terminal_is_default() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    unsafe { std::env::set_var("LC_TERMINAL", "iTerm2"); }
+    assert_eq!(transmit_byte_cap(), 300_000);
   }
 }
