@@ -226,20 +226,7 @@ impl Reader {
     for (k, v) in bibitems {
       bib_entries.insert(k, v);
     }
-    let mut image_paths = HashMap::new();
-    for block in &blocks {
-      match block {
-        Block::Image { kitty_id, path, .. } => {
-          image_paths.insert(*kitty_id, path.clone());
-        }
-        Block::ImageRow { items, .. } => {
-          for item in items {
-            image_paths.insert(item.kitty_id, item.path.clone());
-          }
-        }
-        _ => {}
-      }
-    }
+    let image_paths = collect_image_paths(&blocks);
     Self {
       blocks,
       visual_lines,
@@ -418,21 +405,7 @@ impl Reader {
     self.label_lines = label_lines;
     self.bib_entries = bib_entries;
     self.bib_entry_lines = bib_entry_lines;
-    let mut image_paths = HashMap::new();
-    for block in &self.blocks {
-      match block {
-        Block::Image { kitty_id, path, .. } => {
-          image_paths.insert(*kitty_id, path.clone());
-        }
-        Block::ImageRow { items, .. } => {
-          for item in items {
-            image_paths.insert(item.kitty_id, item.path.clone());
-          }
-        }
-        _ => {}
-      }
-    }
-    self.image_paths = image_paths;
+    self.image_paths = collect_image_paths(&self.blocks);
     self.clamp_position();
   }
 
@@ -600,6 +573,29 @@ impl Reader {
     self.cursor_y = 0;
     self.clamp_cursor_after_line_change();
   }
+}
+
+/// Index `kitty_id → path` for every `Block::Image` / `Block::ImageRow`
+/// in `blocks`.  The post-draw image emitter reads this map when it
+/// needs the on-disk path for an id it's about to transmit.  Called
+/// once on Reader construction and again on every `reload_with` — keep
+/// both call sites in sync by going through this helper.
+fn collect_image_paths(blocks: &[Block]) -> HashMap<u32, std::path::PathBuf> {
+  let mut out = HashMap::new();
+  for block in blocks {
+    match block {
+      Block::Image { kitty_id, path, .. } => {
+        out.insert(*kitty_id, path.clone());
+      }
+      Block::ImageRow { items, .. } => {
+        for item in items {
+          out.insert(item.kitty_id, item.path.clone());
+        }
+      }
+      _ => {}
+    }
+  }
+  out
 }
 
 /// Compute text column width given terminal width and TOC visibility.

@@ -513,6 +513,14 @@ fn walk_blocks(
                                 if srcs.is_empty() { Vec::new() } else { vec![srcs] }
                             }
                         }
+                    } else if t == Some("Table") {
+                        // Pandoc emits N-row tabulars as a Table node — one
+                        // row per source `\\`-separated line.  Walk row by
+                        // row and emit one image-row per Table row so the
+                        // grid's vertical structure survives (recovered by
+                        // the `\resizebox` strip; otherwise flattens into
+                        // one super-wide ImageRow with N×M slivers).
+                        walk_table_rows_for_images(block)
                     } else {
                         // Div or other wrapper: treat as one row of images.
                         let mut imgs = Vec::new();
@@ -1143,6 +1151,63 @@ fn split_inlines_by_linebreak(inlines: &[Value]) -> Vec<Vec<String>> {
     }
     if !cur.is_empty() {
         groups.push(cur);
+    }
+    groups
+}
+
+/// Walk a Pandoc `Table` node and return one image-source list per
+/// source row (skipping rows with no images, like header labels).
+///
+/// Pandoc Table layout (AST: `Table Attr Caption [ColSpec] TableHead [TableBody] TableFoot`):
+/// - `c[0]` attr · `c[1]` caption · `c[2]` colspecs
+/// - `c[3]` head = `[attr, [row]]`
+/// - `c[4]` bodies = `[[attr, row_head_cols, [intermediate_head_row], [body_row]], ...]`
+/// - `c[5]` foot = `[attr, [row]]`
+///
+/// A row is `[attr, [cell]]`; a cell carries `[Block]` content where the
+/// `\includegraphics` lives.  We hand each row to `walk_for_images` so
+/// nested Plain/Span/Image wrappers are picked up just like outside a
+/// table.  Header-only rows (no Image inlines) are silently dropped so
+/// label rows like `Input | Avat3r | Ours` don't become empty groups.
+fn walk_table_rows_for_images(table: &Value) -> Vec<Vec<String>> {
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    let push_row = |row: &Value, out: &mut Vec<Vec<String>>| {
+        let cells = match row.as_array().and_then(|r| r.get(1)).and_then(Value::as_array) {
+            Some(c) => c,
+            None => return,
+        };
+        let mut imgs: Vec<String> = Vec::new();
+        walk_for_images(cells, &mut imgs);
+        if !imgs.is_empty() {
+            out.push(imgs);
+        }
+    };
+    // Head rows.
+    if let Some(head_rows) = table["c"][3][1].as_array() {
+        for row in head_rows {
+            push_row(row, &mut groups);
+        }
+    }
+    // Bodies (intermediate-head-rows then body-rows for each body).
+    if let Some(bodies) = table["c"][4].as_array() {
+        for body in bodies {
+            if let Some(rows) = body.get(2).and_then(Value::as_array) {
+                for row in rows {
+                    push_row(row, &mut groups);
+                }
+            }
+            if let Some(rows) = body.get(3).and_then(Value::as_array) {
+                for row in rows {
+                    push_row(row, &mut groups);
+                }
+            }
+        }
+    }
+    // Foot rows.
+    if let Some(foot_rows) = table["c"][5][1].as_array() {
+        for row in foot_rows {
+            push_row(row, &mut groups);
+        }
     }
     groups
 }
@@ -2475,5 +2540,88 @@ mod spec_parser_tests {
         let close = super::match_brace(bytes, 0).expect("must find closing brace");
         assert_eq!(bytes[close], b'}');
         assert_eq!(close, bytes.len() - 1);
+    }
+}
+
+#[cfg(test)]
+mod table_image_walk_tests {
+    use serde_json::json;
+
+    /// Hand-build a minimal Pandoc Table value with the given rows.  Each
+    /// row is a list of cells; each cell is either Some("path") for an
+    /// `\includegraphics`-bearing cell or None for a text label cell.
+    /// Only the fields `walk_table_rows_for_images` actually reads are
+    /// populated — everything else uses empty defaults.
+    fn make_table(rows: &[&[Option<&str>]]) -> serde_json::Value {
+        let mk_cell = |src: Option<&str>| -> serde_json::Value {
+            // Cell = [attr, align, rowspan, colspan, [blocks]].
+            let blocks = match src {
+                Some(p) => json!([
+                    {
+                        "t": "Plain",
+                        "c": [
+                            {"t": "Image", "c": [["", [], []], [], [p, ""]]}
+                        ]
+                    }
+                ]),
+                None => json!([{"t": "Plain", "c": [{"t": "Str", "c": "label"}]}]),
+            };
+            json!([["", [], []], {"t": "AlignDefault"}, 1, 1, blocks])
+        };
+        let mk_row = |cells: &[Option<&str>]| -> serde_json::Value {
+            let cells_json: Vec<_> = cells.iter().map(|c| mk_cell(*c)).collect();
+            // Row = [attr, [cells]]
+            json!([["", [], []], cells_json])
+        };
+        let body_rows: Vec<_> = rows.iter().map(|r| mk_row(r)).collect();
+        json!({
+            "t": "Table",
+            "c": [
+                ["", [], []],                         // attr
+                [serde_json::Value::Null, []],        // caption (short, [blocks])
+                [],                                   // colspecs
+                [["", [], []], []],                   // head: (attr, [row])
+                [                                     // bodies: one body
+                    [["", [], []], 0, [], body_rows], // (attr, row_head_cols, intermediate, body_rows)
+                ],
+                [["", [], []], []],                   // foot
+            ]
+        })
+    }
+
+    #[test]
+    fn flat_three_row_grid_preserves_rows() {
+        // 3 rows × 3 image cells — the figure-3 shape.
+        let t = make_table(&[
+            &[Some("a/0"), Some("a/1"), Some("a/2")],
+            &[Some("b/0"), Some("b/1"), Some("b/2")],
+            &[Some("c/0"), Some("c/1"), Some("c/2")],
+        ]);
+        let groups = super::walk_table_rows_for_images(&t);
+        assert_eq!(groups.len(), 3, "want 3 groups, got {groups:?}");
+        assert_eq!(groups[0], vec!["a/0", "a/1", "a/2"]);
+        assert_eq!(groups[1], vec!["b/0", "b/1", "b/2"]);
+        assert_eq!(groups[2], vec!["c/0", "c/1", "c/2"]);
+    }
+
+    #[test]
+    fn label_rows_are_dropped() {
+        // First two rows are text labels (figure 3 has `$N=4$` etc.
+        // header rows above the image grid).  Only image rows survive.
+        let t = make_table(&[
+            &[None, None, None],
+            &[None, None, None],
+            &[Some("img/0"), Some("img/1"), Some("img/2")],
+        ]);
+        let groups = super::walk_table_rows_for_images(&t);
+        assert_eq!(groups.len(), 1, "want 1 image-bearing row, got {groups:?}");
+        assert_eq!(groups[0], vec!["img/0", "img/1", "img/2"]);
+    }
+
+    #[test]
+    fn empty_table_returns_empty() {
+        let t = make_table(&[]);
+        let groups = super::walk_table_rows_for_images(&t);
+        assert!(groups.is_empty());
     }
 }
