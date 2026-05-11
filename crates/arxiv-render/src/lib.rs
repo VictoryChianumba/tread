@@ -82,8 +82,10 @@ pub fn absolutize_image_paths(blocks: &mut [doc_model::Block], asset_dir: &std::
 
 /// Read pixel `(width, height)` for an image at `path`.  PNG: parse the
 /// IHDR chunk directly.  PDF: rasterise via `pdftoppm` (cached), then
-/// read the resulting PNG's header.  JPG/GIF: not yet supported —
-/// returns `None` and the caller falls back to default cell footprint.
+/// read the resulting PNG's header.  JPG/JPEG: use the image crate's
+/// header reader so photo-heavy figure rows preserve aspect ratio too.
+/// Unsupported formats return `None` and the caller falls back to the
+/// default cell footprint.
 fn read_image_dims(path: &std::path::Path) -> Option<(u32, u32)> {
   let ext = path
     .extension()
@@ -92,6 +94,7 @@ fn read_image_dims(path: &std::path::Path) -> Option<(u32, u32)> {
     .to_ascii_lowercase();
   match ext.as_str() {
     "png" => kitty_graphics::png::dimensions(path),
+    "jpg" | "jpeg" => image::image_dimensions(path).ok(),
     "pdf" => {
       // Eager rasterisation so build_visual_lines has dims.  pdf_to_png
       // is cached by FNV-1a of canonical path, so subsequent runs and

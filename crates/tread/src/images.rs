@@ -26,10 +26,22 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use doc_model::VisualLineKind;
+use image::imageops::FilterType;
 use kitty_graphics::transmit::{delete_placement, transmit_and_place};
 use ratatui::layout::Rect;
 
 use crate::state::Reader;
+
+/// Keep single-shot Kitty payloads within the empirically safe window
+/// for the current tmux/iTerm2 passthrough path.  `transmit_and_place`
+/// sends one unchunked base64 APC sequence; working paper figures are
+/// typically <= ~150–300 KB raw PNG, while many missing figures were
+/// still ~850–930 KB after the first normalization attempt.  This cap
+/// deliberately stays below the `transmit.rs` note that the current
+/// path is only proven for roughly 150–500 KB encoded payloads; raising
+/// it again likely requires chunked APC support or a different protocol
+/// variant instead of a larger round-number budget.
+const MAX_INLINE_PNG_BYTES: usize = 300_000;
 
 /// Frame-to-frame image bookkeeping for the post-draw injector.
 ///
@@ -256,7 +268,7 @@ fn resolve_png(path: &Path) -> std::io::Result<Vec<u8>> {
     .and_then(|s| s.to_str())
     .unwrap_or("")
     .to_ascii_lowercase();
-  match ext.as_str() {
+  let png_bytes = match ext.as_str() {
     "png" => std::fs::read(path),
     "pdf" => {
       let cache = cache_dir();
@@ -275,7 +287,76 @@ fn resolve_png(path: &Path) -> std::io::Result<Vec<u8>> {
     other => Err(std::io::Error::other(format!(
       "unsupported image format: {other}"
     ))),
+  }?;
+  normalize_png_for_terminal(path, png_bytes)
+}
+
+fn normalize_png_for_terminal(path: &Path, png_bytes: Vec<u8>) -> std::io::Result<Vec<u8>> {
+  normalize_png_for_terminal_with_limit(path, png_bytes, MAX_INLINE_PNG_BYTES)
+}
+
+fn normalize_png_for_terminal_with_limit(
+  path: &Path,
+  mut png_bytes: Vec<u8>,
+  max_bytes: usize,
+) -> std::io::Result<Vec<u8>> {
+  if png_bytes.len() <= max_bytes {
+    return Ok(png_bytes);
   }
+
+  let trace = std::env::var_os("TREAD_TRACE_IMAGES").is_some();
+  let mut img = image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png)
+    .map_err(|e| std::io::Error::other(format!("decode png {path:?}: {e}")))?;
+
+  for attempt in 1..=6 {
+    if png_bytes.len() <= max_bytes {
+      break;
+    }
+
+    let width = img.width();
+    let height = img.height();
+    if width <= 1 || height <= 1 {
+      break;
+    }
+
+    let scale = ((max_bytes as f64 / png_bytes.len() as f64).sqrt() * 0.90).clamp(0.10, 0.95);
+    let next_width = ((width as f64 * scale).round() as u32).max(1).min(width - 1);
+    let next_height = ((height as f64 * scale).round() as u32).max(1).min(height - 1);
+
+    let resized = img.resize(next_width, next_height, FilterType::Lanczos3);
+    let next_png = encode_dynamic_image_png(path, &resized)?;
+
+    if trace {
+      eprintln!(
+        "  downscale {:?}: {}x{} {} bytes -> {}x{} {} bytes (attempt {})",
+        path,
+        width,
+        height,
+        png_bytes.len(),
+        resized.width(),
+        resized.height(),
+        next_png.len(),
+        attempt
+      );
+    }
+
+    if next_png.len() >= png_bytes.len() {
+      break;
+    }
+
+    png_bytes = next_png;
+    img = resized;
+  }
+
+  Ok(png_bytes)
+}
+
+fn encode_dynamic_image_png(path: &Path, img: &image::DynamicImage) -> std::io::Result<Vec<u8>> {
+  let mut png_bytes = std::io::Cursor::new(Vec::new());
+  img
+    .write_to(&mut png_bytes, image::ImageFormat::Png)
+    .map_err(|e| std::io::Error::other(format!("encode png {path:?}: {e}")))?;
+  Ok(png_bytes.into_inner())
 }
 
 fn cache_dir() -> PathBuf {
@@ -286,4 +367,43 @@ fn cache_dir() -> PathBuf {
       .join("figures");
   }
   std::env::temp_dir().join("tread-figures")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use image::{DynamicImage, Rgb, RgbImage};
+
+  fn noisy_png(width: u32, height: u32) -> Vec<u8> {
+    let img = RgbImage::from_fn(width, height, |x, y| {
+      let x = x as u8;
+      let y = y as u8;
+      Rgb([
+        x.wrapping_mul(31).wrapping_add(y.wrapping_mul(17)),
+        x.wrapping_mul(13).wrapping_add(y.wrapping_mul(29)),
+        x ^ y.wrapping_mul(47),
+      ])
+    });
+    encode_dynamic_image_png(Path::new("synthetic.png"), &DynamicImage::ImageRgb8(img)).unwrap()
+  }
+
+  #[test]
+  fn leaves_small_png_unchanged() {
+    let png = noisy_png(32, 32);
+    let out = normalize_png_for_terminal_with_limit(Path::new("small.png"), png.clone(), png.len() + 1)
+      .unwrap();
+    assert_eq!(out, png);
+  }
+
+  #[test]
+  fn downscales_oversized_png_to_budget() {
+    let png = noisy_png(512, 512);
+    assert!(png.len() > 20_000, "synthetic png should exceed test budget");
+
+    let out = normalize_png_for_terminal_with_limit(Path::new("large.png"), png, 20_000).unwrap();
+    assert!(out.len() <= 20_000, "normalized png should respect byte budget");
+
+    let decoded = image::load_from_memory_with_format(&out, image::ImageFormat::Png).unwrap();
+    assert!(decoded.width() < 512 || decoded.height() < 512);
+  }
 }

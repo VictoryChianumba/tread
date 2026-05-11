@@ -1539,14 +1539,105 @@ fn strip_env_wrapper(s: &str) -> Option<&str> {
 /// Rewrite LaTeX constructs that Pandoc mishandles before sending to the parser.
 ///
 /// Currently handles:
+/// - `\resizebox{W}{H}{BODY}` → `BODY`. Pandoc drops the contents of some
+///   figure bodies when `\includegraphics` lives inside a `\resizebox{...}`
+///   wrapper around `tabular` / `minipage` content, so we unwrap the visual
+///   scaling macro before parsing.
+/// - `\adjustbox{OPTS}{BODY}` → `BODY` and `\scalebox{X}{BODY}` → `BODY`.
+///   Same family of visual wrappers as `\resizebox`; we only care about
+///   preserving the inner figure content for Pandoc's AST.
 /// - `\multirow{N}{W}{TEXT}` → `TEXT`. Pandoc silently drops the content when
 ///   the multirow declaration appears on its own line before a row, so row
 ///   labels like `(A)`, `(B)` vanish from the output.
 /// - `\cmidrule[W](T){N-M}` → ``. Pandoc drops the command name but keeps the
 ///   brace content as plain text (e.g. "2-3"), which leaks into the next cell.
 fn preprocess_latex_source(src: &str) -> String {
-    let after_multirow = strip_multirow(src);
+    let after_resizebox = strip_resizebox(src);
+    let after_adjustbox = strip_adjustbox(&after_resizebox);
+    let after_scalebox = strip_scalebox(&after_adjustbox);
+    let after_multirow = strip_multirow(&after_scalebox);
     strip_cmidrule(&after_multirow)
+}
+
+fn strip_resizebox(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let cmd = b"\\resizebox";
+    let mut out = String::with_capacity(src.len());
+    let mut copy_from = 0usize;
+    let mut i = 0;
+    while i + cmd.len() <= bytes.len() {
+        if &bytes[i..i + cmd.len()] == cmd {
+            let mut after = i + cmd.len();
+            if after < bytes.len() && bytes[after] == b'*' {
+                after += 1;
+            }
+            let bnd_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
+            if bnd_ok {
+                if let Some((arg3_start, arg3_end, end)) = parse_three_brace_args(bytes, after) {
+                    out.push_str(&src[copy_from..i]);
+                    out.push_str(&src[arg3_start..arg3_end]);
+                    i = end;
+                    copy_from = end;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    out.push_str(&src[copy_from..]);
+    out
+}
+
+fn strip_adjustbox(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let cmd = b"\\adjustbox";
+    let mut out = String::with_capacity(src.len());
+    let mut copy_from = 0usize;
+    let mut i = 0;
+    while i + cmd.len() <= bytes.len() {
+        if &bytes[i..i + cmd.len()] == cmd {
+            let after = i + cmd.len();
+            let bnd_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
+            if bnd_ok {
+                if let Some((arg2_start, arg2_end, end)) = parse_two_brace_args(bytes, after) {
+                    out.push_str(&src[copy_from..i]);
+                    out.push_str(&src[arg2_start..arg2_end]);
+                    i = end;
+                    copy_from = end;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    out.push_str(&src[copy_from..]);
+    out
+}
+
+fn strip_scalebox(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let cmd = b"\\scalebox";
+    let mut out = String::with_capacity(src.len());
+    let mut copy_from = 0usize;
+    let mut i = 0;
+    while i + cmd.len() <= bytes.len() {
+        if &bytes[i..i + cmd.len()] == cmd {
+            let after = i + cmd.len();
+            let bnd_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
+            if bnd_ok {
+                if let Some((arg2_start, arg2_end, end)) = parse_two_brace_args(bytes, after) {
+                    out.push_str(&src[copy_from..i]);
+                    out.push_str(&src[arg2_start..arg2_end]);
+                    i = end;
+                    copy_from = end;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    out.push_str(&src[copy_from..]);
+    out
 }
 
 fn strip_multirow(src: &str) -> String {
@@ -1602,6 +1693,20 @@ fn strip_cmidrule(src: &str) -> String {
     }
     out.push_str(&src[copy_from..]);
     out
+}
+
+/// Parse `{...}{...}{...}` (skipping ASCII whitespace between groups) starting
+/// at byte position `pos`. Returns `(arg3_content_start, arg3_content_end, end)`
+/// where `end` is the byte position just past the closing brace of arg 3.
+fn parse_two_brace_args(bytes: &[u8], mut pos: usize) -> Option<(usize, usize, usize)> {
+    pos = skip_ascii_ws(bytes, pos);
+    let close1 = match_brace(bytes, pos)?;
+    pos = skip_ascii_ws(bytes, close1 + 1);
+    if pos >= bytes.len() || bytes[pos] != b'{' {
+        return None;
+    }
+    let close2 = match_brace(bytes, pos)?;
+    Some((pos + 1, close2, close2 + 1))
 }
 
 /// Parse `{...}{...}{...}` (skipping ASCII whitespace between groups) starting
@@ -2209,7 +2314,7 @@ mod section_counter_tests {
 
 #[cfg(test)]
 mod spec_parser_tests {
-    use super::parse_column_spec;
+    use super::{parse_column_spec, preprocess_latex_source};
 
     #[test]
     fn simple_no_rules() {
@@ -2283,6 +2388,35 @@ mod spec_parser_tests {
         let specs = super::extract_tabular_specs(src);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].col_count, 2);
+    }
+
+    #[test]
+    fn preprocess_unwraps_resizebox_body() {
+        let src = "\\resizebox{\\linewidth}{!}{\\begin{tabular}{cc}a & b\\\\c & d\\end{tabular}}";
+        let out = preprocess_latex_source(src);
+        assert!(out.contains("\\begin{tabular}{cc}a & b\\\\c & d\\end{tabular}"));
+        assert!(!out.contains("\\resizebox"));
+    }
+
+    #[test]
+    fn preprocess_unwraps_starred_resizebox_body() {
+        let src = "\\resizebox*{0.9\\linewidth}{!}{\\includegraphics{foo}}";
+        let out = preprocess_latex_source(src);
+        assert_eq!(out, "\\includegraphics{foo}");
+    }
+
+    #[test]
+    fn preprocess_unwraps_adjustbox_body() {
+        let src = "\\adjustbox{width=\\linewidth}{\\begin{tabular}{cc}a & b\\end{tabular}}";
+        let out = preprocess_latex_source(src);
+        assert_eq!(out, "\\begin{tabular}{cc}a & b\\end{tabular}");
+    }
+
+    #[test]
+    fn preprocess_unwraps_scalebox_body() {
+        let src = "\\scalebox{0.9}{\\includegraphics{foo}}";
+        let out = preprocess_latex_source(src);
+        assert_eq!(out, "\\includegraphics{foo}");
     }
 
     /// Horizontal rule scanning: \hline between data rows produces an entry
