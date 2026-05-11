@@ -106,6 +106,40 @@ pub fn in_tmux() -> bool {
   std::env::var_os("TMUX").is_some()
 }
 
+/// True when the host terminal persists transmitted image data across
+/// frames — i.e. supports the cached `a=p` (place-by-id) flow without
+/// re-sending bytes on every placement.  Native Kitty does; iTerm2's
+/// Kitty implementation does not (its cache is per-frame, so `a=p` for
+/// an image not transmitted in the same frame silently no-ops).
+///
+/// Used by image-emit callers to pick between:
+/// - `transmit_and_place` (`a=T`, ~400 KB base64 per scroll line) — safe
+///   everywhere, slow under continuous scroll.
+/// - `delete_placement` + `place_by_id` (`a=d` + `a=p`, ~100 bytes per
+///   scroll line) — only safe on persistent-cache terminals.
+///
+/// Detection matches `detect()`'s native-Kitty path (KITTY_WINDOW_ID,
+/// or TERM/TERM_PROGRAM with `kitty`).  We intentionally don't include
+/// WezTerm / Ghostty here even though they have real image caches —
+/// neither has been validated against the cached path yet, and a wrong
+/// answer manifests as silently-missing figures.
+pub fn has_persistent_image_cache() -> bool {
+  if std::env::var_os("KITTY_WINDOW_ID").is_some() {
+    return true;
+  }
+  if let Ok(prog) = std::env::var("TERM_PROGRAM")
+    && prog.to_ascii_lowercase().contains("kitty")
+  {
+    return true;
+  }
+  if let Ok(term) = std::env::var("TERM")
+    && term.contains("kitty")
+  {
+    return true;
+  }
+  false
+}
+
 /// Maximum *raw PNG* bytes we'll feed into a single `transmit_and_place`
 /// call.  The normalizer downscales anything larger to fit.
 ///
@@ -207,6 +241,7 @@ mod tests {
     "LC_TERMINAL",
     "LC_TERMINAL_VERSION",
     "TERM",
+    "TERM_PROGRAM",
     "TMUX",
   ];
 
@@ -289,5 +324,28 @@ mod tests {
     let _lock = EnvLock::new(ENV_KEYS);
     unsafe { std::env::set_var("LC_TERMINAL", "iTerm2"); }
     assert_eq!(transmit_byte_cap(), 300_000);
+  }
+
+  #[test]
+  fn persistent_cache_kitty_window_id() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    unsafe { std::env::set_var("KITTY_WINDOW_ID", "1"); }
+    assert!(has_persistent_image_cache());
+  }
+
+  #[test]
+  fn persistent_cache_iterm2_is_false() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    unsafe {
+      std::env::set_var("LC_TERMINAL", "iTerm2");
+      std::env::set_var("LC_TERMINAL_VERSION", "3.5.0");
+    }
+    assert!(!has_persistent_image_cache());
+  }
+
+  #[test]
+  fn persistent_cache_no_env_is_false() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    assert!(!has_persistent_image_cache());
   }
 }

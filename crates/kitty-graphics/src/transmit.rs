@@ -113,6 +113,42 @@ pub fn transmit_and_place(
   handle.flush()
 }
 
+/// Re-place an already-transmitted image at a new screen position
+/// without re-sending the image bytes.  Uses `a=p` (place by id) which
+/// references the terminal's cached image data — ~50 bytes of payload
+/// vs. ~400 KB of base64 for a typical paper figure, so on continuous
+/// scroll this is the difference between a fluid feel and the page
+/// "catching up" between each keystroke.
+///
+/// **Only safe on terminals that persist image data between frames** —
+/// gate calls on `has_persistent_image_cache()`.  iTerm2 silently drops
+/// `a=p` for unknown ids; the image just won't appear.
+///
+/// Caller responsibility: emit a `delete_placement(id)` first if the
+/// image was previously placed at a different position — Kitty's `a=p`
+/// *adds* a placement instead of replacing one, so without the delete
+/// you'd get ghost images stacking up on each scroll line.  The bundled
+/// cursor move + APC follows the same passthrough-envelope rationale as
+/// `transmit_and_place` (see that function for the tmux DCS details).
+pub fn place_by_id(
+  id: u32,
+  cols: u16,
+  rows: u16,
+  abs_row: u16,
+  abs_col: u16,
+) -> io::Result<()> {
+  let stdout = io::stdout();
+  let mut handle = stdout.lock();
+  let mut payload: Vec<u8> = Vec::with_capacity(64);
+  write!(payload, "\x1b[{abs_row};{abs_col}H")?;
+  write!(
+    payload,
+    "\x1b_Ga=p,i={id},c={cols},r={rows},C=1,q=2\x1b\\"
+  )?;
+  emit_apc(&mut handle, &payload)?;
+  handle.flush()
+}
+
 /// Delete a placement of an image (by id) without removing the cached
 /// image data — i.e. clear the visible image but keep the bytes so we
 /// can re-place quickly when scrolled back into view.

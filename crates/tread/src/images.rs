@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 use doc_model::VisualLineKind;
 use image::imageops::FilterType;
-use kitty_graphics::transmit::{delete_placement, transmit_and_place};
+use kitty_graphics::transmit::{delete_placement, place_by_id, transmit_and_place};
 use ratatui::layout::Rect;
 
 use crate::state::Reader;
@@ -67,6 +67,17 @@ pub struct ImageState {
   /// Compared against the current frame's intended placement; equal
   /// means "already on screen, don't re-emit."
   last_emitted: HashMap<u32, (u16, u16, u16, u16)>,
+  /// Ids whose image bytes the terminal currently has cached.  Set on
+  /// first successful `a=T` transmission; consulted by the scroll-time
+  /// re-place path to decide whether we can use the cheap `a=p`
+  /// (placement-only, ~50 bytes) or have to re-transmit the full `a=T`
+  /// payload (~400 KB base64 per image).  Cleared by `clear_all` —
+  /// resize and focus-loss invalidate the assumption that the terminal
+  /// still has our bytes.  Only ever populated when the host terminal
+  /// is known to persist image data between frames; on iTerm2 (no
+  /// persistent cache) this stays empty and every placement goes
+  /// through the full-retransmit path, matching prior behaviour.
+  transmitted_ids: HashSet<u32>,
 }
 
 /// Walk the visible window for Image VLs and emit Kitty escapes to
@@ -185,16 +196,26 @@ pub fn place_visible(
     state.last_emitted.remove(&id);
   }
 
-  // Re-emit `a=T` (transmit-and-display) for every visible image on
-  // every frame.  We can't rely on terminal-side caching: iTerm2's
-  // Kitty implementation doesn't keep images across frames, so a cached
-  // `a=p` would be a no-op.  Native Kitty handles re-transmission fine
-  // (it just refreshes its own cache), so this works everywhere.
+  // Two emission paths, picked per-terminal:
+  //
+  // - **Persistent-cache hosts** (native Kitty): the first time an id
+  //   is visible we send `a=T` (transmit-and-display); the terminal
+  //   keeps the bytes.  On every subsequent re-placement we emit just
+  //   `delete + a=p` — ~100 bytes per scroll line instead of ~400 KB.
+  //   This is what makes continuous-scroll feel fluid on image-heavy
+  //   papers; without it, every `j` keystroke re-base64s the whole PNG
+  //   to stdout and the page visibly catches up.
+  // - **Non-cache hosts** (iTerm2 ≥ 3.5): no persistent cache means
+  //   `a=p` for an id not transmitted in the same frame silently
+  //   no-ops.  We stay on the full-retransmit path: `delete + a=T`
+  //   every time placement changes.  Same behaviour as before this
+  //   split landed.
   //
   // Failures (missing file, unreadable bytes, unsupported format) are
   // memoised as `None` in `state.bytes` and silently skipped on every
   // future frame — the caption row beneath the image is the
   // user-visible fallback.
+  let has_cache = kitty_graphics::has_persistent_image_cache();
   for &(id, abs_row, rows, abs_col, cols) in &placements {
     let path_for_load = reader.image_paths.get(&id).cloned();
     let bytes_opt = state.bytes.entry(id).or_insert_with(|| {
@@ -225,14 +246,26 @@ pub fn place_visible(
     }
     let _ = delete_placement(id);
     // Cursor positioning travels inside the same passthrough envelope
-    // as the APC inside `transmit_and_place` — see that function's
-    // doc comment for why bundling matters under tmux.  Both row and
-    // col are 1-indexed (ANSI CUP convention).
-    if trace {
-      eprintln!("  emit id={} at row={} col={} cells={}x{}",
-        id, abs_row + 1, abs_col + 1, cols, rows);
+    // as the APC — see `transmit_and_place` / `place_by_id` doc
+    // comments for the tmux DCS details.  Both row and col are
+    // 1-indexed (ANSI CUP convention).
+    let already_transmitted = has_cache && state.transmitted_ids.contains(&id);
+    if already_transmitted {
+      if trace {
+        eprintln!("  place id={} at row={} col={} cells={}x{} (cached)",
+          id, abs_row + 1, abs_col + 1, cols, rows);
+      }
+      let _ = place_by_id(id, cols, rows, abs_row + 1, abs_col + 1);
+    } else {
+      if trace {
+        eprintln!("  emit id={} at row={} col={} cells={}x{}",
+          id, abs_row + 1, abs_col + 1, cols, rows);
+      }
+      let _ = transmit_and_place(id, bytes, cols, rows, abs_row + 1, abs_col + 1);
+      if has_cache {
+        state.transmitted_ids.insert(id);
+      }
     }
-    let _ = transmit_and_place(id, bytes, cols, rows, abs_row + 1, abs_col + 1);
     state.last_emitted.insert(id, placement_key);
   }
 
@@ -249,6 +282,11 @@ pub fn clear_all(state: &mut ImageState) {
     let _ = delete_placement(id);
   }
   state.last_emitted.clear();
+  // After a resize / focus-loss / exit we no longer trust that the
+  // terminal still has our image bytes cached.  Drop transmitted_ids
+  // so the next placement falls back to a full `a=T` retransmit;
+  // re-population happens automatically on that next emit.
+  state.transmitted_ids.clear();
 }
 
 /// Resolve an image source path to PNG bytes.  PNGs read directly;
