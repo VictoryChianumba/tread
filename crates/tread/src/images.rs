@@ -246,7 +246,10 @@ pub fn clear_all(state: &mut ImageState) {
 /// Resolve an image source path to PNG bytes.  PNGs read directly;
 /// PDFs go through Poppler via `kitty_graphics::pdf::pdf_to_png` and
 /// are cached under `~/.cache/tread/figures` so a second visit doesn't
-/// re-rasterise.  Other formats are not yet supported.
+/// re-rasterise.  JPEGs are decoded in-process and re-encoded as PNG
+/// for Kitty (which only accepts PNG payloads); the result is cached
+/// in `ImageState.bytes` per-session.  GIFs and other formats remain
+/// unsupported until a paper actually contains one.
 fn resolve_png(path: &Path) -> std::io::Result<Vec<u8>> {
   let ext = path
     .extension()
@@ -259,6 +262,15 @@ fn resolve_png(path: &Path) -> std::io::Result<Vec<u8>> {
       let cache = cache_dir();
       let png = kitty_graphics::pdf::pdf_to_png(path, &cache)?;
       std::fs::read(png)
+    }
+    "jpg" | "jpeg" => {
+      let img = image::open(path)
+        .map_err(|e| std::io::Error::other(format!("decode jpeg {path:?}: {e}")))?;
+      let mut png_bytes = std::io::Cursor::new(Vec::new());
+      img
+        .write_to(&mut png_bytes, image::ImageFormat::Png)
+        .map_err(|e| std::io::Error::other(format!("encode png {path:?}: {e}")))?;
+      Ok(png_bytes.into_inner())
     }
     other => Err(std::io::Error::other(format!(
       "unsupported image format: {other}"

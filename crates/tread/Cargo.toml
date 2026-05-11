@@ -43,3 +43,8 @@ ego-tree = "0.6"
 # Voice / TTS subsystem.
 rodio = "0.19"
 ureq = { version = "2.12", features = ["json"] }
+# JPEG decode → PNG re-encode for the Kitty image loader. Default
+# features disabled: we only need jpeg + png codecs. Memory cost is
+# bounded by the largest figure in the visible window; bytes are
+# cached in ImageState per-session, no on-disk cache yet.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
