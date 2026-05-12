@@ -8,6 +8,31 @@ use crate::PaperData;
 
 pub const TOC_WIDTH: usize = 28;
 
+/// Build visual lines and optionally drop image rows.
+///
+/// Hosts that render figures in a dedicated preview pane (rather than
+/// inline) set `text_only = true`, and the reader reflows text as if
+/// the figures weren't there.  Captions stay because they live as
+/// separate prose blocks, so users keep a textual anchor for `]f` /
+/// `[f` navigation in the preview pane.
+fn build_lines_for(
+  blocks: &[Block],
+  cw: usize,
+  height: usize,
+  text_only: bool,
+) -> Vec<VisualLine> {
+  let mut lines = build_visual_lines(blocks, cw, height);
+  if text_only {
+    lines.retain(|vl| {
+      !matches!(
+        vl.kind,
+        VisualLineKind::Image { .. } | VisualLineKind::ImageRow { .. },
+      )
+    });
+  }
+  lines
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FindKind {
   /// `f<c>` — forward to next occurrence.
@@ -140,6 +165,13 @@ pub struct Reader {
   /// skipped — the caption row always renders, so degradation is
   /// graceful.
   pub image_paths: HashMap<u32, std::path::PathBuf>,
+  /// When true, image rows are dropped from `visual_lines` so text
+  /// reflows past where the figures would have been.  Hosts use this
+  /// for "preview pane" reading modes: the reader pane stays text-only
+  /// and a dedicated side pane shows one figure at a time via
+  /// `images::place_one_figure`.  Toggle via `set_text_only` — direct
+  /// field writes won't trigger the rebuild and will desync state.
+  pub text_only: bool,
 
   /// arXiv id this Reader is rendering, or `None` when running against a
   /// non-arxiv source.  Used by `:reload`, `:url`, `:cite`, `:open`, and
@@ -217,7 +249,7 @@ impl Reader {
     bibitems: HashMap<String, String>,
   ) -> Self {
     let cw = content_width_for(width, false);
-    let visual_lines = build_visual_lines(&blocks, cw, height);
+    let visual_lines = build_lines_for(&blocks, cw, height, false);
     let sections = build_sections(&visual_lines);
     let (label_lines, mut bib_entries, bib_entry_lines) = build_link_indexes(&blocks, &visual_lines);
     // Pre-scanned bibitems from source override anything we picked up via
@@ -257,6 +289,7 @@ impl Reader {
       cmd_error: None,
       popup: None,
       image_paths,
+      text_only: false,
       arxiv_id: None,
       kitty_supported: false,
       pending_progress_offset: None,
@@ -395,7 +428,7 @@ impl Reader {
   pub fn reload_with(&mut self, blocks: Vec<Block>, bibitems: HashMap<String, String>) {
     self.blocks = blocks;
     let cw = self.content_width();
-    self.visual_lines = build_visual_lines(&self.blocks, cw, self.height);
+    self.visual_lines = build_lines_for(&self.blocks, cw, self.height, self.text_only);
     self.sections = build_sections(&self.visual_lines);
     let (label_lines, mut bib_entries, bib_entry_lines) =
       build_link_indexes(&self.blocks, &self.visual_lines);
@@ -438,7 +471,7 @@ impl Reader {
     self.width = w;
     self.height = h;
     let cw = self.content_width();
-    self.visual_lines = build_visual_lines(&self.blocks, cw, h);
+    self.visual_lines = build_lines_for(&self.blocks, cw, h, self.text_only);
     self.sections = build_sections(&self.visual_lines);
     let (ll, be, bel) = build_link_indexes(&self.blocks, &self.visual_lines);
     self.label_lines = ll;
@@ -457,10 +490,31 @@ impl Reader {
     self.clamp_position();
   }
 
+  /// Toggle inline figure rendering.  When `true`, `visual_lines` is
+  /// rebuilt without `Image` / `ImageRow` rows so text reflows past
+  /// where the figures would have been.  Used by hosts that draw
+  /// figures in a dedicated preview pane via `images::place_one_figure`.
+  ///
+  /// Preserves `bib_entries` (keyed by cite-key, not visual-line
+  /// index) so externally-merged bibitems aren't lost across toggles.
+  pub fn set_text_only(&mut self, value: bool) {
+    if self.text_only == value {
+      return;
+    }
+    self.text_only = value;
+    let cw = self.content_width();
+    self.visual_lines = build_lines_for(&self.blocks, cw, self.height, self.text_only);
+    self.sections = build_sections(&self.visual_lines);
+    let (ll, _be, bel) = build_link_indexes(&self.blocks, &self.visual_lines);
+    self.label_lines = ll;
+    self.bib_entry_lines = bel;
+    self.clamp_position();
+  }
+
   pub fn toggle_toc(&mut self) {
     self.toc_visible = !self.toc_visible;
     let cw = self.content_width();
-    self.visual_lines = build_visual_lines(&self.blocks, cw, self.height);
+    self.visual_lines = build_lines_for(&self.blocks, cw, self.height, self.text_only);
     self.sections = build_sections(&self.visual_lines);
     self.clamp_position();
   }
@@ -685,5 +739,67 @@ fn block_text(block: &Block) -> String {
     Block::ListItem { content, .. } => content.iter().map(|s| s.text.as_str()).collect(),
     Block::Quote(spans) => spans.iter().map(|s| s.text.as_str()).collect(),
     _ => String::new(),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn doc_with_one_image() -> Vec<Block> {
+    vec![
+      Block::Line("paragraph one".to_string()),
+      Block::Image {
+        path: std::path::PathBuf::from("nowhere.png"),
+        alt: "alt text".to_string(),
+        kitty_id: 1,
+        dims: Some((100, 100)),
+        stack_total: 1,
+      },
+      Block::Line("paragraph two".to_string()),
+    ]
+  }
+
+  #[test]
+  fn text_only_filters_image_visual_lines() {
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+    let inline_has_image = reader.visual_lines.iter().any(|vl| {
+      matches!(
+        vl.kind,
+        VisualLineKind::Image { .. } | VisualLineKind::ImageRow { .. },
+      )
+    });
+    assert!(inline_has_image, "default reader should render image rows inline");
+
+    reader.set_text_only(true);
+    let text_only_has_image = reader.visual_lines.iter().any(|vl| {
+      matches!(
+        vl.kind,
+        VisualLineKind::Image { .. } | VisualLineKind::ImageRow { .. },
+      )
+    });
+    assert!(!text_only_has_image, "text_only mode must not emit image rows");
+    assert!(reader.text_only);
+  }
+
+  #[test]
+  fn set_text_only_round_trips() {
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+    let before = reader.visual_lines.len();
+    reader.set_text_only(true);
+    reader.set_text_only(false);
+    assert_eq!(reader.visual_lines.len(), before, "toggling back restores inline figures");
+    assert!(!reader.text_only);
+  }
+
+  #[test]
+  fn set_text_only_preserves_image_paths() {
+    // image_paths is keyed off blocks, not visual_lines — Phase C
+    // needs it intact in text_only mode so the preview pane can
+    // still look up paths by kitty_id.
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+    assert_eq!(reader.image_paths.len(), 1);
+    reader.set_text_only(true);
+    assert_eq!(reader.image_paths.len(), 1);
   }
 }
