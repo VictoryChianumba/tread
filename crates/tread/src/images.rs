@@ -24,6 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use doc_model::VisualLineKind;
 use image::imageops::FilterType;
@@ -38,6 +39,10 @@ use crate::state::Reader;
 // (when not inside tmux) tolerates much larger payloads, so we let the
 // detection layer decide.  See that function's docs for the full
 // rationale and override behaviour.
+
+/// Retry interval for image loads that failed at first sight.
+/// See `ImageState::negative_loads`.
+const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// Frame-to-frame image bookkeeping for the post-draw injector.
 ///
@@ -67,27 +72,59 @@ pub struct ImageState {
   /// Compared against the current frame's intended placement; equal
   /// means "already on screen, don't re-emit."
   last_emitted: HashMap<u32, (u16, u16, u16, u16)>,
+  /// Wall-clock timestamps for ids that failed to load.  Used to
+  /// expire negative entries in `bytes` after `NEGATIVE_CACHE_TTL` so
+  /// a file that becomes readable later (e.g. a still-downloading
+  /// asset finishes, or the user fixes a permissions problem)
+  /// recovers without restarting the reader — but not so often that
+  /// rapid scroll keeps re-spawning `pdftoppm` for a genuinely
+  /// missing figure.
+  negative_loads: HashMap<u32, Instant>,
   /// Ids whose image bytes the terminal currently has cached.  Set on
   /// first successful `a=T` transmission; consulted by the scroll-time
   /// re-place path to decide whether we can use the cheap `a=p`
   /// (placement-only, ~50 bytes) or have to re-transmit the full `a=T`
-  /// payload (~400 KB base64 per image).  Cleared by `clear_all` —
-  /// resize and focus-loss invalidate the assumption that the terminal
-  /// still has our bytes.  Only ever populated when the host terminal
-  /// is known to persist image data between frames; on iTerm2 (no
-  /// persistent cache) this stays empty and every placement goes
-  /// through the full-retransmit path, matching prior behaviour.
+  /// payload (~400 KB base64 per image).  Survives `clear_all`:
+  /// `delete_placement` sends `a=d,d=i` which clears placements only
+  /// and leaves stored image data in the terminal, so re-placing after
+  /// a resize / focus-loss can still take the cheap `a=p` path.  Only
+  /// ever populated when the host terminal is known to persist image
+  /// data between frames; on iTerm2 (no persistent cache) this stays
+  /// empty and every placement goes through the full-retransmit path.
   transmitted_ids: HashSet<u32>,
 }
 
-impl ImageState {
-  /// True when there's at least one image placed on screen from a
-  /// previous frame.  Used by the burst-skip path in the standalone
-  /// event loop to decide whether a frame that's skipping emission
-  /// still owes a delete-all (so the old placement doesn't ghost
-  /// over the text that just scrolled into its row).
-  pub fn has_placements(&self) -> bool {
-    !self.prev_visible.is_empty()
+/// Input-pacing signal for the image burst-skip gate.
+///
+/// `after_draw_guarded` consults `in_burst()` to decide whether to skip
+/// emission for the current frame.  Hosts call `note_event()` whenever
+/// a navigation key dispatches to the focused reader — that timestamp
+/// is the only signal `in_burst()` reads, so the tracker works in any
+/// event-loop shape (poll-based, channel-based, hybrid).  The previous
+/// `event::poll(Duration::ZERO)` heuristic only worked in loops that
+/// hadn't pre-drained their event queue; this one doesn't care.
+///
+/// `burst_window` defaults to 100 ms — long enough to cover macOS
+/// key-repeat (≈33 ms) with a few frames of headroom, short enough
+/// that the gate releases promptly when the user stops scrolling.
+pub struct BurstTracker {
+  last_event_at: Option<Instant>,
+  burst_window: Duration,
+}
+
+impl Default for BurstTracker {
+  fn default() -> Self {
+    Self { last_event_at: None, burst_window: Duration::from_millis(100) }
+  }
+}
+
+impl BurstTracker {
+  pub fn note_event(&mut self) {
+    self.last_event_at = Some(Instant::now());
+  }
+
+  pub fn in_burst(&self) -> bool {
+    self.last_event_at.map(|t| t.elapsed() < self.burst_window).unwrap_or(false)
   }
 }
 
@@ -103,6 +140,28 @@ pub fn place_visible(
 ) {
   if !supported {
     return;
+  }
+
+  // Expire stale negative-load entries so a file that became readable
+  // after we first tried it (still-downloading asset, transient
+  // permissions error) gets a fresh attempt on the next frame.  We
+  // drop the matching `bytes` entry too so the `or_insert_with` loop
+  // below actually retries; if the load fails again the negative
+  // stamp is reapplied and the next retry is another window away.
+  let now = Instant::now();
+  let expired: Vec<u32> = state
+    .negative_loads
+    .iter()
+    .filter(|(_, t)| now.duration_since(**t) >= NEGATIVE_CACHE_TTL)
+    .map(|(id, _)| *id)
+    .collect();
+  for id in expired {
+    state.negative_loads.remove(&id);
+    // Only evict the `bytes` entry if it still represents a failure;
+    // a successful load between stamp and expiry must not be wiped.
+    if matches!(state.bytes.get(&id), Some(None)) {
+      state.bytes.remove(&id);
+    }
   }
 
   // Collect first-row Image VLs that fall inside content_area, plus
@@ -230,20 +289,25 @@ pub fn place_visible(
   let has_cache = kitty_graphics::has_persistent_image_cache();
   for &(id, abs_row, rows, abs_col, cols) in &placements {
     let path_for_load = reader.image_paths.get(&id).cloned();
-    let bytes_opt = state.bytes.entry(id).or_insert_with(|| {
-      let result = path_for_load.as_ref().and_then(|p| {
-        let r = resolve_png(p);
-        if trace {
-          match &r {
-            Ok(b) => eprintln!("  load id={} path={:?} ok ({} bytes)", id, p, b.len()),
-            Err(e) => eprintln!("  load id={} path={:?} ERR: {}", id, p, e),
+    // Trigger the lazy load inside a tight scope so the mutable
+    // borrow on `state.bytes` releases before the failure-path stamp
+    // touches `state.negative_loads` below.
+    {
+      state.bytes.entry(id).or_insert_with(|| {
+        path_for_load.as_ref().and_then(|p| {
+          let r = resolve_png(p);
+          if trace {
+            match &r {
+              Ok(b) => eprintln!("  load id={} path={:?} ok ({} bytes)", id, p, b.len()),
+              Err(e) => eprintln!("  load id={} path={:?} ERR: {}", id, p, e),
+            }
           }
-        }
-        r.ok()
+          r.ok()
+        })
       });
-      result
-    });
-    let Some(bytes) = bytes_opt.as_ref() else {
+    }
+    let Some(bytes) = state.bytes.get(&id).and_then(|v| v.as_ref()) else {
+      state.negative_loads.entry(id).or_insert_with(Instant::now);
       if trace { eprintln!("  skip id={} (no bytes)", id); }
       continue;
     };
@@ -290,6 +354,12 @@ pub fn place_visible(
 /// the user's shell after the alt-screen tears down.  Also resets
 /// `last_emitted` since the cached coordinates are about to become
 /// invalid (resize re-flows visual_lines; exit closes the alt screen).
+///
+/// `transmitted_ids` is deliberately preserved: `delete_placement`
+/// uses `a=d,d=i` which removes placements without freeing the stored
+/// image data, so the next emit after a resize / focus-loss can still
+/// take the cheap `a=p` path on native Kitty instead of a full `a=T`
+/// retransmit.
 pub fn clear_all(state: &mut ImageState) {
   let mut batch = BatchEmitter::new();
   for id in state.prev_visible.drain() {
@@ -297,11 +367,6 @@ pub fn clear_all(state: &mut ImageState) {
   }
   let _ = batch.flush();
   state.last_emitted.clear();
-  // After a resize / focus-loss / exit we no longer trust that the
-  // terminal still has our image bytes cached.  Drop transmitted_ids
-  // so the next placement falls back to a full `a=T` retransmit;
-  // re-population happens automatically on that next emit.
-  state.transmitted_ids.clear();
 }
 
 /// Resolve an image source path to PNG bytes.  PNGs read directly;
@@ -322,7 +387,8 @@ fn resolve_png(path: &Path) -> std::io::Result<Vec<u8>> {
     "pdf" => {
       let cache = cache_dir();
       let png = kitty_graphics::pdf::pdf_to_png(path, &cache)?;
-      std::fs::read(png)
+      let png_bytes = std::fs::read(&png)?;
+      return normalize_png_for_terminal(&png, png_bytes);
     }
     "jpg" | "jpeg" => {
       let img = image::open(path)
@@ -363,9 +429,12 @@ fn normalize_png_for_terminal_with_limit(
   // result alongside the PDF rasterization cache and skip the work
   // on every later session.  Cap-suffixed filename keeps Kitty's
   // wider cap and iTerm2's 300 KB cap from colliding on the same
-  // path.  `normalized_cache_path` returns None when the source
-  // path can't be canonicalized — e.g. test fixtures that don't
-  // exist on disk — so tests don't pollute the real user cache.
+  // path.  The cache key also includes source-file freshness
+  // metadata, so a refreshed asset at the same path doesn't keep
+  // serving an older normalized PNG forever.  `normalized_cache_path`
+  // returns None when the source path can't be canonicalized — e.g.
+  // test fixtures that don't exist on disk — so tests don't pollute
+  // the real user cache.
   let cache_path = normalized_cache_path(path, max_bytes);
   if let Some(ref cp) = cache_path
     && let Ok(cached) = std::fs::read(cp)
@@ -439,14 +508,12 @@ fn normalize_png_for_terminal_with_limit(
   // Skip when the source path didn't canonicalize (tests with
   // synthetic paths) or when normalization couldn't get the bytes
   // under the cap (no point caching an oversized result; next
-  // session would just reject it).
+  // session would just reject it).  Writes go through a temp file +
+  // rename so readers never observe a truncated cache artifact.
   if let Some(ref cp) = cache_path
     && png_bytes.len() <= max_bytes
   {
-    if let Some(parent) = cp.parent() {
-      let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(cp, &png_bytes);
+    let _ = write_atomic(cp, &png_bytes);
     if trace {
       eprintln!(
         "  norm-cache write {:?}: {} bytes (cap {})",
@@ -479,19 +546,63 @@ fn cache_dir() -> PathBuf {
 }
 
 /// Filesystem path for the cached normalized PNG produced from
-/// `(source, max_bytes)`.  Returns `None` when `source` doesn't
-/// canonicalize (test fixtures with non-existent synthetic paths,
-/// or genuinely missing files) — caching is best-effort and not
-/// having a real source means we have nothing stable to key on.
-/// Filename embeds both the FNV-1a hash of the canonical source
-/// path and the cap, so cap changes (between terminals with
-/// different `transmit_byte_cap` values) don't collide on the same
-/// cache slot.  Matches the PDF rasterization cache's naming style.
+/// `(source freshness, max_bytes)`.  Returns `None` when `source`
+/// doesn't canonicalize or stat cleanly (test fixtures with
+/// non-existent synthetic paths, or genuinely missing files) —
+/// caching is best-effort and not having a real source means we
+/// have nothing stable to key on.
+///
+/// Filename embeds both the FNV-1a hash of the canonical source path
+/// plus freshness metadata and the cap, so:
+/// - cap changes (between terminals with different
+///   `transmit_byte_cap` values) don't collide on the same slot
+/// - refreshed source assets at the same path don't keep serving
+///   stale normalized PNGs
+///
+/// Matches the PDF rasterization cache's naming style.
 fn normalized_cache_path(source: &Path, max_bytes: usize) -> Option<PathBuf> {
   let canonical = std::fs::canonicalize(source).ok()?;
-  let key_bytes = canonical.as_os_str().to_string_lossy();
-  let key = fnv1a_64(key_bytes.as_bytes());
+  let freshness = source_fingerprint(&canonical)?;
+  let key = fnv1a_64(freshness.as_bytes());
   Some(cache_dir().join(format!("{key:016x}-{max_bytes}.norm.png")))
+}
+
+fn source_fingerprint(source: &Path) -> Option<String> {
+  let metadata = std::fs::metadata(source).ok()?;
+  let modified = metadata.modified().ok()
+    .and_then(|ts| ts.duration_since(UNIX_EPOCH).ok())
+    .unwrap_or_default();
+  Some(format!(
+    "{}|{}|{}|{}",
+    source.as_os_str().to_string_lossy(),
+    metadata.len(),
+    modified.as_secs(),
+    modified.subsec_nanos(),
+  ))
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+  let Some(parent) = path.parent() else {
+    return std::fs::write(path, bytes);
+  };
+  std::fs::create_dir_all(parent)?;
+  let file_name = path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .unwrap_or("cache");
+  let stamp = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_nanos();
+  let tmp = parent.join(format!(".{file_name}.tmp-{}-{stamp}", std::process::id()));
+  std::fs::write(&tmp, bytes)?;
+  match std::fs::rename(&tmp, path) {
+    Ok(()) => Ok(()),
+    Err(err) => {
+      let _ = std::fs::remove_file(&tmp);
+      Err(err)
+    }
+  }
 }
 
 /// FNV-1a 64-bit hash — same algorithm and constants as
@@ -543,5 +654,23 @@ mod tests {
 
     let decoded = image::load_from_memory_with_format(&out, image::ImageFormat::Png).unwrap();
     assert!(decoded.width() < 512 || decoded.height() < 512);
+  }
+
+  #[test]
+  fn normalized_cache_key_changes_when_source_metadata_changes() {
+    let temp = std::env::temp_dir().join(format!(
+      "tread-norm-cache-{}-{}.png",
+      std::process::id(),
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+    ));
+    std::fs::write(&temp, b"one").unwrap();
+    let first = normalized_cache_path(&temp, 1234).unwrap();
+    std::fs::write(&temp, b"two two").unwrap();
+    let second = normalized_cache_path(&temp, 1234).unwrap();
+    let _ = std::fs::remove_file(&temp);
+    assert_ne!(first, second);
   }
 }

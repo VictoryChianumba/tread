@@ -18,6 +18,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::UNIX_EPOCH;
 
 /// Render resolution.  150 DPI is the matplotlib/seaborn default and
 /// roughly matches retina cell sizes — pixelation kicks in only at very
@@ -67,15 +68,40 @@ pub fn pdf_to_png(input: &Path, cache_dir: &Path) -> io::Result<PathBuf> {
   Ok(target)
 }
 
-/// FNV-1a 64-bit hash of the canonicalised input path.  Stable across
-/// std versions and processes — unlike `DefaultHasher`, which std
-/// reserves the right to swap out.  Falls back to the raw path if
-/// `canonicalize` fails (e.g. file not yet created), so the function
-/// never panics on hashing.
+/// FNV-1a 64-bit hash of the canonicalised input path mixed with the
+/// source file's size and mtime, so a refreshed PDF at the same path
+/// doesn't keep serving the older rasterised PNG forever.  Stable
+/// across std versions and processes — unlike `DefaultHasher`, which
+/// std reserves the right to swap out.  Falls back to the raw path if
+/// `canonicalize` fails (e.g. file not yet created); falls back to
+/// path-only if `metadata` fails, so the function never panics and
+/// existing synthetic-path tests still produce deterministic keys.
 fn cache_key(input: &Path) -> String {
   let canonical = std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf());
-  let bytes = canonical.as_os_str().to_string_lossy();
-  format!("{:016x}", fnv1a_64(bytes.as_bytes()))
+  let path_bytes = canonical.as_os_str().to_string_lossy();
+  let freshness = freshness_token(&canonical);
+  format!("{:016x}", fnv1a_64(format!("{path_bytes}|{freshness}").as_bytes()))
+}
+
+/// `len|mtime_secs|mtime_subsec_nanos` for cache-key freshness mixing.
+/// Returns an empty string when metadata is unavailable so callers stay
+/// infallible — a stat failure just collapses the key to path-only,
+/// which matches prior behaviour.
+fn freshness_token(path: &Path) -> String {
+  let Ok(meta) = std::fs::metadata(path) else {
+    return String::new();
+  };
+  let modified = meta
+    .modified()
+    .ok()
+    .and_then(|ts| ts.duration_since(UNIX_EPOCH).ok())
+    .unwrap_or_default();
+  format!(
+    "{}|{}|{}",
+    meta.len(),
+    modified.as_secs(),
+    modified.subsec_nanos(),
+  )
 }
 
 fn fnv1a_64(bytes: &[u8]) -> u64 {
@@ -111,6 +137,25 @@ mod tests {
       cache_key(Path::new("/tmp/a.pdf")),
       cache_key(Path::new("/tmp/b.pdf")),
     );
+  }
+
+  #[test]
+  fn cache_key_changes_when_source_metadata_changes() {
+    use std::time::SystemTime;
+    let temp = std::env::temp_dir().join(format!(
+      "tread-pdf-cache-key-{}-{}.pdf",
+      std::process::id(),
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+    ));
+    std::fs::write(&temp, b"one").unwrap();
+    let first = cache_key(&temp);
+    std::fs::write(&temp, b"two two two").unwrap();
+    let second = cache_key(&temp);
+    let _ = std::fs::remove_file(&temp);
+    assert_ne!(first, second);
   }
 
   /// Real-PDF smoke test.  Skipped by default — run with

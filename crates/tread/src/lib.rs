@@ -35,7 +35,7 @@ use std::io;
 // break.
 pub use state::{Reader, PaperMeta};
 pub use commands::ReaderAction;
-pub use images::ImageState;
+pub use images::{BurstTracker, ImageState};
 pub use voice::PlaybackController;
 // Re-export the ui_theme crate so embedding hosts can name `tread::Theme`
 // (and its `Color` enum) without taking a separate path-dep on the same
@@ -362,6 +362,45 @@ pub fn after_draw(reader: &Reader, state: &mut ImageState, area: Rect, kitty_sup
   }
   let (_, _, content_area, _, _) = render::split_layout(area, reader);
   images::place_visible(reader, state, content_area, kitty_supported);
+}
+
+/// True when the current runtime should suppress image re-emission
+/// during queued-input bursts.  This only applies to terminals that
+/// lack a persistent Kitty image cache: on those hosts every placement
+/// change forces a full `a=T` retransmit, which can overwhelm the
+/// terminal during rapid scroll. Native Kitty keeps image bytes cached
+/// and uses the cheap `a=p` path instead, so burst-skip would only add
+/// flicker for no gain there.
+pub fn burst_skip_enabled(kitty_supported: bool) -> bool {
+  let user_disabled = std::env::var("TREAD_IMAGE_BURST_HIDE")
+    .map(|v| v == "0")
+    .unwrap_or(false);
+  kitty_supported
+    && !kitty_graphics::has_persistent_image_cache()
+    && !user_disabled
+}
+
+/// Like [`after_draw`] but coalesces image emission during input bursts.
+///
+/// Hosts compute `burst_in_progress` from a [`BurstTracker`] kept
+/// alongside the per-pane [`ImageState`]; on a non-cache host with the
+/// gate enabled, this helper returns without emitting anything for the
+/// frame.  The existing placement stays on the terminal (we don't
+/// delete) so the prior image lingers in its old spot rather than
+/// blinking out — far less jarring than the previous behaviour during
+/// scroll on iTerm2.  When the burst ends, the next non-skipped frame
+/// emits a normal delete+place and the image snaps to its new row.
+pub fn after_draw_guarded(
+  reader: &Reader,
+  state: &mut ImageState,
+  area: Rect,
+  kitty_supported: bool,
+  burst_in_progress: bool,
+) {
+  if burst_skip_enabled(kitty_supported) && burst_in_progress {
+    return;
+  }
+  after_draw(reader, state, area, kitty_supported);
 }
 
 /// Public draw entry point — wraps `render::draw` so hosts don't need
@@ -715,36 +754,6 @@ fn standalone_loop(
   kitty_supported: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
   let mut img_state = images::ImageState::default();
-  // Burst-skip strategy: when the host terminal can't persist image
-  // data between frames (iTerm2, unknown terminals, tmux-isolated
-  // Kitty), every scroll line re-transmits the full base64 PNG via
-  // `a=T` — ~400 KB per visible image per keystroke.  iTerm2's
-  // image-decode loop is slower than continuous-scroll input rate, so
-  // each keystroke queues another payload the terminal can't drain in
-  // time.  The kernel pipe fills, our `write()` blocks, and the page
-  // visibly "catches up" between keystrokes.  This is a
-  // protocol/host limitation that our current emission strategy
-  // exacerbates by emitting per-keystroke when the host can only
-  // absorb per-pause.  Coalesce instead: when input events are queued
-  // (we're mid-burst), skip placement emission and emit on the first
-  // quiescent frame.
-  //
-  // Strictly *not* applied on persistent-cache hosts (native Kitty
-  // outside tmux): on that path each scroll line emits ~100 bytes
-  // via `a=p`, iTerm2's back-pressure doesn't exist, and burst-skip
-  // would introduce a "images briefly vanish during scroll" artifact
-  // for zero perf gain.
-  //
-  // Override: set `TREAD_IMAGE_BURST_HIDE=0` to keep the old
-  // per-keystroke emission cadence everywhere.  Use if the
-  // disappear-during-scroll feel is worse than the catch-up lag in
-  // your environment.
-  let burst_skip_user_disabled = std::env::var("TREAD_IMAGE_BURST_HIDE")
-    .map(|v| v == "0")
-    .unwrap_or(false);
-  let burst_skip_enabled = kitty_supported
-    && !kitty_graphics::has_persistent_image_cache()
-    && !burst_skip_user_disabled;
   loop {
     let mut drawn_area = Rect::default();
     terminal.draw(|f| {
@@ -753,23 +762,15 @@ fn standalone_loop(
     })?;
 
     if kitty_supported {
-      // Probe for queued input *before* image emission so a mid-burst
-      // frame skips the expensive a=T retransmit.  Zero-duration poll
-      // is cheap (one non-blocking kevent check) and only happens on
-      // hosts where the optimization actually matters.
-      let burst_in_progress = burst_skip_enabled
+      let burst_in_progress = burst_skip_enabled(kitty_supported)
         && event::poll(std::time::Duration::ZERO)?;
-      if burst_in_progress {
-        if img_state.has_placements() {
-          // One-shot delete on burst-start so the previously-placed
-          // image doesn't ghost over the text scrolling beneath it.
-          // Subsequent in-burst frames see has_placements() == false
-          // and emit nothing.
-          images::clear_all(&mut img_state);
-        }
-      } else {
-        after_draw(reader, &mut img_state, drawn_area, kitty_supported);
-      }
+      after_draw_guarded(
+        reader,
+        &mut img_state,
+        drawn_area,
+        kitty_supported,
+        burst_in_progress,
+      );
     }
 
     if !event::poll(std::time::Duration::from_millis(100))? {
