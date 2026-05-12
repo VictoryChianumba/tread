@@ -716,12 +716,14 @@ fn standalone_loop(
 ) -> Result<(), Box<dyn std::error::Error>> {
   let mut img_state = images::ImageState::default();
   loop {
-    terminal.draw(|f| render::draw(f, f.area(), reader, &theme))?;
+    let mut drawn_area = Rect::default();
+    terminal.draw(|f| {
+      drawn_area = f.area();
+      render::draw(f, drawn_area, reader, &theme);
+    })?;
 
     if kitty_supported {
-      let size = terminal.size()?;
-      let area = Rect::new(0, 0, size.width, size.height);
-      after_draw(reader, &mut img_state, area, kitty_supported);
+      after_draw(reader, &mut img_state, drawn_area, kitty_supported);
     }
 
     if !event::poll(std::time::Duration::from_millis(100))? {

@@ -49,14 +49,97 @@ fn tmux_wrap(payload: &[u8]) -> Vec<u8> {
   out
 }
 
-/// Write a single APC graphics escape to stdout, applying the tmux
-/// passthrough wrap when needed.  All Kitty `_G…\x1b\\` sequences flow
-/// through here so the wrapping logic lives in exactly one place.
-fn emit_apc<W: Write>(handle: &mut W, payload: &[u8]) -> io::Result<()> {
-  if in_tmux() {
-    handle.write_all(&tmux_wrap(payload))
-  } else {
-    handle.write_all(payload)
+/// Buffered emitter for one frame's worth of Kitty graphics commands.
+///
+/// `tread`'s scroll path can need several image operations in one
+/// post-draw pass: delete placements that scrolled away, re-place
+/// cached images that moved, and occasionally transmit newly-visible
+/// images.  Writing and flushing each command individually makes the
+/// terminal I/O cost show up in profiles even after we fixed the
+/// heavier raster/normalization issues.
+///
+/// This collector keeps the exact wire protocol unchanged — same
+/// single-APC `a=T`, same `a=p`, same tmux wrapping — but lets the
+/// caller append multiple commands and flush once at the end of the
+/// frame.
+#[derive(Default)]
+pub struct BatchEmitter {
+  payload: Vec<u8>,
+}
+
+impl BatchEmitter {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.payload.is_empty()
+  }
+
+  pub fn flush(self) -> io::Result<()> {
+    if self.payload.is_empty() {
+      return Ok(());
+    }
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    handle.write_all(&self.payload)?;
+    handle.flush()
+  }
+
+  pub fn transmit_and_place(
+    &mut self,
+    id: u32,
+    png_bytes: &[u8],
+    cols: u16,
+    rows: u16,
+    abs_row: u16,
+    abs_col: u16,
+  ) -> io::Result<()> {
+    let b64 = base64_encode(png_bytes);
+    let mut apc: Vec<u8> = Vec::with_capacity(96 + b64.len() + 16);
+    // Cursor positioning first — bundled into the same payload so tmux
+    // passthrough forwards it to iTerm2 in lockstep with the APC.
+    write!(apc, "\x1b[{abs_row};{abs_col}H")?;
+    write!(
+      apc,
+      "\x1b_Ga=T,t=d,f=100,i={id},c={cols},r={rows},C=1,q=2;"
+    )?;
+    apc.extend_from_slice(b64.as_bytes());
+    apc.extend_from_slice(b"\x1b\\");
+    self.append_apc(&apc)
+  }
+
+  pub fn place_by_id(
+    &mut self,
+    id: u32,
+    cols: u16,
+    rows: u16,
+    abs_row: u16,
+    abs_col: u16,
+  ) -> io::Result<()> {
+    let mut apc: Vec<u8> = Vec::with_capacity(64);
+    write!(apc, "\x1b[{abs_row};{abs_col}H")?;
+    write!(
+      apc,
+      "\x1b_Ga=p,i={id},c={cols},r={rows},C=1,q=2\x1b\\"
+    )?;
+    self.append_apc(&apc)
+  }
+
+  pub fn delete_placement(&mut self, id: u32) -> io::Result<()> {
+    // a=d (delete), d=i (by id, free=keep), q=2 (silent).
+    let mut apc = Vec::with_capacity(32);
+    write!(apc, "\x1b_Ga=d,d=i,i={id},q=2\x1b\\")?;
+    self.append_apc(&apc)
+  }
+
+  fn append_apc(&mut self, payload: &[u8]) -> io::Result<()> {
+    if in_tmux() {
+      self.payload.extend_from_slice(&tmux_wrap(payload));
+    } else {
+      self.payload.extend_from_slice(payload);
+    }
+    Ok(())
   }
 }
 
@@ -96,21 +179,9 @@ pub fn transmit_and_place(
   abs_row: u16,
   abs_col: u16,
 ) -> io::Result<()> {
-  let b64 = base64_encode(png_bytes);
-  let stdout = io::stdout();
-  let mut handle = stdout.lock();
-  let mut payload: Vec<u8> = Vec::with_capacity(96 + b64.len() + 16);
-  // Cursor positioning first — bundled into the same payload so tmux
-  // passthrough forwards it to iTerm2 in lockstep with the APC.
-  write!(payload, "\x1b[{abs_row};{abs_col}H")?;
-  write!(
-    payload,
-    "\x1b_Ga=T,t=d,f=100,i={id},c={cols},r={rows},C=1,q=2;"
-  )?;
-  payload.extend_from_slice(b64.as_bytes());
-  payload.extend_from_slice(b"\x1b\\");
-  emit_apc(&mut handle, &payload)?;
-  handle.flush()
+  let mut batch = BatchEmitter::new();
+  batch.transmit_and_place(id, png_bytes, cols, rows, abs_row, abs_col)?;
+  batch.flush()
 }
 
 /// Re-place an already-transmitted image at a new screen position
@@ -137,29 +208,18 @@ pub fn place_by_id(
   abs_row: u16,
   abs_col: u16,
 ) -> io::Result<()> {
-  let stdout = io::stdout();
-  let mut handle = stdout.lock();
-  let mut payload: Vec<u8> = Vec::with_capacity(64);
-  write!(payload, "\x1b[{abs_row};{abs_col}H")?;
-  write!(
-    payload,
-    "\x1b_Ga=p,i={id},c={cols},r={rows},C=1,q=2\x1b\\"
-  )?;
-  emit_apc(&mut handle, &payload)?;
-  handle.flush()
+  let mut batch = BatchEmitter::new();
+  batch.place_by_id(id, cols, rows, abs_row, abs_col)?;
+  batch.flush()
 }
 
 /// Delete a placement of an image (by id) without removing the cached
 /// image data — i.e. clear the visible image but keep the bytes so we
 /// can re-place quickly when scrolled back into view.
 pub fn delete_placement(id: u32) -> io::Result<()> {
-  let stdout = io::stdout();
-  let mut handle = stdout.lock();
-  // a=d (delete), d=i (by id, free=keep), q=2 (silent).
-  let mut payload = Vec::with_capacity(32);
-  write!(payload, "\x1b_Ga=d,d=i,i={id},q=2\x1b\\")?;
-  emit_apc(&mut handle, &payload)?;
-  handle.flush()
+  let mut batch = BatchEmitter::new();
+  batch.delete_placement(id)?;
+  batch.flush()
 }
 
 /// Position the terminal cursor at (row, col) — both 1-indexed,

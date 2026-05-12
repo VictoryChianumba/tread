@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 use doc_model::VisualLineKind;
 use image::imageops::FilterType;
-use kitty_graphics::transmit::{delete_placement, place_by_id, transmit_and_place};
+use kitty_graphics::transmit::BatchEmitter;
 use ratatui::layout::Rect;
 
 use crate::state::Reader;
@@ -167,6 +167,7 @@ pub fn place_visible(
   // actively debugging.  Run with `TREAD_TRACE_IMAGES=1 ... 2>/tmp/br.log`
   // to capture without polluting the alt screen.
   let trace = std::env::var_os("TREAD_TRACE_IMAGES").is_some();
+  let mut batch = BatchEmitter::new();
   if trace && !placements.is_empty() {
     eprintln!(
       "trace: offset={} content_area=({},{},{}x{}) placements={:?}",
@@ -192,7 +193,7 @@ pub fn place_visible(
   // has discarded the image at this point).
   let dropped: Vec<u32> = state.prev_visible.difference(&current).copied().collect();
   for id in dropped {
-    let _ = delete_placement(id);
+    let _ = batch.delete_placement(id);
     state.last_emitted.remove(&id);
   }
 
@@ -244,7 +245,7 @@ pub fn place_visible(
       if trace { eprintln!("  cached id={} at row={} col={}", id, abs_row + 1, abs_col + 1); }
       continue;
     }
-    let _ = delete_placement(id);
+    let _ = batch.delete_placement(id);
     // Cursor positioning travels inside the same passthrough envelope
     // as the APC — see `transmit_and_place` / `place_by_id` doc
     // comments for the tmux DCS details.  Both row and col are
@@ -255,13 +256,13 @@ pub fn place_visible(
         eprintln!("  place id={} at row={} col={} cells={}x{} (cached)",
           id, abs_row + 1, abs_col + 1, cols, rows);
       }
-      let _ = place_by_id(id, cols, rows, abs_row + 1, abs_col + 1);
+      let _ = batch.place_by_id(id, cols, rows, abs_row + 1, abs_col + 1);
     } else {
       if trace {
         eprintln!("  emit id={} at row={} col={} cells={}x{}",
           id, abs_row + 1, abs_col + 1, cols, rows);
       }
-      let _ = transmit_and_place(id, bytes, cols, rows, abs_row + 1, abs_col + 1);
+      let _ = batch.transmit_and_place(id, bytes, cols, rows, abs_row + 1, abs_col + 1);
       if has_cache {
         state.transmitted_ids.insert(id);
       }
@@ -269,6 +270,7 @@ pub fn place_visible(
     state.last_emitted.insert(id, placement_key);
   }
 
+  let _ = batch.flush();
   state.prev_visible = current;
 }
 
@@ -278,9 +280,11 @@ pub fn place_visible(
 /// `last_emitted` since the cached coordinates are about to become
 /// invalid (resize re-flows visual_lines; exit closes the alt screen).
 pub fn clear_all(state: &mut ImageState) {
+  let mut batch = BatchEmitter::new();
   for id in state.prev_visible.drain() {
-    let _ = delete_placement(id);
+    let _ = batch.delete_placement(id);
   }
+  let _ = batch.flush();
   state.last_emitted.clear();
   // After a resize / focus-loss / exit we no longer trust that the
   // terminal still has our image bytes cached.  Drop transmitted_ids
