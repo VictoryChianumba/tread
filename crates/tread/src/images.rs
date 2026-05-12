@@ -80,6 +80,17 @@ pub struct ImageState {
   transmitted_ids: HashSet<u32>,
 }
 
+impl ImageState {
+  /// True when there's at least one image placed on screen from a
+  /// previous frame.  Used by the burst-skip path in the standalone
+  /// event loop to decide whether a frame that's skipping emission
+  /// still owes a delete-all (so the old placement doesn't ghost
+  /// over the text that just scrolled into its row).
+  pub fn has_placements(&self) -> bool {
+    !self.prev_visible.is_empty()
+  }
+}
+
 /// Walk the visible window for Image VLs and emit Kitty escapes to
 /// transmit (first time) and place each one at its current screen row.
 /// No-op if `supported == false` — keeps the hot path cheap on
