@@ -354,6 +354,43 @@ fn normalize_png_for_terminal_with_limit(
   }
 
   let trace = std::env::var_os("TREAD_TRACE_IMAGES").is_some();
+
+  // Cross-session disk cache for downscaled PNGs.  Lanczos3 +
+  // re-encode is the dominant first-visibility CPU cost on
+  // figure-heavy iTerm2 scrolls (~30-50% of busy samples after the
+  // burst-skip change exposed it as the new top leaf).  Each (source
+  // path, max_bytes) tuple has a deterministic output, so save the
+  // result alongside the PDF rasterization cache and skip the work
+  // on every later session.  Cap-suffixed filename keeps Kitty's
+  // wider cap and iTerm2's 300 KB cap from colliding on the same
+  // path.  `normalized_cache_path` returns None when the source
+  // path can't be canonicalized — e.g. test fixtures that don't
+  // exist on disk — so tests don't pollute the real user cache.
+  let cache_path = normalized_cache_path(path, max_bytes);
+  if let Some(ref cp) = cache_path
+    && let Ok(cached) = std::fs::read(cp)
+  {
+    // PNG signature check + size bound: filters out partial writes,
+    // foreign files at the same hash slot, and cached outputs from a
+    // larger-cap session that wouldn't fit our current budget.  Any
+    // miss falls through to re-encode and re-cache below.
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if cached.len() >= 8
+      && &cached[..8] == PNG_SIGNATURE
+      && cached.len() <= max_bytes
+    {
+      if trace {
+        eprintln!(
+          "  norm-cache hit {:?}: {} bytes (cap {})",
+          path,
+          cached.len(),
+          max_bytes
+        );
+      }
+      return Ok(cached);
+    }
+  }
+
   let mut img = image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png)
     .map_err(|e| std::io::Error::other(format!("decode png {path:?}: {e}")))?;
 
@@ -397,6 +434,29 @@ fn normalize_png_for_terminal_with_limit(
     img = resized;
   }
 
+  // Best-effort cache write — failure here just means the next
+  // session will redo the work, no functional impact this session.
+  // Skip when the source path didn't canonicalize (tests with
+  // synthetic paths) or when normalization couldn't get the bytes
+  // under the cap (no point caching an oversized result; next
+  // session would just reject it).
+  if let Some(ref cp) = cache_path
+    && png_bytes.len() <= max_bytes
+  {
+    if let Some(parent) = cp.parent() {
+      let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(cp, &png_bytes);
+    if trace {
+      eprintln!(
+        "  norm-cache write {:?}: {} bytes (cap {})",
+        path,
+        png_bytes.len(),
+        max_bytes
+      );
+    }
+  }
+
   Ok(png_bytes)
 }
 
@@ -416,6 +476,35 @@ fn cache_dir() -> PathBuf {
       .join("figures");
   }
   std::env::temp_dir().join("tread-figures")
+}
+
+/// Filesystem path for the cached normalized PNG produced from
+/// `(source, max_bytes)`.  Returns `None` when `source` doesn't
+/// canonicalize (test fixtures with non-existent synthetic paths,
+/// or genuinely missing files) — caching is best-effort and not
+/// having a real source means we have nothing stable to key on.
+/// Filename embeds both the FNV-1a hash of the canonical source
+/// path and the cap, so cap changes (between terminals with
+/// different `transmit_byte_cap` values) don't collide on the same
+/// cache slot.  Matches the PDF rasterization cache's naming style.
+fn normalized_cache_path(source: &Path, max_bytes: usize) -> Option<PathBuf> {
+  let canonical = std::fs::canonicalize(source).ok()?;
+  let key_bytes = canonical.as_os_str().to_string_lossy();
+  let key = fnv1a_64(key_bytes.as_bytes());
+  Some(cache_dir().join(format!("{key:016x}-{max_bytes}.norm.png")))
+}
+
+/// FNV-1a 64-bit hash — same algorithm and constants as
+/// `kitty_graphics::pdf::cache_key` for consistency across the
+/// project's caching layers.  Stable across std versions (which
+/// `DefaultHasher` is not).
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+  let mut h: u64 = 0xcbf29ce484222325;
+  for &b in bytes {
+    h ^= b as u64;
+    h = h.wrapping_mul(0x100000001b3);
+  }
+  h
 }
 
 #[cfg(test)]
