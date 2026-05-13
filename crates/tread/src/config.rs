@@ -33,6 +33,13 @@ pub struct ReaderConfig {
   /// `ELEVENLABS_API_KEY` is **environment-only** and never lands here.
   #[serde(default)]
   pub voice: Option<VoiceConfig>,
+  /// Sticky default for the figure-preview side pane.  Toggled by
+  /// `i` in normal mode; written here on every flip so the user's
+  /// last choice is what greets them in the next session.
+  /// `#[serde(default)]` so older `block_reader.json` files without
+  /// this field load as `false`.
+  #[serde(default)]
+  pub figure_preview_default: bool,
 }
 
 /// Voice / TTS configuration, persisted alongside the reader's other
@@ -121,7 +128,7 @@ mod tests {
 
   #[test]
   fn config_round_trip() {
-    let c = ReaderConfig { theme_override: Some("light".to_string()), voice: None };
+    let c = ReaderConfig { theme_override: Some("light".to_string()), voice: None, figure_preview_default: false };
     let json = serde_json::to_string(&c).unwrap();
     let back: ReaderConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(back.theme_override.as_deref(), Some("light"));
@@ -153,6 +160,7 @@ mod tests {
         piper_model: String::new(),
         playback_speed: 1.25,
       }),
+      figure_preview_default: false,
     };
     let json = serde_json::to_string(&c).unwrap();
     let back: ReaderConfig = serde_json::from_str(&json).unwrap();
@@ -168,5 +176,26 @@ mod tests {
     let back: ReaderConfig = serde_json::from_str(json).unwrap();
     let v = back.voice.unwrap();
     assert!((v.playback_speed - 1.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn figure_preview_default_defaults_to_false() {
+    // Older configs (no figure_preview_default field) load as false
+    // — the conservative default keeps the existing reading UX
+    // until the user explicitly opts in via `i`.
+    let back: ReaderConfig = serde_json::from_str(r#"{}"#).unwrap();
+    assert!(!back.figure_preview_default);
+  }
+
+  #[test]
+  fn figure_preview_default_round_trips() {
+    let c = ReaderConfig {
+      theme_override: None,
+      voice: None,
+      figure_preview_default: true,
+    };
+    let json = serde_json::to_string(&c).unwrap();
+    let back: ReaderConfig = serde_json::from_str(&json).unwrap();
+    assert!(back.figure_preview_default);
   }
 }

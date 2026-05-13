@@ -361,7 +361,16 @@ pub fn after_draw(reader: &Reader, state: &mut ImageState, area: Rect, kitty_sup
     return;
   }
   let (_, _, content_area, _, _) = render::split_layout(area, reader);
-  images::place_visible(reader, state, content_area, kitty_supported);
+  let (reader_area, preview_area) =
+    render::split_content_for_preview(content_area, reader);
+  images::place_visible(reader, state, reader_area, kitty_supported);
+  // Always call place_one_figure: Some(id) paints, None clears any
+  // stale placement from a prior frame.  When the preview pane is
+  // off, `preview_area` is None and we pass kid=None — the rect is a
+  // placeholder; `place_one_figure(None, ...)` doesn't read it.
+  let kid = preview_area.and_then(|_| reader.current_figure_kitty_id());
+  let rect = preview_area.unwrap_or(area);
+  images::place_one_figure(reader, state, kid, rect, kitty_supported);
 }
 
 /// True when the current runtime should suppress image re-emission
@@ -688,6 +697,10 @@ impl Reader {
             ReaderAction::Continue
           }
           Mode::AwaitingG => { handle_awaiting_g(self, key.code); ReaderAction::Continue }
+          Mode::AwaitingBracket { forward } => {
+            handle_awaiting_bracket(self, key.code, forward);
+            ReaderAction::Continue
+          }
           Mode::AwaitingOperator { op } => {
             handle_awaiting_operator(self, key.code, op);
             ReaderAction::Continue
@@ -1008,12 +1021,21 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
       reader.search_prev();
     }
     KeyCode::Char(']') => {
-      let n = take_count(reader);
-      for _ in 0..n { reader.jump_next_section(); }
+      // `]` is now a prefix (vim convention): `]]` jumps section,
+      // `]f` steps the figure preview.  Section jump is one keystroke
+      // longer than before but matches vim's section-motion idiom.
+      reader.count_buf.clear();
+      reader.mode = Mode::AwaitingBracket { forward: true };
     }
     KeyCode::Char('[') => {
-      let n = take_count(reader);
-      for _ in 0..n { reader.jump_prev_section(); }
+      reader.count_buf.clear();
+      reader.mode = Mode::AwaitingBracket { forward: false };
+    }
+    KeyCode::Char('i') => {
+      // Figure-preview side pane.  Toggle is a single keystroke
+      // because tread has no insert mode to collide with.
+      reader.count_buf.clear();
+      reader.toggle_figure_preview();
     }
     // TOC moved off `t` to free the key for vim's `t<char>` find motion.
     KeyCode::Char('\\') => {
@@ -1260,6 +1282,22 @@ fn handle_awaiting_g(reader: &mut Reader, code: KeyCode) {
     KeyCode::Char('g') => { reader.nav_top(); }
     KeyCode::Char('e') => { reader.nav_word_end_back(false); reader.remember_column(); }
     KeyCode::Char('E') => { reader.nav_word_end_back(true); reader.remember_column(); }
+    _ => {}
+  }
+  reader.mode = Mode::Normal;
+}
+
+fn handle_awaiting_bracket(reader: &mut Reader, code: KeyCode, forward: bool) {
+  // `]]` / `[[` jump section (legacy `]` / `[` semantics moved here
+  // so the second keystroke disambiguates from `]f` / `[f`).
+  // `]f` / `[f` step the figure-preview cursor.  Anything else
+  // cancels with no movement — matches the `Mode::AwaitingG` shape.
+  match code {
+    KeyCode::Char(']') if forward => { reader.jump_next_section(); }
+    KeyCode::Char('[') if !forward => { reader.jump_prev_section(); }
+    KeyCode::Char('f') => {
+      reader.step_figure(if forward { 1 } else { -1 });
+    }
     _ => {}
   }
   reader.mode = Mode::Normal;

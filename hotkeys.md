@@ -46,11 +46,19 @@ Small word: alphanumeric + `_`. BIG word: any non-whitespace run.
 |---|---|
 | `}` | Next paragraph |
 | `{` | Previous paragraph |
-| `]` | Next section header |
-| `[` | Previous section header |
+| `]]` | Next section header (was `]`; second key disambiguates from `]f`) |
+| `[[` | Previous section header |
 | `)` | Next sentence (cross-line) |
 | `(` | Previous sentence |
 | `Ctrl+O` | Back to previous position (unwinds jumps) |
+
+### Figure preview pane
+
+| Key | Action |
+|---|---|
+| `i` | Toggle figure-preview side pane (60/40 reader+figure split). Sticky default persisted in `block_reader.json`. |
+| `]f` | Step to next figure |
+| `[f` | Step to previous figure |
 
 ### Find / search
 

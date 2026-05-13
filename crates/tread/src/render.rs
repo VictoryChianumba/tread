@@ -20,7 +20,12 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
   if let Some(ta) = toc_area {
     draw_toc(frame, reader, ta, t);
   }
-  draw_content(frame, reader, content_area, t);
+  // When the figure-preview pane is active, the right 40% of the
+  // content area is reserved for the figure (drawn post-draw by
+  // `images::place_one_figure`).  The reader content fills the
+  // left 60%.  When inactive, content fills the whole area.
+  let (reader_area, _preview_area) = split_content_for_preview(content_area, reader);
+  draw_content(frame, reader, reader_area, t);
   draw_status(frame, reader, status_area, t);
   if reader.mode == Mode::Search {
     draw_search_bar(frame, reader, search_area.unwrap(), t);
@@ -34,6 +39,28 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
   if reader.help_visible {
     draw_help_overlay(frame, area, t);
   }
+}
+
+/// Carve out the figure-preview pane from the reader's content area.
+///
+/// Returns `(reader_area, preview_area)`.  When the preview is off
+/// or the document has no figures, `preview_area` is `None` and
+/// `reader_area` matches the input — the legacy single-pane layout.
+/// When on, splits the area horizontally 60/40 (text : figure).
+///
+/// Used by both `render::draw` (to size the reader content area) and
+/// `lib::after_draw` (to find where `place_one_figure` should paint).
+/// Keeping the two callers in sync is critical or the image will land
+/// over the reader text.
+pub fn split_content_for_preview(area: Rect, reader: &Reader) -> (Rect, Option<Rect>) {
+  if !reader.figure_preview_active || reader.figure_kitty_ids().is_empty() {
+    return (area, None);
+  }
+  let cols = Layout::default()
+    .direction(Direction::Horizontal)
+    .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+    .split(area);
+  (cols[0], Some(cols[1]))
 }
 
 pub fn split_layout(
@@ -63,7 +90,7 @@ pub fn split_layout(
   };
 
   let (content_area, status_area, search_area) = match reader.mode {
-    Mode::Normal | Mode::Visual { .. } | Mode::AwaitingChar { .. } | Mode::AwaitingMarkName { .. } | Mode::AwaitingG | Mode::AwaitingOperator { .. } | Mode::AwaitingTextObject { .. } => {
+    Mode::Normal | Mode::Visual { .. } | Mode::AwaitingChar { .. } | Mode::AwaitingMarkName { .. } | Mode::AwaitingG | Mode::AwaitingBracket { .. } | Mode::AwaitingOperator { .. } | Mode::AwaitingTextObject { .. } => {
       let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -769,6 +796,9 @@ fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
       if *for_set { "  m_".to_string() } else { "  '_".to_string() }
     }
     Mode::AwaitingG => "  g_".to_string(),
+    Mode::AwaitingBracket { forward } => {
+      if *forward { "  ]_".to_string() } else { "  [_".to_string() }
+    }
     Mode::Command => String::new(), // command bar shows its own prompt
     Mode::AwaitingOperator { op } => match op {
       crate::state::Operator::Yank => "  y_".to_string(),
@@ -859,7 +889,7 @@ fn draw_text_popup(frame: &mut Frame, area: Rect, t: &Theme, popup: &crate::stat
 
 fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
   const W: u16 = 64;
-  const H: u16 = 52;
+  const H: u16 = 53;
   let x = area.x + area.width.saturating_sub(W) / 2;
   let y = area.y + area.height.saturating_sub(H) / 2;
   let popup = Rect { x, y, width: W.min(area.width), height: H.min(area.height) };
@@ -870,7 +900,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
   let sec_fg = t.header;
 
   let rows: &[(&str, &str, &str, &str)] = &[
-    ("j / k",         "scroll down / up",        "] / [",    "next / prev section"),
+    ("j / k",         "scroll down / up",        "]] / [[",  "next / prev section"),
     ("PageDn / Up",   "full page scroll",        "Ctrl+d/u", "half page"),
     ("} / {",         "next / prev paragraph",   "( / )",    "prev / next sentence"),
     ("gg / G",        "top / bottom",            "H / M / L","screen top/mid/bottom"),
@@ -881,6 +911,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
     ("f / F",         "find char fwd / back",    "t / T",    "till char fwd / back"),
     ("%",             "matching brace",          "*",        "search word under cursor"),
     ("/  n  N",       "search / next / prev",    "m{a} '{a}","set/jump named mark"),
+    ("i",             "toggle figure preview",   "]f / [f",  "next / prev figure"),
     ("yy",            "yank current line (OSC 52)","\\",      "toggle TOC"),
     ("yi/ya<obj>",    "yank inner / around obj",  "X",        "remove highlight"),
     ("Enter",         "follow link / citation",   "K",        "popup citation entry"),

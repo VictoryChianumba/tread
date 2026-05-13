@@ -62,6 +62,12 @@ pub enum Mode {
   /// keystroke for vim's `g`-prefixed motions: `gg` → top, `ge` /
   /// `gE` → backward word-end (small / big).  Any other key cancels.
   AwaitingG,
+  /// One-shot mode after the user pressed `]` or `[`.  Awaits the
+  /// second keystroke to disambiguate: `]]` / `[[` → jump section
+  /// (vim convention), `]f` / `[f` → step figure in the preview
+  /// pane.  Any other key cancels.  `forward` records which bracket
+  /// was pressed so the resolver knows direction.
+  AwaitingBracket { forward: bool },
   /// `:`-prefixed Ex-command input.  `cmd_buf` on Reader holds the
   /// in-progress command line; Esc cancels, Enter dispatches via
   /// `commands::execute`.
@@ -172,6 +178,22 @@ pub struct Reader {
   /// `images::place_one_figure`.  Toggle via `set_text_only` — direct
   /// field writes won't trigger the rebuild and will desync state.
   pub text_only: bool,
+  /// User-facing toggle for the figure-preview side pane (`i` in
+  /// normal mode).  When true, `render::split_content_for_preview`
+  /// carves out the right 40% of the content area for a single
+  /// figure, the reader is forced into `text_only` mode so figures
+  /// don't double-render, and `after_draw` places the current
+  /// figure via `images::place_one_figure`.
+  ///
+  /// Distinct from `text_only`: a host could plausibly want
+  /// `text_only` without the preview pane (e.g. pure-text export),
+  /// so they stay as separate fields.  `set_figure_preview_active`
+  /// keeps them coherent for the common case.
+  pub figure_preview_active: bool,
+  /// Index into `figure_kitty_ids()` for the figure currently shown
+  /// in the side preview pane.  `None` when the preview is off or
+  /// the paper has no figures.  `]f` / `[f` step this with wraparound.
+  pub current_figure: Option<usize>,
 
   /// arXiv id this Reader is rendering, or `None` when running against a
   /// non-arxiv source.  Used by `:reload`, `:url`, `:cite`, `:open`, and
@@ -248,8 +270,13 @@ impl Reader {
     height: usize,
     bibitems: HashMap<String, String>,
   ) -> Self {
+    // Hydrate the sticky figure-preview preference once at
+    // construction; `text_only` mirrors it so visual_lines is built
+    // correctly on the first pass (avoids a wasted rebuild later).
+    let figure_preview_active = crate::config::load().figure_preview_default;
+    let text_only = figure_preview_active;
     let cw = content_width_for(width, false);
-    let visual_lines = build_lines_for(&blocks, cw, height, false);
+    let visual_lines = build_lines_for(&blocks, cw, height, text_only);
     let sections = build_sections(&visual_lines);
     let (label_lines, mut bib_entries, bib_entry_lines) = build_link_indexes(&blocks, &visual_lines);
     // Pre-scanned bibitems from source override anything we picked up via
@@ -259,6 +286,11 @@ impl Reader {
       bib_entries.insert(k, v);
     }
     let image_paths = collect_image_paths(&blocks);
+    let current_figure = if figure_preview_active && !image_paths.is_empty() {
+      Some(0)
+    } else {
+      None
+    };
     Self {
       blocks,
       visual_lines,
@@ -289,7 +321,9 @@ impl Reader {
       cmd_error: None,
       popup: None,
       image_paths,
-      text_only: false,
+      text_only,
+      figure_preview_active,
+      current_figure,
       arxiv_id: None,
       kitty_supported: false,
       pending_progress_offset: None,
@@ -488,6 +522,62 @@ impl Reader {
       self.offset = saved_offset.min(max_offset);
     }
     self.clamp_position();
+  }
+
+  /// Set the figure-preview-pane flag and keep dependent state coherent.
+  ///
+  /// Side effects: `text_only` is forced to match (otherwise figures
+  /// would render both inline and in the preview, defeating the
+  /// design); on activation, `current_figure` is seeded to `Some(0)`
+  /// when figures exist so the preview opens with something visible.
+  /// Re-toggling preserves whatever `current_figure` the user was on.
+  pub fn set_figure_preview_active(&mut self, value: bool) {
+    if self.figure_preview_active == value {
+      return;
+    }
+    self.figure_preview_active = value;
+    self.set_text_only(value);
+    if value && self.current_figure.is_none() {
+      let figs = self.figure_kitty_ids();
+      if !figs.is_empty() {
+        self.current_figure = Some(0);
+      }
+    }
+  }
+
+  /// `i` binding in normal mode — flip the preview pane and persist
+  /// the new value as the global default for next session.
+  pub fn toggle_figure_preview(&mut self) {
+    self.set_figure_preview_active(!self.figure_preview_active);
+    let mut cfg = crate::config::load();
+    cfg.figure_preview_default = self.figure_preview_active;
+    crate::config::save(&cfg);
+  }
+
+  /// `]f` / `[f` step the cursor through `figure_kitty_ids` with
+  /// wraparound at both ends.  Silent no-op when the preview pane is
+  /// hidden or the document has no figures — matches the "predictable
+  /// no-ops" decision from the design discussion.
+  pub fn step_figure(&mut self, delta: i32) {
+    if !self.figure_preview_active {
+      return;
+    }
+    let figs = self.figure_kitty_ids();
+    if figs.is_empty() {
+      return;
+    }
+    let current = self.current_figure.unwrap_or(0) as i32;
+    let next = (current + delta).rem_euclid(figs.len() as i32) as usize;
+    self.current_figure = Some(next);
+  }
+
+  /// `kitty_id` of the figure currently selected for the preview
+  /// pane, or `None` when no preview is active or the document has
+  /// no figures.  Used by `after_draw` to dispatch
+  /// `images::place_one_figure`.
+  pub fn current_figure_kitty_id(&self) -> Option<u32> {
+    let idx = self.current_figure?;
+    self.figure_kitty_ids().get(idx).copied()
   }
 
   /// Ordered list of figure `kitty_id`s for the current document.
@@ -854,6 +944,80 @@ mod tests {
     reader.set_text_only(true);
     let after = reader.figure_kitty_ids();
     assert_eq!(before, after, "figure list is derived from blocks, not visual_lines");
+  }
+
+  #[test]
+  fn set_figure_preview_active_couples_text_only() {
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+    assert!(!reader.text_only);
+    reader.set_figure_preview_active(true);
+    assert!(reader.figure_preview_active);
+    assert!(reader.text_only, "preview on should force text_only on");
+    reader.set_figure_preview_active(false);
+    assert!(!reader.figure_preview_active);
+    assert!(!reader.text_only, "preview off should clear text_only");
+  }
+
+  #[test]
+  fn set_figure_preview_active_seeds_current_figure() {
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+    assert!(reader.current_figure.is_none());
+    reader.set_figure_preview_active(true);
+    assert_eq!(reader.current_figure, Some(0));
+  }
+
+  #[test]
+  fn step_figure_wraps_in_both_directions() {
+    use doc_model::ImageItem;
+    let blocks = vec![
+      Block::Image {
+        path: std::path::PathBuf::from("a.png"),
+        alt: String::new(),
+        kitty_id: 1,
+        dims: Some((100, 100)),
+        stack_total: 1,
+      },
+      Block::ImageRow {
+        items: vec![
+          ImageItem { path: "b.png".into(), kitty_id: 2, dims: Some((100, 100)) },
+          ImageItem { path: "c.png".into(), kitty_id: 3, dims: Some((100, 100)) },
+        ],
+        alt: String::new(),
+      },
+    ];
+    let mut reader = Reader::new(blocks, 80, 24);
+    reader.set_figure_preview_active(true);
+    assert_eq!(reader.current_figure, Some(0));
+    reader.step_figure(1);
+    assert_eq!(reader.current_figure, Some(1));
+    reader.step_figure(1);
+    assert_eq!(reader.current_figure, Some(2));
+    // Wrap forward.
+    reader.step_figure(1);
+    assert_eq!(reader.current_figure, Some(0));
+    // Wrap backward.
+    reader.step_figure(-1);
+    assert_eq!(reader.current_figure, Some(2));
+  }
+
+  #[test]
+  fn step_figure_is_noop_when_preview_inactive() {
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+    reader.step_figure(1);
+    assert!(reader.current_figure.is_none());
+  }
+
+  #[test]
+  fn current_figure_kitty_id_resolves_index_to_id() {
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+    reader.set_figure_preview_active(true);
+    assert_eq!(reader.current_figure_kitty_id(), Some(1));
+    reader.set_figure_preview_active(false);
+    // Cleared preview still leaves current_figure for resumption, but
+    // current_figure_kitty_id is None because the index is invalidated
+    // by the preview being off — actually no, we kept the index per
+    // design.  Verify the resume behaviour: id lookup still works.
+    assert_eq!(reader.current_figure_kitty_id(), Some(1));
   }
 
   #[test]
