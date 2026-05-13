@@ -270,11 +270,13 @@ impl Reader {
     height: usize,
     bibitems: HashMap<String, String>,
   ) -> Self {
-    // Hydrate the sticky figure-preview preference once at
-    // construction; `text_only` mirrors it so visual_lines is built
-    // correctly on the first pass (avoids a wasted rebuild later).
-    let figure_preview_active = crate::config::load().figure_preview_default;
-    let text_only = figure_preview_active;
+    // Constructor stays IO-free so tests are hermetic.  The figure-
+    // preview sticky default is hydrated in `init` via
+    // `set_figure_preview_active(config::load().figure_preview_default)`,
+    // which handles the visual-line rebuild and current_figure seed.
+    let figure_preview_active = false;
+    let text_only = false;
+    let current_figure: Option<usize> = None;
     let cw = content_width_for(width, false);
     let visual_lines = build_lines_for(&blocks, cw, height, text_only);
     let sections = build_sections(&visual_lines);
@@ -286,11 +288,6 @@ impl Reader {
       bib_entries.insert(k, v);
     }
     let image_paths = collect_image_paths(&blocks);
-    let current_figure = if figure_preview_active && !image_paths.is_empty() {
-      Some(0)
-    } else {
-      None
-    };
     Self {
       blocks,
       visual_lines,
@@ -380,6 +377,11 @@ impl Reader {
     reader.arxiv_id = progress_key.clone();
     reader.kitty_supported = kitty_supported;
     reader.voice_controller = voice_controller;
+    // Hydrate the sticky figure-preview default now that we're past
+    // the hermetic constructor.  The setter does the right rebuild
+    // dance (text_only sync + current_figure seed) when the value
+    // differs from the constructor's default of false.
+    reader.set_figure_preview_active(crate::config::load().figure_preview_default);
 
     if let Some(ref key) = progress_key {
       let map = crate::progress::load();

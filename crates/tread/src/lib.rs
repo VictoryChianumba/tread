@@ -364,12 +364,22 @@ pub fn after_draw(reader: &Reader, state: &mut ImageState, area: Rect, kitty_sup
   let (reader_area, preview_area) =
     render::split_content_for_preview(content_area, reader);
   images::place_visible(reader, state, reader_area, kitty_supported);
-  // Always call place_one_figure: Some(id) paints, None clears any
-  // stale placement from a prior frame.  When the preview pane is
-  // off, `preview_area` is None and we pass kid=None — the rect is a
-  // placeholder; `place_one_figure(None, ...)` doesn't read it.
+  emit_preview(reader, state, preview_area, area, kitty_supported);
+}
+
+/// Emit the figure-preview placement.  Separated from `after_draw`'s
+/// inline path so the burst gate can suppress one without the other —
+/// the preview only changes on toggle / step, never on scroll, so it
+/// has no reason to coalesce during scroll bursts.
+fn emit_preview(
+  reader: &Reader,
+  state: &mut ImageState,
+  preview_area: Option<Rect>,
+  fallback_rect: Rect,
+  kitty_supported: bool,
+) {
   let kid = preview_area.and_then(|_| reader.current_figure_kitty_id());
-  let rect = preview_area.unwrap_or(area);
+  let rect = preview_area.unwrap_or(fallback_rect);
   images::place_one_figure(reader, state, kid, rect, kitty_supported);
 }
 
@@ -406,10 +416,24 @@ pub fn after_draw_guarded(
   kitty_supported: bool,
   burst_in_progress: bool,
 ) {
-  if burst_skip_enabled(kitty_supported) && burst_in_progress {
+  if !kitty_supported {
     return;
   }
-  after_draw(reader, state, area, kitty_supported);
+  let (_, _, content_area, _, _) = render::split_layout(area, reader);
+  let (reader_area, preview_area) =
+    render::split_content_for_preview(content_area, reader);
+  // Burst gate only suppresses the inline path: that's where a full
+  // `a=T` retransmit fires every scroll line on iTerm2 and overwhelms
+  // the terminal.  The preview figure only changes on `i` / `]f` /
+  // `[f` — never on scroll — and its lazy fast path makes steady-
+  // state emission ~zero-cost.  Suppressing it during scroll bursts
+  // means the user can press `i` while scrolling and see no figure
+  // until the burst window expires, which is the symptom we're
+  // unblocking here.
+  if !(burst_skip_enabled(kitty_supported) && burst_in_progress) {
+    images::place_visible(reader, state, reader_area, kitty_supported);
+  }
+  emit_preview(reader, state, preview_area, area, kitty_supported);
 }
 
 /// Render one figure into a dedicated preview pane (or clear it).
