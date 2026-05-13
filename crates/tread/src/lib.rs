@@ -403,6 +403,26 @@ pub fn after_draw_guarded(
   after_draw(reader, state, area, kitty_supported);
 }
 
+/// Render one figure into a dedicated preview pane (or clear it).
+///
+/// Hosts pair this with `Reader::set_text_only(true)` to drive a
+/// "figure preview" side pane: the reader pane stays text-only,
+/// while `kitty_id = Some(id)` shows that figure scaled to fit
+/// `area` and centered.  Pass `kitty_id = None` to clear any
+/// active preview.  Stepping between figures (different `Some(id)`
+/// across calls) deletes the old placement and emits the new one.
+///
+/// See `images::place_one_figure` for the full state machine.
+pub fn place_one_figure(
+  reader: &Reader,
+  state: &mut ImageState,
+  kitty_id: Option<u32>,
+  area: Rect,
+  kitty_supported: bool,
+) {
+  images::place_one_figure(reader, state, kitty_id, area, kitty_supported);
+}
+
 /// Public draw entry point — wraps `render::draw` so hosts don't need
 /// to import `render`.  Hosts pass the sub-rectangle they want the
 /// reader to occupy (e.g. one half of a split pane); standalone tread

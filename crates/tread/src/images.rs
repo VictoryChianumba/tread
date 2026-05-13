@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use doc_model::VisualLineKind;
+use doc_model::{Block, VisualLineKind, compute_cell_footprint};
 use image::imageops::FilterType;
 use kitty_graphics::transmit::BatchEmitter;
 use ratatui::layout::Rect;
@@ -92,6 +92,12 @@ pub struct ImageState {
   /// data between frames; on iTerm2 (no persistent cache) this stays
   /// empty and every placement goes through the full-retransmit path.
   transmitted_ids: HashSet<u32>,
+  /// Kitty id currently shown in a preview pane (see
+  /// `place_one_figure`).  Tracked so a subsequent call with a
+  /// different id knows what to delete first.  `None` when no
+  /// preview is active.  Distinct from `prev_visible`, which is
+  /// only for inline images placed by `place_visible`.
+  preview_id: Option<u32>,
 }
 
 /// Input-pacing signal for the image burst-skip gate.
@@ -365,8 +371,159 @@ pub fn clear_all(state: &mut ImageState) {
   for id in state.prev_visible.drain() {
     let _ = batch.delete_placement(id);
   }
+  // Preview placements aren't tracked in `prev_visible` (they go
+  // through `place_one_figure`), so delete them explicitly or the
+  // figure would linger at stale coords across a resize.
+  if let Some(id) = state.preview_id.take() {
+    let _ = batch.delete_placement(id);
+  }
   let _ = batch.flush();
   state.last_emitted.clear();
+}
+
+/// Render one figure into a dedicated preview pane (or clear it).
+///
+/// Pair with `Reader::set_text_only(true)` so the main reader pane
+/// stays text-only while this draws the user's currently-selected
+/// figure into `area`.  Pass `Some(kitty_id)` to show a figure;
+/// pass `None` to clear any active preview placement.
+///
+/// Stepping (host calls with a different `Some(id)`) deletes the
+/// previously-previewed placement and emits the new one.  When the
+/// id and area are unchanged from the prior frame, hits the same
+/// lazy fast path as `place_visible` and emits nothing.
+///
+/// State on `ImageState` is shared with `place_visible`:
+/// - `bytes` byte-cache, `last_emitted` placement-cache, and
+///   `transmitted_ids` terminal-side cache are all reused.
+/// - `negative_loads` TTL applies the same way: a figure that
+///   failed to load gets retried every `NEGATIVE_CACHE_TTL`.
+pub fn place_one_figure(
+  reader: &Reader,
+  state: &mut ImageState,
+  kitty_id: Option<u32>,
+  area: Rect,
+  supported: bool,
+) {
+  if !supported {
+    return;
+  }
+  let trace = std::env::var_os("TREAD_TRACE_IMAGES").is_some();
+  let mut batch = BatchEmitter::new();
+
+  // If we had a previous preview and the host is asking for a
+  // different one (or clearing), delete the old placement first so
+  // the terminal doesn't stack ghosts.
+  if let Some(prev) = state.preview_id
+    && Some(prev) != kitty_id
+  {
+    if trace { eprintln!("preview: delete prev id={prev}"); }
+    let _ = batch.delete_placement(prev);
+    state.last_emitted.remove(&prev);
+    state.preview_id = None;
+  }
+
+  let Some(id) = kitty_id else {
+    let _ = batch.flush();
+    return;
+  };
+
+  let Some((path, dims)) = find_figure_meta(reader, id) else {
+    if trace { eprintln!("preview: no figure meta for id={id}"); }
+    let _ = batch.flush();
+    return;
+  };
+
+  // Lazy load PNG bytes into the same `state.bytes` cache the inline
+  // path uses.  Scoped so the mutable borrow releases before we
+  // stamp `negative_loads` on failure.
+  {
+    state.bytes.entry(id).or_insert_with(|| {
+      let r = resolve_png(&path);
+      if trace {
+        match &r {
+          Ok(b) => eprintln!("preview: load id={id} ok ({} bytes)", b.len()),
+          Err(e) => eprintln!("preview: load id={id} ERR: {e}"),
+        }
+      }
+      r.ok()
+    });
+  }
+  let Some(bytes) = state.bytes.get(&id).and_then(|v| v.as_ref()) else {
+    state.negative_loads.entry(id).or_insert_with(Instant::now);
+    let _ = batch.flush();
+    return;
+  };
+
+  // Aspect-preserved cell footprint that fits inside `area`, then
+  // center both axes.
+  let (cols, rows) = compute_cell_footprint(
+    dims,
+    area.width as usize,
+    area.height,
+  );
+  if cols == 0 || rows == 0 {
+    let _ = batch.flush();
+    return;
+  }
+  let pad_col = area.width.saturating_sub(cols) / 2;
+  let pad_row = area.height.saturating_sub(rows) / 2;
+  let abs_row = area.y.saturating_add(pad_row);
+  let abs_col = area.x.saturating_add(pad_col);
+  let placement_key = (abs_row, abs_col, cols, rows);
+
+  // Same lazy fast path as `place_visible`: identical placement +
+  // identical id since last frame means the terminal already has
+  // this on screen and we owe zero IO this frame.
+  if state.last_emitted.get(&id) == Some(&placement_key) {
+    if trace { eprintln!("preview: cached id={id} at row={} col={}", abs_row + 1, abs_col + 1); }
+    state.preview_id = Some(id);
+    let _ = batch.flush();
+    return;
+  }
+
+  let _ = batch.delete_placement(id);
+  let has_cache = kitty_graphics::has_persistent_image_cache();
+  let already_transmitted = has_cache && state.transmitted_ids.contains(&id);
+  if already_transmitted {
+    if trace {
+      eprintln!("preview: place id={id} at row={} col={} cells={cols}x{rows} (cached)", abs_row + 1, abs_col + 1);
+    }
+    let _ = batch.place_by_id(id, cols, rows, abs_row + 1, abs_col + 1);
+  } else {
+    if trace {
+      eprintln!("preview: emit id={id} at row={} col={} cells={cols}x{rows}", abs_row + 1, abs_col + 1);
+    }
+    let _ = batch.transmit_and_place(id, bytes, cols, rows, abs_row + 1, abs_col + 1);
+    if has_cache {
+      state.transmitted_ids.insert(id);
+    }
+  }
+  state.last_emitted.insert(id, placement_key);
+  state.preview_id = Some(id);
+  let _ = batch.flush();
+}
+
+/// Walk `reader.blocks` for a figure by kitty_id, returning its
+/// on-disk path and pixel dims.  O(blocks) but blocks is short and
+/// preview-step events are infrequent — no need to pre-index.
+fn find_figure_meta(reader: &Reader, kitty_id: u32) -> Option<(std::path::PathBuf, Option<(u32, u32)>)> {
+  for block in &reader.blocks {
+    match block {
+      Block::Image { kitty_id: id, path, dims, .. } if *id == kitty_id => {
+        return Some((path.clone(), *dims));
+      }
+      Block::ImageRow { items, .. } => {
+        for item in items {
+          if item.kitty_id == kitty_id {
+            return Some((item.path.clone(), item.dims));
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+  None
 }
 
 /// Resolve an image source path to PNG bytes.  PNGs read directly;
@@ -654,6 +811,58 @@ mod tests {
 
     let decoded = image::load_from_memory_with_format(&out, image::ImageFormat::Png).unwrap();
     assert!(decoded.width() < 512 || decoded.height() < 512);
+  }
+
+  #[test]
+  fn place_one_figure_noop_when_unsupported() {
+    use crate::state::Reader;
+    let reader = Reader::new(vec![], 80, 24);
+    let mut state = ImageState::default();
+    place_one_figure(&reader, &mut state, Some(1), Rect::new(0, 0, 10, 10), false);
+    assert!(state.preview_id.is_none());
+    assert!(state.bytes.is_empty());
+  }
+
+  #[test]
+  fn place_one_figure_unknown_id_is_silent() {
+    use crate::state::Reader;
+    let reader = Reader::new(vec![], 80, 24);
+    let mut state = ImageState::default();
+    place_one_figure(&reader, &mut state, Some(99), Rect::new(0, 0, 10, 10), true);
+    assert!(state.preview_id.is_none());
+    assert!(state.last_emitted.is_empty());
+  }
+
+  #[test]
+  fn find_figure_meta_locates_image_and_image_row() {
+    use crate::state::Reader;
+    use doc_model::ImageItem;
+    let blocks = vec![
+      Block::Line("intro".to_string()),
+      Block::Image {
+        path: std::path::PathBuf::from("/tmp/a.png"),
+        alt: String::new(),
+        kitty_id: 1,
+        dims: Some((100, 80)),
+        stack_total: 1,
+      },
+      Block::ImageRow {
+        items: vec![ImageItem {
+          path: std::path::PathBuf::from("/tmp/b.png"),
+          kitty_id: 2,
+          dims: Some((50, 50)),
+        }],
+        alt: String::new(),
+      },
+    ];
+    let reader = Reader::new(blocks, 80, 24);
+    let (p1, d1) = find_figure_meta(&reader, 1).unwrap();
+    assert_eq!(p1, std::path::PathBuf::from("/tmp/a.png"));
+    assert_eq!(d1, Some((100, 80)));
+    let (p2, d2) = find_figure_meta(&reader, 2).unwrap();
+    assert_eq!(p2, std::path::PathBuf::from("/tmp/b.png"));
+    assert_eq!(d2, Some((50, 50)));
+    assert!(find_figure_meta(&reader, 99).is_none());
   }
 
   #[test]

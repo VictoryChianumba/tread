@@ -490,6 +490,27 @@ impl Reader {
     self.clamp_position();
   }
 
+  /// Ordered list of figure `kitty_id`s for the current document.
+  /// Subfigures inside a `Block::ImageRow` are flattened: each item
+  /// gets its own slot so `]f` / `[f` step through subfigures
+  /// individually.  Used by hosts to drive a preview-pane navigation
+  /// cursor (`current_figure` indexes into this vector).
+  pub fn figure_kitty_ids(&self) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for block in &self.blocks {
+      match block {
+        Block::Image { kitty_id, .. } => ids.push(*kitty_id),
+        Block::ImageRow { items, .. } => {
+          for item in items {
+            ids.push(item.kitty_id);
+          }
+        }
+        _ => {}
+      }
+    }
+    ids
+  }
+
   /// Toggle inline figure rendering.  When `true`, `visual_lines` is
   /// rebuilt without `Image` / `ImageRow` rows so text reflows past
   /// where the figures would have been.  Used by hosts that draw
@@ -790,6 +811,49 @@ mod tests {
     reader.set_text_only(false);
     assert_eq!(reader.visual_lines.len(), before, "toggling back restores inline figures");
     assert!(!reader.text_only);
+  }
+
+  #[test]
+  fn figure_kitty_ids_flattens_image_rows() {
+    use doc_model::ImageItem;
+    let blocks = vec![
+      Block::Line("intro".to_string()),
+      Block::Image {
+        path: std::path::PathBuf::from("a.png"),
+        alt: String::new(),
+        kitty_id: 1,
+        dims: Some((100, 100)),
+        stack_total: 1,
+      },
+      Block::Line("middle".to_string()),
+      Block::ImageRow {
+        items: vec![
+          ImageItem {
+            path: std::path::PathBuf::from("b.png"),
+            kitty_id: 2,
+            dims: Some((100, 100)),
+          },
+          ImageItem {
+            path: std::path::PathBuf::from("c.png"),
+            kitty_id: 3,
+            dims: Some((100, 100)),
+          },
+        ],
+        alt: String::new(),
+      },
+      Block::Line("end".to_string()),
+    ];
+    let reader = Reader::new(blocks, 80, 24);
+    assert_eq!(reader.figure_kitty_ids(), vec![1, 2, 3]);
+  }
+
+  #[test]
+  fn figure_kitty_ids_survives_text_only_toggle() {
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+    let before = reader.figure_kitty_ids();
+    reader.set_text_only(true);
+    let after = reader.figure_kitty_ids();
+    assert_eq!(before, after, "figure list is derived from blocks, not visual_lines");
   }
 
   #[test]
