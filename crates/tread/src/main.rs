@@ -13,12 +13,46 @@ fn main() {
   // Detect terminal capability up front — gates all inline-graphics work.
   let kitty_capability = kitty_graphics::detect();
   eprintln!("kitty graphics: {:?}", kitty_capability);
-  if kitty_graphics::in_tmux() && matches!(kitty_capability, kitty_graphics::Capability::Supported) {
-    eprintln!(
-      "tmux detected: for inline graphics add to ~/.tmux.conf:\n  \
-       set -g allow-passthrough on    (forwards Kitty escapes to iTerm2)\n  \
-       set -g focus-events on         (lets the reader clear images on pane switch)"
-    );
+  // Active probe instead of an env-only check: shell out to `tmux show
+  // -gv allow-passthrough` so we can distinguish "passthrough on" from
+  // "passthrough off" from "couldn't determine".  The old advisory
+  // warning here was correct but easy to miss — alt-screen takes over
+  // within milliseconds and clears it.  Phrasing the OFF case as a
+  // banner with separators and a copy-pasteable fix turns a silent
+  // failure mode (every DCS envelope dropped, figures invisible) into
+  // a loud one the user can actually act on.
+  if matches!(kitty_capability, kitty_graphics::Capability::Supported) {
+    match kitty_graphics::tmux_passthrough_enabled() {
+      Some(true) => {
+        eprintln!("tmux detected: allow-passthrough is on — figures should render.");
+      }
+      Some(false) => {
+        eprintln!(
+          "\n\
+           ═══════════════════════════════════════════════════════════════════\n\
+           tmux detected with allow-passthrough OFF.\n\
+           Figures will NOT render — every DCS envelope is being dropped\n\
+           by tmux before it reaches the host terminal.\n\
+           \n\
+           Fix:\n  \
+             echo 'set -g allow-passthrough on' >> ~/.tmux.conf\n  \
+             tmux source-file ~/.tmux.conf\n\
+           \n\
+           Verify:\n  \
+             tmux show -gv allow-passthrough   # should print: on\n\
+           ═══════════════════════════════════════════════════════════════════\n"
+        );
+      }
+      None if kitty_graphics::in_tmux() => {
+        eprintln!(
+          "tmux detected but `allow-passthrough` could not be probed.\n  \
+           If figures don't render, add to ~/.tmux.conf:\n    \
+             set -g allow-passthrough on\n    \
+             set -g focus-events on"
+        );
+      }
+      None => {}
+    }
   }
   // Zellij has no passthrough envelope.  When Ghostty/Kitty hosts
   // Zellij the figure pipeline still works because Zellij re-renders

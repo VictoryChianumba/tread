@@ -106,6 +106,50 @@ pub fn in_tmux() -> bool {
   std::env::var_os("TMUX").is_some()
 }
 
+/// Probe the active tmux server for the `allow-passthrough` setting.
+///
+/// Returns:
+/// - `None` if we're not in tmux, or the probe failed (older tmux
+///   without the option, no `tmux` binary on PATH, server unreachable,
+///   etc.) — i.e. "unknown".
+/// - `Some(true)` if the option is explicitly `on`.
+/// - `Some(false)` if it's explicitly `off`.
+///
+/// `Some(false)` is the silent-failure trap this is meant to catch:
+/// every DCS passthrough envelope tread emits will be consumed by tmux
+/// before reaching the host terminal, so callers should surface a loud
+/// warning (or refuse to enable graphics) when that's the case.
+///
+/// Cost: one `fork`/`exec` of the `tmux` binary at the call site.
+/// Cheap relative to the rest of startup, so safe to call from `main`.
+pub fn tmux_passthrough_enabled() -> Option<bool> {
+  if !in_tmux() {
+    return None;
+  }
+  let out = std::process::Command::new("tmux")
+    .args(["show", "-gv", "allow-passthrough"])
+    .output()
+    .ok()?;
+  if !out.status.success() {
+    return None;
+  }
+  parse_tmux_passthrough_output(&out.stdout)
+}
+
+/// Split out for unit-testing without spawning processes.  `tmux show
+/// -gv allow-passthrough` prints `on\n` / `off\n` on tmux ≥ 3.3, an
+/// empty string when the option is unset, or fails entirely on older
+/// versions.  We treat anything other than the literal `on`/`off`
+/// tokens as `None` (unknown) so the caller can choose its messaging.
+fn parse_tmux_passthrough_output(stdout: &[u8]) -> Option<bool> {
+  let s = std::str::from_utf8(stdout).ok()?.trim();
+  match s {
+    "on" => Some(true),
+    "off" => Some(false),
+    _ => None,
+  }
+}
+
 /// True when running inside Zellij.  Unlike tmux, Zellij has no
 /// documented passthrough envelope for APC sequences — recent
 /// versions intercept Kitty graphics directly and re-render via the
@@ -420,5 +464,43 @@ mod tests {
     let _lock = EnvLock::new(ENV_KEYS);
     unsafe { std::env::set_var("TERM_PROGRAM", "ghostty"); }
     assert!(!is_iterm2());
+  }
+
+  // Parser-only coverage.  The full `tmux_passthrough_enabled()` would
+  // require an actual tmux server to probe; the parsing logic is what
+  // we own, so that's what we lock down.  The mapping here is the
+  // public contract: only the literal `on`/`off` tokens count, anything
+  // else (empty, garbage, non-utf8) collapses to `None`.
+
+  #[test]
+  fn parse_tmux_passthrough_on_token() {
+    assert_eq!(parse_tmux_passthrough_output(b"on\n"), Some(true));
+    assert_eq!(parse_tmux_passthrough_output(b"on"), Some(true));
+  }
+
+  #[test]
+  fn parse_tmux_passthrough_off_token() {
+    assert_eq!(parse_tmux_passthrough_output(b"off\n"), Some(false));
+    assert_eq!(parse_tmux_passthrough_output(b"off"), Some(false));
+  }
+
+  #[test]
+  fn parse_tmux_passthrough_empty_is_unknown() {
+    assert_eq!(parse_tmux_passthrough_output(b""), None);
+    assert_eq!(parse_tmux_passthrough_output(b"\n"), None);
+  }
+
+  #[test]
+  fn parse_tmux_passthrough_unrecognized_is_unknown() {
+    // Future-proofing: if tmux ever adds a third state (e.g. "all"
+    // already exists on some versions), we treat it as unknown rather
+    // than guessing.
+    assert_eq!(parse_tmux_passthrough_output(b"all\n"), None);
+    assert_eq!(parse_tmux_passthrough_output(b"yes\n"), None);
+  }
+
+  #[test]
+  fn parse_tmux_passthrough_non_utf8_is_unknown() {
+    assert_eq!(parse_tmux_passthrough_output(&[0xff, 0xfe, 0xfd]), None);
   }
 }

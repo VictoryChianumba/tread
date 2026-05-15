@@ -256,6 +256,15 @@ pub fn is_iterm2() -> bool {
   kitty_graphics::is_iterm2()
 }
 
+/// Re-export of `kitty_graphics::tmux_passthrough_enabled()`.  Hosts
+/// (trench) call this at startup to detect the silent-failure mode
+/// where tmux is dropping every DCS passthrough envelope, and surface
+/// a loud warning before alt-screen entry.  See the kitty-graphics
+/// crate for the full semantics including the `None`-on-failure cases.
+pub fn tmux_passthrough_enabled() -> Option<bool> {
+  kitty_graphics::tmux_passthrough_enabled()
+}
+
 /// Extract an arXiv id from an URL or bare-id string.  Returns `None`
 /// if the input doesn't look like an arXiv reference.  Hosts use this
 /// to decide whether a paper should route through `fetch_paper`
