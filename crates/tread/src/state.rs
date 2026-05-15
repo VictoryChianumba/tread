@@ -75,12 +75,40 @@ impl LayoutCache {
   }
 }
 
+/// One renderable image inside a figure.  `Block::Image` produces a
+/// single-part figure; `Block::ImageRow` produces a multi-part figure
+/// where each `\includegraphics` becomes one part.  Parts share the
+/// containing figure's `alt` text and step together under `]f` / `[f`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FigureEntry {
+pub struct FigurePart {
   pub kitty_id: u32,
   pub path: PathBuf,
   pub dims: Option<(u32, u32)>,
+}
+
+/// One logical figure as the document author intended it — possibly
+/// multi-part for `\begin{figure}` environments containing several
+/// `\includegraphics` calls (typical for subfigure A/B/C layouts).
+/// Pre-grouping, each subfigure was its own entry; that inflated the
+/// `]f` / `[f` count and meant the user couldn't step through "whole
+/// figures" without manually skipping subparts.
+///
+/// `parts` is never empty: builders skip blocks that would produce
+/// a zero-part entry rather than emitting one, so consumers can
+/// safely index `parts[0]` for the representative.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FigureEntry {
+  pub parts: Vec<FigurePart>,
   pub alt: String,
+}
+
+impl FigureEntry {
+  /// Representative kitty_id for this figure — the first part's id.
+  /// Used by status-bar / navigation code that wants a single token to
+  /// identify the figure even when it has multiple parts.
+  pub fn representative_kitty_id(&self) -> u32 {
+    self.parts[0].kitty_id
+  }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -102,24 +130,35 @@ impl FigureIndex {
           dims,
           ..
         } => {
+          paths.insert(*kitty_id, path.clone());
           entries.push(FigureEntry {
-            kitty_id: *kitty_id,
-            path: path.clone(),
-            dims: *dims,
+            parts: vec![FigurePart {
+              kitty_id: *kitty_id,
+              path: path.clone(),
+              dims: *dims,
+            }],
             alt: alt.clone(),
           });
-          paths.insert(*kitty_id, path.clone());
         }
         Block::ImageRow { items, alt } => {
-          for item in items {
-            entries.push(FigureEntry {
-              kitty_id: item.kitty_id,
-              path: item.path.clone(),
-              dims: item.dims,
-              alt: alt.clone(),
-            });
-            paths.insert(item.kitty_id, item.path.clone());
+          if items.is_empty() {
+            continue;
           }
+          let parts: Vec<FigurePart> = items
+            .iter()
+            .map(|item| {
+              paths.insert(item.kitty_id, item.path.clone());
+              FigurePart {
+                kitty_id: item.kitty_id,
+                path: item.path.clone(),
+                dims: item.dims,
+              }
+            })
+            .collect();
+          entries.push(FigureEntry {
+            parts,
+            alt: alt.clone(),
+          });
         }
         _ => {}
       }
@@ -127,16 +166,35 @@ impl FigureIndex {
     Self { entries, paths }
   }
 
+  /// Representative kitty_id per logical figure.  An ImageRow with
+  /// N subfigures still contributes ONE id here — the first part's —
+  /// so the count matches what the user sees on the page.
   pub fn ordered_kitty_ids(&self) -> Vec<u32> {
-    self.entries.iter().map(|entry| entry.kitty_id).collect()
+    self
+      .entries
+      .iter()
+      .map(FigureEntry::representative_kitty_id)
+      .collect()
   }
 
   pub fn path_map(&self) -> HashMap<u32, PathBuf> {
     self.paths.clone()
   }
 
+  /// Look up a figure by any of its parts' kitty_id.  Returns the
+  /// whole `FigureEntry` (all parts), not just the matching part —
+  /// callers that want the specific part should iterate `parts`.
   pub fn get(&self, kitty_id: u32) -> Option<&FigureEntry> {
-    self.entries.iter().find(|entry| entry.kitty_id == kitty_id)
+    self
+      .entries
+      .iter()
+      .find(|entry| entry.parts.iter().any(|p| p.kitty_id == kitty_id))
+  }
+
+  /// Borrow the entries slice for callers that need to walk grouped
+  /// figures (e.g. tiled preview rendering).
+  pub fn entries(&self) -> &[FigureEntry] {
+    &self.entries
   }
 }
 
@@ -655,7 +713,7 @@ impl Reader {
         .figure_index
         .entries
         .get(idx)
-        .map(|entry| entry.kitty_id)
+        .map(FigureEntry::representative_kitty_id)
     });
   }
 
@@ -830,11 +888,17 @@ impl Reader {
       .set(area.map(PreviewGeometry::from_rect));
   }
 
+  /// Look up a specific image part by its kitty_id and return its
+  /// own path and dims (not the figure's representative).  Critical
+  /// for multi-part figures: the preview emitter places each part
+  /// with its own pixel dimensions for aspect-correct tiling, so we
+  /// can't substitute the representative's data.
   pub(crate) fn figure_meta(&self, kitty_id: u32) -> Option<(&PathBuf, Option<(u32, u32)>)> {
     self
       .figure_index
       .get(kitty_id)
-      .map(|entry| (&entry.path, entry.dims))
+      .and_then(|entry| entry.parts.iter().find(|p| p.kitty_id == kitty_id))
+      .map(|part| (&part.path, part.dims))
   }
 
   /// Toggle inline figure rendering.  When `true`, `visual_lines` is
@@ -1170,7 +1234,7 @@ mod tests {
   }
 
   #[test]
-  fn figure_kitty_ids_flattens_image_rows() {
+  fn figure_kitty_ids_groups_image_rows() {
     use doc_model::ImageItem;
     let blocks = vec![
       Block::Line("intro".to_string()),
@@ -1200,7 +1264,11 @@ mod tests {
       Block::Line("end".to_string()),
     ];
     let reader = Reader::new(blocks, 80, 24);
-    assert_eq!(reader.figure_kitty_ids(), vec![1, 2, 3]);
+    // Two logical figures: the standalone image, and the ImageRow.
+    // Pre-grouping this would have been [1, 2, 3] (count: 3); now
+    // it's [1, 2] with id=2 representing the whole row (count: 2).
+    assert_eq!(reader.figure_kitty_ids(), vec![1, 2]);
+    assert_eq!(reader.figure_count(), 2);
   }
 
   #[test]
@@ -1295,17 +1363,18 @@ mod tests {
     ];
     let mut reader = Reader::new(blocks, 80, 24);
     reader.set_figure_preview_active(true);
+    // Two logical figures now: standalone Image + grouped ImageRow.
+    // Pre-grouping there were 3 (each subfigure standalone).
+    assert_eq!(reader.figure_count(), 2);
     assert_eq!(reader.current_figure, Some(0));
     reader.step_figure(1);
     assert_eq!(reader.current_figure, Some(1));
-    reader.step_figure(1);
-    assert_eq!(reader.current_figure, Some(2));
     // Wrap forward.
     reader.step_figure(1);
     assert_eq!(reader.current_figure, Some(0));
     // Wrap backward.
     reader.step_figure(-1);
-    assert_eq!(reader.current_figure, Some(2));
+    assert_eq!(reader.current_figure, Some(1));
   }
 
   #[test]
@@ -1442,13 +1511,27 @@ mod tests {
 
     let index = FigureIndex::build(&blocks);
 
-    assert_eq!(index.ordered_kitty_ids(), vec![1, 2, 3]);
+    // Two logical figures: the standalone Image (id=1) and the
+    // ImageRow grouped under its representative (id=2).  Pre-grouping
+    // this would have been [1, 2, 3].
+    assert_eq!(index.ordered_kitty_ids(), vec![1, 2]);
+    assert_eq!(index.entries().len(), 2);
+    assert_eq!(index.entries()[1].parts.len(), 2);
+
     assert_eq!(index.get(1).map(|entry| entry.alt.as_str()), Some("single"));
-    assert_eq!(
-      index.get(2).map(|entry| entry.path.as_path()),
-      Some(std::path::Path::new("b.png"))
-    );
-    assert_eq!(index.get(3).and_then(|entry| entry.dims), None);
+    // Looking up by id=2 (representative) or id=3 (sibling part) both
+    // resolve to the same grouped entry — its alt is the row's alt.
+    assert_eq!(index.get(2).map(|entry| entry.alt.as_str()), Some("row"));
+    assert_eq!(index.get(3).map(|entry| entry.alt.as_str()), Some("row"));
+
+    // Part-specific metadata is still addressable: id=2 keeps its own
+    // (30,40) dims, id=3 keeps its None dims.  The aspect-correct
+    // tiling path depends on this.
+    let part2 = index.get(2).unwrap().parts.iter().find(|p| p.kitty_id == 2).unwrap();
+    let part3 = index.get(3).unwrap().parts.iter().find(|p| p.kitty_id == 3).unwrap();
+    assert_eq!(part2.path.as_path(), std::path::Path::new("b.png"));
+    assert_eq!(part2.dims, Some((30, 40)));
+    assert_eq!(part3.dims, None);
   }
 
   #[test]
