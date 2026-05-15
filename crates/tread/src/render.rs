@@ -176,12 +176,20 @@ fn draw_preview_pane(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) 
     .current_figure_position()
     .map(|(idx, total)| format!(" Figure {idx}/{total} "))
     .unwrap_or_else(|| " Figure ".to_string());
-  // Border + title styled, but no interior fill — iTerm2's Kitty graphics
-  // implementation does not layer images above text the way native Kitty
-  // does, so a `.style(bg)` on the Block would overpaint every interior
-  // cell each frame and obscure the placement.  Leaving the interior
-  // un-styled keeps the image visible on iTerm2 and is a no-op on
-  // terminals that already layer correctly (Ghostty, native Kitty).
+  // First: `Clear` writes default-styled spaces into every cell.  This
+  // gives iTerm2 the cell anchors its Kitty-graphics placement needs —
+  // a bare `Block` without `.style()` only paints its border cells, so
+  // the interior cells stay uninitialized in the buffer.  Crossterm's
+  // diff then doesn't write them to the terminal, and iTerm2's image
+  // placement has no cell substrate to bind to, leaving the pane
+  // empty even though `transmit_and_place` succeeded.  The inline
+  // path doesn't hit this because Image VL rows go through a
+  // Paragraph which always writes cells.
+  //
+  // No bg fill on the Clear — that would obscure the image (see prior
+  // bg_panel removal).  Default style on the spaces is transparent on
+  // the terminals tested (iTerm2, Ghostty, Kitty).
+  frame.render_widget(Clear, area);
   let block = Block::default()
     .title(title)
     .borders(Borders::LEFT | Borders::TOP | Borders::BOTTOM)
