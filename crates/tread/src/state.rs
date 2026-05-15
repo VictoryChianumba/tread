@@ -1,12 +1,16 @@
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use doc_model::{Block, VisualLine, VisualLineKind, build_visual_lines};
+use ratatui::layout::Rect;
 
-use crate::highlights::HighlightSet;
 use crate::PaperData;
+use crate::highlights::HighlightSet;
 
 pub const TOC_WIDTH: usize = 28;
+const PREVIEW_TEXT_PERCENT: usize = 60;
 
 /// Build visual lines and optionally drop image rows.
 ///
@@ -15,12 +19,7 @@ pub const TOC_WIDTH: usize = 28;
 /// the figures weren't there.  Captions stay because they live as
 /// separate prose blocks, so users keep a textual anchor for `]f` /
 /// `[f` navigation in the preview pane.
-fn build_lines_for(
-  blocks: &[Block],
-  cw: usize,
-  height: usize,
-  text_only: bool,
-) -> Vec<VisualLine> {
+fn build_lines_for(blocks: &[Block], cw: usize, height: usize, text_only: bool) -> Vec<VisualLine> {
   let mut lines = build_visual_lines(blocks, cw, height);
   if text_only {
     lines.retain(|vl| {
@@ -31,6 +30,156 @@ fn build_lines_for(
     });
   }
   lines
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutRebuildReason {
+  Initial,
+  Reload,
+  Resize,
+  TextOnlyToggle,
+  TocToggle,
+}
+
+#[derive(Debug, Clone)]
+pub struct LayoutCache {
+  pub visual_lines: Vec<VisualLine>,
+  pub sections: Vec<(usize, u8, String)>,
+  pub label_lines: HashMap<String, usize>,
+  pub bib_entries: HashMap<String, String>,
+  pub bib_entry_lines: HashMap<String, usize>,
+}
+
+impl LayoutCache {
+  pub fn rebuild_layout(
+    _reason: LayoutRebuildReason,
+    blocks: &[Block],
+    content_width: usize,
+    height: usize,
+    text_only: bool,
+    external_bibitems: &HashMap<String, String>,
+  ) -> Self {
+    let visual_lines = build_lines_for(blocks, content_width, height, text_only);
+    let sections = build_sections(&visual_lines);
+    let (label_lines, mut bib_entries, bib_entry_lines) = build_link_indexes(blocks, &visual_lines);
+    for (key, value) in external_bibitems {
+      bib_entries.insert(key.clone(), value.clone());
+    }
+    Self {
+      visual_lines,
+      sections,
+      label_lines,
+      bib_entries,
+      bib_entry_lines,
+    }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FigureEntry {
+  pub kitty_id: u32,
+  pub path: PathBuf,
+  pub dims: Option<(u32, u32)>,
+  pub alt: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FigureIndex {
+  entries: Vec<FigureEntry>,
+  paths: HashMap<u32, PathBuf>,
+}
+
+impl FigureIndex {
+  pub fn build(blocks: &[Block]) -> Self {
+    let mut entries = Vec::new();
+    let mut paths = HashMap::new();
+    for block in blocks {
+      match block {
+        Block::Image {
+          path,
+          alt,
+          kitty_id,
+          dims,
+          ..
+        } => {
+          entries.push(FigureEntry {
+            kitty_id: *kitty_id,
+            path: path.clone(),
+            dims: *dims,
+            alt: alt.clone(),
+          });
+          paths.insert(*kitty_id, path.clone());
+        }
+        Block::ImageRow { items, alt } => {
+          for item in items {
+            entries.push(FigureEntry {
+              kitty_id: item.kitty_id,
+              path: item.path.clone(),
+              dims: item.dims,
+              alt: alt.clone(),
+            });
+            paths.insert(item.kitty_id, item.path.clone());
+          }
+        }
+        _ => {}
+      }
+    }
+    Self { entries, paths }
+  }
+
+  pub fn ordered_kitty_ids(&self) -> Vec<u32> {
+    self.entries.iter().map(|entry| entry.kitty_id).collect()
+  }
+
+  pub fn path_map(&self) -> HashMap<u32, PathBuf> {
+    self.paths.clone()
+  }
+
+  pub fn get(&self, kitty_id: u32) -> Option<&FigureEntry> {
+    self.entries.iter().find(|entry| entry.kitty_id == kitty_id)
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreviewGeometry {
+  pub x: u16,
+  pub y: u16,
+  pub width: u16,
+  pub height: u16,
+}
+
+impl PreviewGeometry {
+  fn from_rect(rect: Rect) -> Self {
+    Self {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    }
+  }
+}
+
+#[derive(Debug)]
+pub struct FigurePreviewState {
+  pub active: bool,
+  pub selected_index: Option<usize>,
+  pub selected_kitty_id: Option<u32>,
+  last_geometry: Cell<Option<PreviewGeometry>>,
+}
+
+impl FigurePreviewState {
+  fn inactive() -> Self {
+    Self {
+      active: false,
+      selected_index: None,
+      selected_kitty_id: None,
+      last_geometry: Cell::new(None),
+    }
+  }
+
+  pub fn last_geometry(&self) -> Option<PreviewGeometry> {
+    self.last_geometry.get()
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,15 +198,21 @@ pub enum FindKind {
 pub enum Mode {
   Normal,
   Search,
-  Visual { line_mode: bool },
+  Visual {
+    line_mode: bool,
+  },
   /// One-shot mode: the next `KeyCode::Char(c)` is consumed as the find
   /// target.  Any other key returns to Normal without moving.
-  AwaitingChar { kind: FindKind },
+  AwaitingChar {
+    kind: FindKind,
+  },
   /// One-shot mode: the next `KeyCode::Char(letter)` is consumed as a
   /// mark identifier.  When `for_set` is true the mark is saved at the
   /// current line; when false the cursor jumps to that mark (no-op if
   /// the mark is unset).  Any non-Char key cancels.
-  AwaitingMarkName { for_set: bool },
+  AwaitingMarkName {
+    for_set: bool,
+  },
   /// One-shot mode after the user pressed `g`.  Awaits the second
   /// keystroke for vim's `g`-prefixed motions: `gg` → top, `ge` /
   /// `gE` → backward word-end (small / big).  Any other key cancels.
@@ -67,7 +222,9 @@ pub enum Mode {
   /// (vim convention), `]f` / `[f` → step figure in the preview
   /// pane.  Any other key cancels.  `forward` records which bracket
   /// was pressed so the resolver knows direction.
-  AwaitingBracket { forward: bool },
+  AwaitingBracket {
+    forward: bool,
+  },
   /// `:`-prefixed Ex-command input.  `cmd_buf` on Reader holds the
   /// in-progress command line; Esc cancels, Enter dispatches via
   /// `commands::execute`.
@@ -75,10 +232,15 @@ pub enum Mode {
   /// After pressing an operator (currently only `y`).  Awaits the
   /// follow-up: another `y` to apply to the current line, `i`/`a` to
   /// enter text-object mode, or any other key cancels.
-  AwaitingOperator { op: Operator },
+  AwaitingOperator {
+    op: Operator,
+  },
   /// After `yi` or `ya`.  Awaits the text-object spec character (`w`,
   /// `"`, `(`, `p`, `s`, etc.) and dispatches to `text_objects::*`.
-  AwaitingTextObject { op: Operator, around: bool },
+  AwaitingTextObject {
+    op: Operator,
+    around: bool,
+  },
 }
 
 /// Which operator is currently pending.  In a read-only reader only
@@ -110,8 +272,11 @@ pub struct Reader {
   pub blocks: Vec<Block>,
   pub visual_lines: Vec<VisualLine>,
   pub sections: Vec<(usize, u8, String)>, // (line_idx, level, title)
+  layout_cache: LayoutCache,
   pub toc_visible: bool,
   pub help_visible: bool,
+  pub help_query: String,
+  pub help_selected: usize,
   pub offset: usize,
   pub cursor_y: usize,
   pub width: usize,
@@ -143,6 +308,7 @@ pub struct Reader {
   /// Bibliography entry first-VL index by cite-key.  `Enter` on a
   /// citation jumps here (line *before* the entry).
   pub bib_entry_lines: HashMap<String, usize>,
+  source_bibitems: HashMap<String, String>,
   /// Effective byte column of the cursor on the current line.  Always
   /// represents the rendered position — horizontal motions write here.
   pub cursor_x: usize,
@@ -171,6 +337,8 @@ pub struct Reader {
   /// skipped — the caption row always renders, so degradation is
   /// graceful.
   pub image_paths: HashMap<u32, std::path::PathBuf>,
+  figure_index: FigureIndex,
+  preview_state: FigurePreviewState,
   /// When true, image rows are dropped from `visual_lines` so text
   /// reflows past where the figures would have been.  Hosts use this
   /// for "preview pane" reading modes: the reader pane stays text-only
@@ -277,26 +445,31 @@ impl Reader {
     let figure_preview_active = false;
     let text_only = false;
     let current_figure: Option<usize> = None;
-    let cw = content_width_for(width, false);
-    let visual_lines = build_lines_for(&blocks, cw, height, text_only);
-    let sections = build_sections(&visual_lines);
-    let (label_lines, mut bib_entries, bib_entry_lines) = build_link_indexes(&blocks, &visual_lines);
-    // Pre-scanned bibitems from source override anything we picked up via
-    // Block::Anchor("ref-…") — Pandoc's bibliography Paras don't carry
-    // cite-keys, so this is the authoritative source.
-    for (k, v) in bibitems {
-      bib_entries.insert(k, v);
-    }
-    let image_paths = collect_image_paths(&blocks);
+    let cw = content_width_for(width, false, false);
+    let source_bibitems = bibitems;
+    let layout_cache = LayoutCache::rebuild_layout(
+      LayoutRebuildReason::Initial,
+      &blocks,
+      cw,
+      height,
+      text_only,
+      &source_bibitems,
+    );
+    let figure_index = FigureIndex::build(&blocks);
+    let image_paths = figure_index.path_map();
     Self {
       blocks,
-      visual_lines,
-      sections,
-      label_lines,
-      bib_entries,
-      bib_entry_lines,
+      visual_lines: layout_cache.visual_lines.clone(),
+      sections: layout_cache.sections.clone(),
+      layout_cache: layout_cache.clone(),
+      label_lines: layout_cache.label_lines.clone(),
+      bib_entries: layout_cache.bib_entries.clone(),
+      bib_entry_lines: layout_cache.bib_entry_lines.clone(),
+      source_bibitems,
       toc_visible: false,
       help_visible: false,
+      help_query: String::new(),
+      help_selected: 0,
       offset: 0,
       cursor_y: 0,
       width,
@@ -318,6 +491,8 @@ impl Reader {
       cmd_error: None,
       popup: None,
       image_paths,
+      figure_index,
+      preview_state: FigurePreviewState::inactive(),
       text_only,
       figure_preview_active,
       current_figure,
@@ -435,7 +610,9 @@ impl Reader {
     let mut map = crate::progress::load();
     map.insert(
       key.clone(),
-      crate::progress::ReaderProgress { offset: self.offset },
+      crate::progress::ReaderProgress {
+        offset: self.offset,
+      },
     );
     crate::progress::save(&map);
     crate::bookmarks::save(
@@ -446,6 +623,55 @@ impl Reader {
       },
     );
     crate::highlights::save(key, &self.highlights);
+  }
+
+  fn rebuild_layout(&mut self, reason: LayoutRebuildReason) {
+    self.layout_cache = LayoutCache::rebuild_layout(
+      reason,
+      &self.blocks,
+      self.content_width(),
+      self.height,
+      self.text_only,
+      &self.source_bibitems,
+    );
+    self.visual_lines = self.layout_cache.visual_lines.clone();
+    self.sections = self.layout_cache.sections.clone();
+    self.label_lines = self.layout_cache.label_lines.clone();
+    self.bib_entries = self.layout_cache.bib_entries.clone();
+    self.bib_entry_lines = self.layout_cache.bib_entry_lines.clone();
+  }
+
+  fn rebuild_figure_index(&mut self) {
+    self.figure_index = FigureIndex::build(&self.blocks);
+    self.image_paths = self.figure_index.path_map();
+    self.refresh_preview_selection();
+  }
+
+  fn set_preview_selection(&mut self, selected_index: Option<usize>) {
+    self.current_figure = selected_index;
+    self.preview_state.selected_index = selected_index;
+    self.preview_state.selected_kitty_id = selected_index.and_then(|idx| {
+      self
+        .figure_index
+        .entries
+        .get(idx)
+        .map(|entry| entry.kitty_id)
+    });
+  }
+
+  fn refresh_preview_selection(&mut self) {
+    let len = self.figure_index.entries.len();
+    if len == 0 {
+      self.set_preview_selection(None);
+      return;
+    }
+    let selected_index = self.preview_state.selected_index.or(self.current_figure);
+    let next = if self.preview_state.active {
+      Some(selected_index.unwrap_or(0).min(len - 1))
+    } else {
+      selected_index.map(|idx| idx.min(len - 1))
+    };
+    self.set_preview_selection(next);
   }
 
   /// Replace the loaded paper with freshly-fetched blocks + bibitems
@@ -463,24 +689,15 @@ impl Reader {
   /// `bib_entry_lines`, `image_paths`.
   pub fn reload_with(&mut self, blocks: Vec<Block>, bibitems: HashMap<String, String>) {
     self.blocks = blocks;
-    let cw = self.content_width();
-    self.visual_lines = build_lines_for(&self.blocks, cw, self.height, self.text_only);
-    self.sections = build_sections(&self.visual_lines);
-    let (label_lines, mut bib_entries, bib_entry_lines) =
-      build_link_indexes(&self.blocks, &self.visual_lines);
-    for (k, v) in bibitems {
-      bib_entries.insert(k, v);
-    }
-    self.label_lines = label_lines;
-    self.bib_entries = bib_entries;
-    self.bib_entry_lines = bib_entry_lines;
-    self.image_paths = collect_image_paths(&self.blocks);
+    self.source_bibitems = bibitems;
+    self.rebuild_layout(LayoutRebuildReason::Reload);
+    self.rebuild_figure_index();
     self.clamp_position();
   }
 
   /// Effective text column width after subtracting the TOC panel (if visible).
   pub fn content_width(&self) -> usize {
-    content_width_for(self.width, self.toc_visible)
+    content_width_for(self.width, self.toc_visible, self.preview_layout_active())
   }
 
   /// Reflow visual lines for a new terminal size.  Embedded hosts
@@ -506,13 +723,7 @@ impl Reader {
     }
     self.width = w;
     self.height = h;
-    let cw = self.content_width();
-    self.visual_lines = build_lines_for(&self.blocks, cw, h, self.text_only);
-    self.sections = build_sections(&self.visual_lines);
-    let (ll, be, bel) = build_link_indexes(&self.blocks, &self.visual_lines);
-    self.label_lines = ll;
-    self.bib_entries = be;
-    self.bib_entry_lines = bel;
+    self.rebuild_layout(LayoutRebuildReason::Resize);
     // Apply any deferred saved-position offset against the new reflow
     // BEFORE clamp_position() runs — clamp_position() is what would
     // otherwise discard a saved offset that's larger than the new
@@ -538,13 +749,9 @@ impl Reader {
       return;
     }
     self.figure_preview_active = value;
+    self.preview_state.active = value;
     self.set_text_only(value);
-    if value && self.current_figure.is_none() {
-      let figs = self.figure_kitty_ids();
-      if !figs.is_empty() {
-        self.current_figure = Some(0);
-      }
-    }
+    self.refresh_preview_selection();
   }
 
   /// `i` binding in normal mode — flip the preview pane and persist
@@ -561,16 +768,16 @@ impl Reader {
   /// hidden or the document has no figures — matches the "predictable
   /// no-ops" decision from the design discussion.
   pub fn step_figure(&mut self, delta: i32) {
-    if !self.figure_preview_active {
+    if !self.preview_state.active {
       return;
     }
-    let figs = self.figure_kitty_ids();
-    if figs.is_empty() {
+    let len = self.figure_index.entries.len();
+    if len == 0 {
       return;
     }
-    let current = self.current_figure.unwrap_or(0) as i32;
-    let next = (current + delta).rem_euclid(figs.len() as i32) as usize;
-    self.current_figure = Some(next);
+    let current = self.preview_state.selected_index.unwrap_or(0) as i32;
+    let next = (current + delta).rem_euclid(len as i32) as usize;
+    self.set_preview_selection(Some(next));
   }
 
   /// `kitty_id` of the figure currently selected for the preview
@@ -578,8 +785,7 @@ impl Reader {
   /// no figures.  Used by `after_draw` to dispatch
   /// `images::place_one_figure`.
   pub fn current_figure_kitty_id(&self) -> Option<u32> {
-    let idx = self.current_figure?;
-    self.figure_kitty_ids().get(idx).copied()
+    self.preview_state.selected_kitty_id
   }
 
   /// Ordered list of figure `kitty_id`s for the current document.
@@ -588,19 +794,47 @@ impl Reader {
   /// individually.  Used by hosts to drive a preview-pane navigation
   /// cursor (`current_figure` indexes into this vector).
   pub fn figure_kitty_ids(&self) -> Vec<u32> {
-    let mut ids = Vec::new();
-    for block in &self.blocks {
-      match block {
-        Block::Image { kitty_id, .. } => ids.push(*kitty_id),
-        Block::ImageRow { items, .. } => {
-          for item in items {
-            ids.push(item.kitty_id);
-          }
-        }
-        _ => {}
-      }
+    self.figure_index.ordered_kitty_ids()
+  }
+
+  pub fn figure_preview_visible(&self) -> bool {
+    self.preview_state.active && self.preview_state.selected_kitty_id.is_some()
+  }
+
+  fn preview_layout_active(&self) -> bool {
+    self.preview_state.active && !self.figure_index.entries.is_empty()
+  }
+
+  pub fn figure_preview_state(&self) -> &FigurePreviewState {
+    &self.preview_state
+  }
+
+  pub fn figure_count(&self) -> usize {
+    self.figure_index.entries.len()
+  }
+
+  pub fn current_figure_position(&self) -> Option<(usize, usize)> {
+    let selected = self.preview_state.selected_index?;
+    let total = self.figure_count();
+    if total == 0 {
+      None
+    } else {
+      Some((selected + 1, total))
     }
-    ids
+  }
+
+  pub(crate) fn set_preview_geometry(&self, area: Option<Rect>) {
+    self
+      .preview_state
+      .last_geometry
+      .set(area.map(PreviewGeometry::from_rect));
+  }
+
+  pub(crate) fn figure_meta(&self, kitty_id: u32) -> Option<(&PathBuf, Option<(u32, u32)>)> {
+    self
+      .figure_index
+      .get(kitty_id)
+      .map(|entry| (&entry.path, entry.dims))
   }
 
   /// Toggle inline figure rendering.  When `true`, `visual_lines` is
@@ -615,20 +849,13 @@ impl Reader {
       return;
     }
     self.text_only = value;
-    let cw = self.content_width();
-    self.visual_lines = build_lines_for(&self.blocks, cw, self.height, self.text_only);
-    self.sections = build_sections(&self.visual_lines);
-    let (ll, _be, bel) = build_link_indexes(&self.blocks, &self.visual_lines);
-    self.label_lines = ll;
-    self.bib_entry_lines = bel;
+    self.rebuild_layout(LayoutRebuildReason::TextOnlyToggle);
     self.clamp_position();
   }
 
   pub fn toggle_toc(&mut self) {
     self.toc_visible = !self.toc_visible;
-    let cw = self.content_width();
-    self.visual_lines = build_lines_for(&self.blocks, cw, self.height, self.text_only);
-    self.sections = build_sections(&self.visual_lines);
+    self.rebuild_layout(LayoutRebuildReason::TocToggle);
     self.clamp_position();
   }
 
@@ -643,7 +870,9 @@ impl Reader {
     }
     let max_offset = total.saturating_sub(ch).max(0);
     self.offset = self.offset.min(max_offset);
-    let max_cursor = ch.saturating_sub(1).min(total.saturating_sub(1 + self.offset));
+    let max_cursor = ch
+      .saturating_sub(1)
+      .min(total.saturating_sub(1 + self.offset));
     self.cursor_y = self.cursor_y.min(max_cursor);
   }
 
@@ -669,14 +898,43 @@ impl Reader {
   }
 
   pub fn toggle_help(&mut self) {
-    self.help_visible = !self.help_visible;
+    let next = !self.help_visible;
+    self.help_visible = next;
+    if next {
+      self.help_query.clear();
+      self.help_selected = 0;
+    }
+  }
+
+  pub fn close_help(&mut self) {
+    self.help_visible = false;
+  }
+
+  pub fn move_help_selection(&mut self, delta: isize, total: usize) {
+    if total == 0 {
+      self.help_selected = 0;
+      return;
+    }
+    let max = total.saturating_sub(1) as isize;
+    let next = (self.help_selected as isize + delta).clamp(0, max) as usize;
+    self.help_selected = next;
+  }
+
+  pub fn clamp_help_selection(&mut self, total: usize) {
+    if total == 0 {
+      self.help_selected = 0;
+    } else {
+      self.help_selected = self.help_selected.min(total.saturating_sub(1));
+    }
   }
 
   /// Set mark `letter` at the current line, replacing any prior value.
   /// Only ASCII letters (a–z, A–Z) are valid; other chars are silently
   /// rejected so the user gets no surprise mark on a stray punctuation key.
   pub fn set_mark(&mut self, letter: char) {
-    if !letter.is_ascii_alphabetic() { return; }
+    if !letter.is_ascii_alphabetic() {
+      return;
+    }
     let line = self.offset + self.cursor_y;
     self.bookmarks.insert(letter, line);
   }
@@ -685,10 +943,16 @@ impl Reader {
   /// is invalid.  Pushes the current position onto the back-nav stack
   /// so `Ctrl+O` returns here.
   pub fn jump_to_mark(&mut self, letter: char) {
-    if !letter.is_ascii_alphabetic() { return; }
-    let Some(&target) = self.bookmarks.get(&letter) else { return };
+    if !letter.is_ascii_alphabetic() {
+      return;
+    }
+    let Some(&target) = self.bookmarks.get(&letter) else {
+      return;
+    };
     let total = self.total_lines();
-    if target >= total { return; }
+    if target >= total {
+      return;
+    }
     self.push_nav_mark();
     self.offset = target;
     self.cursor_y = 0;
@@ -712,8 +976,12 @@ impl Reader {
   pub fn content_height(&self) -> usize {
     let header = if self.meta.is_some() { 1 } else { 0 };
     let status = 1;
-    let search = if self.mode == Mode::Search { 1 } else { 0 };
-    self.height.saturating_sub(header + status + search)
+    let prompt = if matches!(self.mode, Mode::Search | Mode::Command) {
+      1
+    } else {
+      0
+    };
+    self.height.saturating_sub(header + status + prompt)
   }
 
   pub fn update_search_matches(&mut self) {
@@ -721,7 +989,8 @@ impl Reader {
     self.search_matches = if q.is_empty() {
       Vec::new()
     } else {
-      self.visual_lines
+      self
+        .visual_lines
         .iter()
         .enumerate()
         .filter(|(_, vl)| vl.text.to_lowercase().contains(&q))
@@ -742,36 +1011,18 @@ impl Reader {
   }
 }
 
-/// Index `kitty_id → path` for every `Block::Image` / `Block::ImageRow`
-/// in `blocks`.  The post-draw image emitter reads this map when it
-/// needs the on-disk path for an id it's about to transmit.  Called
-/// once on Reader construction and again on every `reload_with` — keep
-/// both call sites in sync by going through this helper.
-fn collect_image_paths(blocks: &[Block]) -> HashMap<u32, std::path::PathBuf> {
-  let mut out = HashMap::new();
-  for block in blocks {
-    match block {
-      Block::Image { kitty_id, path, .. } => {
-        out.insert(*kitty_id, path.clone());
-      }
-      Block::ImageRow { items, .. } => {
-        for item in items {
-          out.insert(item.kitty_id, item.path.clone());
-        }
-      }
-      _ => {}
-    }
-  }
-  out
-}
-
 /// Compute text column width given terminal width and TOC visibility.
-fn content_width_for(terminal_width: usize, toc_visible: bool) -> usize {
-  if toc_visible {
+fn content_width_for(terminal_width: usize, toc_visible: bool, preview_visible: bool) -> usize {
+  let content_width = if toc_visible {
     // +1 for the border column.
     terminal_width.saturating_sub(TOC_WIDTH + 1)
   } else {
     terminal_width
+  };
+  if preview_visible {
+    content_width.saturating_mul(PREVIEW_TEXT_PERCENT) / 100
+  } else {
+    content_width
   }
 }
 
@@ -804,7 +1055,11 @@ fn build_sections(visual_lines: &[VisualLine]) -> Vec<(usize, u8, String)> {
 fn build_link_indexes(
   blocks: &[Block],
   visual_lines: &[VisualLine],
-) -> (HashMap<String, usize>, HashMap<String, String>, HashMap<String, usize>) {
+) -> (
+  HashMap<String, usize>,
+  HashMap<String, String>,
+  HashMap<String, usize>,
+) {
   // Map block_idx → first VL with that block_idx.  O(n) once.
   let mut block_to_vl: HashMap<usize, usize> = HashMap::new();
   for (vl_idx, vl) in visual_lines.iter().enumerate() {
@@ -818,9 +1073,8 @@ fn build_link_indexes(
   for (bi, block) in blocks.iter().enumerate() {
     if let Block::Anchor(label) = block {
       // Walk forward from bi+1 to find the next visible block.
-      let target_block = (bi + 1..blocks.len()).find(|&j| {
-        !matches!(blocks[j], Block::Anchor(_) | Block::Blank)
-      });
+      let target_block =
+        (bi + 1..blocks.len()).find(|&j| !matches!(blocks[j], Block::Anchor(_) | Block::Blank));
       let target_vl = target_block.and_then(|j| block_to_vl.get(&j).copied());
       if let Some(vl) = target_vl {
         // Pandoc bib divs have id="ref-<key>".  Strip the prefix and
@@ -882,7 +1136,10 @@ mod tests {
         VisualLineKind::Image { .. } | VisualLineKind::ImageRow { .. },
       )
     });
-    assert!(inline_has_image, "default reader should render image rows inline");
+    assert!(
+      inline_has_image,
+      "default reader should render image rows inline"
+    );
 
     reader.set_text_only(true);
     let text_only_has_image = reader.visual_lines.iter().any(|vl| {
@@ -891,7 +1148,10 @@ mod tests {
         VisualLineKind::Image { .. } | VisualLineKind::ImageRow { .. },
       )
     });
-    assert!(!text_only_has_image, "text_only mode must not emit image rows");
+    assert!(
+      !text_only_has_image,
+      "text_only mode must not emit image rows"
+    );
     assert!(reader.text_only);
   }
 
@@ -901,7 +1161,11 @@ mod tests {
     let before = reader.visual_lines.len();
     reader.set_text_only(true);
     reader.set_text_only(false);
-    assert_eq!(reader.visual_lines.len(), before, "toggling back restores inline figures");
+    assert_eq!(
+      reader.visual_lines.len(),
+      before,
+      "toggling back restores inline figures"
+    );
     assert!(!reader.text_only);
   }
 
@@ -945,7 +1209,10 @@ mod tests {
     let before = reader.figure_kitty_ids();
     reader.set_text_only(true);
     let after = reader.figure_kitty_ids();
-    assert_eq!(before, after, "figure list is derived from blocks, not visual_lines");
+    assert_eq!(
+      before, after,
+      "figure list is derived from blocks, not visual_lines"
+    );
   }
 
   #[test]
@@ -969,6 +1236,37 @@ mod tests {
   }
 
   #[test]
+  fn figure_preview_reflows_to_reader_pane_width() {
+    let mut blocks = doc_with_one_image();
+    blocks.insert(0, Block::Rule);
+    let mut reader = Reader::new(blocks, 100, 24);
+    assert_eq!(reader.content_width(), 100);
+
+    reader.set_figure_preview_active(true);
+
+    assert_eq!(reader.content_width(), 60);
+    assert_eq!(
+      reader
+        .visual_lines
+        .iter()
+        .find(|vl| matches!(vl.kind, VisualLineKind::Rule))
+        .map(|vl| vl.text.chars().count()),
+      Some(reader.content_width()),
+      "preview mode should wrap text to the left reader pane"
+    );
+  }
+
+  #[test]
+  fn content_height_reserves_command_prompt_row() {
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+    let normal_height = reader.content_height();
+
+    reader.mode = Mode::Command;
+
+    assert_eq!(reader.content_height(), normal_height - 1);
+  }
+
+  #[test]
   fn step_figure_wraps_in_both_directions() {
     use doc_model::ImageItem;
     let blocks = vec![
@@ -981,8 +1279,16 @@ mod tests {
       },
       Block::ImageRow {
         items: vec![
-          ImageItem { path: "b.png".into(), kitty_id: 2, dims: Some((100, 100)) },
-          ImageItem { path: "c.png".into(), kitty_id: 3, dims: Some((100, 100)) },
+          ImageItem {
+            path: "b.png".into(),
+            kitty_id: 2,
+            dims: Some((100, 100)),
+          },
+          ImageItem {
+            path: "c.png".into(),
+            kitty_id: 3,
+            dims: Some((100, 100)),
+          },
         ],
         alt: String::new(),
       },
@@ -1014,12 +1320,14 @@ mod tests {
     let mut reader = Reader::new(doc_with_one_image(), 80, 24);
     reader.set_figure_preview_active(true);
     assert_eq!(reader.current_figure_kitty_id(), Some(1));
+    assert!(reader.figure_preview_visible());
     reader.set_figure_preview_active(false);
     // Cleared preview still leaves current_figure for resumption, but
     // current_figure_kitty_id is None because the index is invalidated
     // by the preview being off — actually no, we kept the index per
     // design.  Verify the resume behaviour: id lookup still works.
     assert_eq!(reader.current_figure_kitty_id(), Some(1));
+    assert!(!reader.figure_preview_visible());
   }
 
   #[test]
@@ -1031,5 +1339,180 @@ mod tests {
     assert_eq!(reader.image_paths.len(), 1);
     reader.set_text_only(true);
     assert_eq!(reader.image_paths.len(), 1);
+  }
+
+  fn assert_layout_cache_mirrors_public_fields(reader: &Reader) {
+    assert_eq!(
+      reader.visual_lines.len(),
+      reader.layout_cache.visual_lines.len()
+    );
+    assert_eq!(reader.sections, reader.layout_cache.sections);
+    assert_eq!(reader.label_lines, reader.layout_cache.label_lines);
+    assert_eq!(reader.bib_entries, reader.layout_cache.bib_entries);
+    assert_eq!(reader.bib_entry_lines, reader.layout_cache.bib_entry_lines);
+  }
+
+  #[test]
+  fn layout_cache_rebuilds_for_resize_toc_text_only_and_reload() {
+    let mut reader = Reader::new_with_bibitems(
+      vec![
+        Block::Header {
+          level: 1,
+          text: "Intro".to_string(),
+        },
+        Block::Anchor("fig:intro".to_string()),
+        Block::Image {
+          path: std::path::PathBuf::from("a.png"),
+          alt: "caption".to_string(),
+          kitty_id: 1,
+          dims: Some((100, 100)),
+          stack_total: 1,
+        },
+        Block::Anchor("sec:intro".to_string()),
+        Block::Line("anchored prose".to_string()),
+        Block::Anchor("ref-smith".to_string()),
+        Block::Line("Smith bibliography entry".to_string()),
+      ],
+      80,
+      24,
+      HashMap::from([("smith".to_string(), "external entry".to_string())]),
+    );
+
+    assert_layout_cache_mirrors_public_fields(&reader);
+    assert_eq!(
+      reader.bib_entries.get("smith"),
+      Some(&"external entry".to_string())
+    );
+
+    reader.resize(60, 20);
+    assert_layout_cache_mirrors_public_fields(&reader);
+
+    reader.toggle_toc();
+    assert_layout_cache_mirrors_public_fields(&reader);
+
+    reader.set_text_only(true);
+    assert_layout_cache_mirrors_public_fields(&reader);
+    assert!(reader.label_lines.contains_key("sec:intro"));
+
+    reader.reload_with(
+      vec![
+        Block::Header {
+          level: 1,
+          text: "Reloaded".to_string(),
+        },
+        Block::Line("body".to_string()),
+      ],
+      HashMap::from([("doe".to_string(), "new entry".to_string())]),
+    );
+    assert_layout_cache_mirrors_public_fields(&reader);
+    assert_eq!(
+      reader.bib_entries.get("doe"),
+      Some(&"new entry".to_string())
+    );
+    assert!(!reader.bib_entries.contains_key("smith"));
+  }
+
+  #[test]
+  fn figure_index_returns_ordered_ids_and_metadata() {
+    use doc_model::ImageItem;
+    let blocks = vec![
+      Block::Image {
+        path: std::path::PathBuf::from("a.png"),
+        alt: "single".to_string(),
+        kitty_id: 1,
+        dims: Some((10, 20)),
+        stack_total: 1,
+      },
+      Block::ImageRow {
+        items: vec![
+          ImageItem {
+            path: "b.png".into(),
+            kitty_id: 2,
+            dims: Some((30, 40)),
+          },
+          ImageItem {
+            path: "c.png".into(),
+            kitty_id: 3,
+            dims: None,
+          },
+        ],
+        alt: "row".to_string(),
+      },
+    ];
+
+    let index = FigureIndex::build(&blocks);
+
+    assert_eq!(index.ordered_kitty_ids(), vec![1, 2, 3]);
+    assert_eq!(index.get(1).map(|entry| entry.alt.as_str()), Some("single"));
+    assert_eq!(
+      index.get(2).map(|entry| entry.path.as_path()),
+      Some(std::path::Path::new("b.png"))
+    );
+    assert_eq!(index.get(3).and_then(|entry| entry.dims), None);
+  }
+
+  #[test]
+  fn reload_rebuilds_figure_index_and_image_paths() {
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+    assert_eq!(reader.figure_kitty_ids(), vec![1]);
+
+    reader.reload_with(
+      vec![Block::Image {
+        path: std::path::PathBuf::from("next.png"),
+        alt: String::new(),
+        kitty_id: 42,
+        dims: Some((200, 100)),
+        stack_total: 1,
+      }],
+      HashMap::new(),
+    );
+
+    assert_eq!(reader.figure_kitty_ids(), vec![42]);
+    assert_eq!(
+      reader.image_paths.get(&42),
+      Some(&std::path::PathBuf::from("next.png"))
+    );
+    assert!(!reader.image_paths.contains_key(&1));
+  }
+
+  #[test]
+  fn preview_state_mirrors_public_compat_fields() {
+    let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+
+    reader.set_figure_preview_active(true);
+    assert!(reader.figure_preview_state().active);
+    assert_eq!(
+      reader.figure_preview_state().selected_index,
+      reader.current_figure
+    );
+    assert_eq!(reader.figure_preview_state().selected_kitty_id, Some(1));
+
+    reader.set_figure_preview_active(false);
+    assert!(!reader.figure_preview_state().active);
+    assert_eq!(
+      reader.figure_preview_state().selected_index,
+      reader.current_figure
+    );
+    assert_eq!(reader.figure_preview_state().selected_kitty_id, Some(1));
+  }
+
+  #[test]
+  fn preview_geometry_tracks_last_pane_rect() {
+    let reader = Reader::new(doc_with_one_image(), 80, 24);
+    assert!(reader.figure_preview_state().last_geometry().is_none());
+
+    reader.set_preview_geometry(Some(Rect::new(10, 2, 30, 12)));
+    assert_eq!(
+      reader.figure_preview_state().last_geometry(),
+      Some(PreviewGeometry {
+        x: 10,
+        y: 2,
+        width: 30,
+        height: 12
+      }),
+    );
+
+    reader.set_preview_geometry(None);
+    assert!(reader.figure_preview_state().last_geometry().is_none());
   }
 }

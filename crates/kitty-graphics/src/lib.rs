@@ -106,6 +106,40 @@ pub fn in_tmux() -> bool {
   std::env::var_os("TMUX").is_some()
 }
 
+/// True when running inside Zellij.  Unlike tmux, Zellij has no
+/// documented passthrough envelope for APC sequences — recent
+/// versions intercept Kitty graphics directly and re-render via the
+/// host terminal's image protocol.  That re-emission works for some
+/// host pairs (Ghostty, Kitty, WezTerm) but is known to fail
+/// silently for iTerm2's Kitty fork.  Callers use this together with
+/// `is_iterm2` to print an actionable startup warning so the user
+/// knows the broken-figures pane isn't a tread bug.
+pub fn in_zellij() -> bool {
+  std::env::var_os("ZELLIJ").is_some()
+    || std::env::var_os("ZELLIJ_SESSION_NAME").is_some()
+}
+
+/// True when the host terminal program is iTerm2 (regardless of
+/// version).  Checks `LC_TERMINAL` first (set directly by iTerm2)
+/// and falls back to `TERM_PROGRAM` (which propagates through both
+/// tmux and Zellij).  Returns false for Ghostty / Kitty / WezTerm
+/// even though those also support Kitty graphics — this predicate
+/// exists specifically to scope the Zellij-over-iTerm2 warning, not
+/// to gate graphics emission generally.
+pub fn is_iterm2() -> bool {
+  if let Ok(term) = std::env::var("LC_TERMINAL")
+    && term.eq_ignore_ascii_case("iTerm2")
+  {
+    return true;
+  }
+  if let Ok(prog) = std::env::var("TERM_PROGRAM")
+    && prog.to_ascii_lowercase().contains("iterm")
+  {
+    return true;
+  }
+  false
+}
+
 /// True when the host terminal persists transmitted image data across
 /// frames — i.e. supports the cached `a=p` (place-by-id) flow without
 /// re-sending bytes on every placement.  Native Kitty does; iTerm2's
@@ -243,6 +277,8 @@ mod tests {
     "TERM",
     "TERM_PROGRAM",
     "TMUX",
+    "ZELLIJ",
+    "ZELLIJ_SESSION_NAME",
   ];
 
   #[test]
@@ -347,5 +383,42 @@ mod tests {
   fn persistent_cache_no_env_is_false() {
     let _lock = EnvLock::new(ENV_KEYS);
     assert!(!has_persistent_image_cache());
+  }
+
+  #[test]
+  fn in_zellij_detects_session_name_var() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    assert!(!in_zellij());
+    unsafe { std::env::set_var("ZELLIJ_SESSION_NAME", "default"); }
+    assert!(in_zellij());
+  }
+
+  #[test]
+  fn in_zellij_detects_zellij_var() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    unsafe { std::env::set_var("ZELLIJ", "0"); }
+    assert!(in_zellij());
+  }
+
+  #[test]
+  fn is_iterm2_via_lc_terminal() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    assert!(!is_iterm2());
+    unsafe { std::env::set_var("LC_TERMINAL", "iTerm2"); }
+    assert!(is_iterm2());
+  }
+
+  #[test]
+  fn is_iterm2_via_term_program() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    unsafe { std::env::set_var("TERM_PROGRAM", "iTerm.app"); }
+    assert!(is_iterm2());
+  }
+
+  #[test]
+  fn is_iterm2_false_for_ghostty() {
+    let _lock = EnvLock::new(ENV_KEYS);
+    unsafe { std::env::set_var("TERM_PROGRAM", "ghostty"); }
+    assert!(!is_iterm2());
   }
 }

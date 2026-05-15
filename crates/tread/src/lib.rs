@@ -16,26 +16,31 @@ mod voice;
 mod voice_control;
 
 use crossterm::{
-  event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
+  event::{
+    self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
+    KeyCode, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+  },
   execute,
   terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use doc_model::Block;
-use std::collections::HashMap;
-use std::sync::Arc;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use state::{FindKind, Mode, Operator};
+use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
+use std::time::Duration;
 
 // Public embed surface — host TUIs (trench) and the standalone tread
 // binary both build against these.  See `crates/tread/CLAUDE.md` for
 // the embed guide.  Stable from v1; signature changes are a contract
 // break.
-pub use state::{Reader, PaperMeta};
 pub use commands::ReaderAction;
 pub use images::{BurstTracker, ImageState};
+pub use state::{PaperMeta, Reader};
 pub use voice::PlaybackController;
 // Re-export the ui_theme crate so embedding hosts can name `tread::Theme`
 // (and its `Color` enum) without taking a separate path-dep on the same
@@ -185,8 +190,7 @@ impl PaperData {
   /// Hosts that want richer error context wrap this with their own.
   pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
     let path = path.as_ref();
-    let bytes = std::fs::read(path)
-      .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let ext = path
       .extension()
       .and_then(|e| e.to_str())
@@ -210,8 +214,7 @@ impl PaperData {
         // file still opens.
         let text = String::from_utf8(bytes)
           .map_err(|e| format!("{}: invalid UTF-8 ({e})", path.display()))?;
-        let lines: Vec<String> =
-          text.split('\n').map(|l| l.trim_end().to_string()).collect();
+        let lines: Vec<String> = text.split('\n').map(|l| l.trim_end().to_string()).collect();
         Ok(Self::from_plain_lines(lines))
       }
     }
@@ -236,6 +239,21 @@ pub fn detect_kitty_supported() -> bool {
     kitty_graphics::detect(),
     kitty_graphics::Capability::Supported
   )
+}
+
+/// Re-export of `kitty_graphics::in_zellij()` so embedding hosts
+/// (trench) can surface the Zellij-over-iTerm2 graphics warning
+/// without taking a direct dep on the kitty-graphics crate.
+pub fn in_zellij() -> bool {
+  kitty_graphics::in_zellij()
+}
+
+/// Re-export of `kitty_graphics::is_iterm2()`.  Used together with
+/// `in_zellij()` to scope the figure-preview warning to the
+/// host/multiplexer combo where Kitty graphics rendering is known
+/// to fail silently.
+pub fn is_iterm2() -> bool {
+  kitty_graphics::is_iterm2()
 }
 
 /// Extract an arXiv id from an URL or bare-id string.  Returns `None`
@@ -266,7 +284,11 @@ pub fn fetch_paper(id: &str, kitty_supported: bool) -> Result<PaperData, String>
     Err(_) => Vec::new(),
   };
   let blocks = placement::lift_tables(blocks, &anchors);
-  Ok(PaperData { blocks, bibitems, asset_dir })
+  Ok(PaperData {
+    blocks,
+    bibitems,
+    asset_dir,
+  })
 }
 
 pub fn run(
@@ -278,7 +300,10 @@ pub fn run(
   // Resolve theme via the new config layer: respect override, else follow
   // trench's theme, else fall back to the built-in dark default.
   let theme = config::resolve_theme();
-  let kitty_supported = matches!(kitty_graphics::detect(), kitty_graphics::Capability::Supported);
+  let kitty_supported = matches!(
+    kitty_graphics::detect(),
+    kitty_graphics::Capability::Supported
+  );
   run_with_theme(blocks, meta, progress_key, bibitems, theme, kitty_supported)
 }
 
@@ -301,14 +326,20 @@ pub fn run_with_theme(
   // belong to a different tmux pane).  Requires `set -g focus-events
   // on` in the user's tmux config; if absent, FocusLost never fires
   // and behaviour is what we had before — image bleed across panes.
-  execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableFocusChange)?;
+  execute!(
+    stdout,
+    EnterAlternateScreen,
+    EnableMouseCapture,
+    EnableFocusChange
+  )?;
   // Opt into the kitty keyboard protocol so Shift+Enter (and other
   // modified specials) are distinguishable from plain Enter.  Terminals
   // that don't speak the protocol silently ignore the push; on those,
   // `K` is the universal fallback for the citation-popup binding.
-  let _ = execute!(stdout, PushKeyboardEnhancementFlags(
-    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-  ));
+  let _ = execute!(
+    stdout,
+    PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+  );
   let backend = CrosstermBackend::new(stdout);
   let mut terminal = Terminal::new(backend)?;
 
@@ -325,7 +356,7 @@ pub fn run_with_theme(
     bibitems,
     asset_dir: std::path::PathBuf::new(),
   };
-  let mut reader = Reader::init(
+  let reader = Reader::init(
     paper,
     meta,
     progress_key.clone(),
@@ -335,7 +366,8 @@ pub fn run_with_theme(
     voice_controller,
   );
 
-  let result = standalone_loop(&mut terminal, &mut reader, theme, kitty_supported);
+  let runtime = ReaderRuntime::new(reader, theme, kitty_supported);
+  let (reader, result) = runtime.run(&mut terminal);
 
   // Persist reading progress, bookmarks, and highlights on clean exit.
   reader.save_progress();
@@ -344,7 +376,12 @@ pub fn run_with_theme(
   // that didn't accept it.
   let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
   disable_raw_mode()?;
-  execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture, DisableFocusChange)?;
+  execute!(
+    terminal.backend_mut(),
+    LeaveAlternateScreen,
+    DisableMouseCapture,
+    DisableFocusChange
+  )?;
   terminal.show_cursor()?;
 
   result
@@ -361,10 +398,15 @@ pub fn after_draw(reader: &Reader, state: &mut ImageState, area: Rect, kitty_sup
     return;
   }
   let (_, _, content_area, _, _) = render::split_layout(area, reader);
-  let (reader_area, preview_area) =
-    render::split_content_for_preview(content_area, reader);
+  let (reader_area, preview_area) = render::split_content_for_preview(content_area, reader);
   images::place_visible(reader, state, reader_area, kitty_supported);
-  emit_preview(reader, state, preview_area, area, kitty_supported);
+  emit_preview(
+    reader,
+    state,
+    preview_area.map(render::preview_image_area),
+    area,
+    kitty_supported,
+  );
 }
 
 /// Emit the figure-preview placement.  Separated from `after_draw`'s
@@ -379,6 +421,7 @@ fn emit_preview(
   kitty_supported: bool,
 ) {
   let kid = preview_area.and_then(|_| reader.current_figure_kitty_id());
+  reader.set_preview_geometry(preview_area);
   let rect = preview_area.unwrap_or(fallback_rect);
   images::place_one_figure(reader, state, kid, rect, kitty_supported);
 }
@@ -394,9 +437,7 @@ pub fn burst_skip_enabled(kitty_supported: bool) -> bool {
   let user_disabled = std::env::var("TREAD_IMAGE_BURST_HIDE")
     .map(|v| v == "0")
     .unwrap_or(false);
-  kitty_supported
-    && !kitty_graphics::has_persistent_image_cache()
-    && !user_disabled
+  kitty_supported && !kitty_graphics::has_persistent_image_cache() && !user_disabled
 }
 
 /// Like [`after_draw`] but coalesces image emission during input bursts.
@@ -420,8 +461,7 @@ pub fn after_draw_guarded(
     return;
   }
   let (_, _, content_area, _, _) = render::split_layout(area, reader);
-  let (reader_area, preview_area) =
-    render::split_content_for_preview(content_area, reader);
+  let (reader_area, preview_area) = render::split_content_for_preview(content_area, reader);
   // Burst gate only suppresses the inline path: that's where a full
   // `a=T` retransmit fires every scroll line on iTerm2 and overwhelms
   // the terminal.  The preview figure only changes on `i` / `]f` /
@@ -433,7 +473,13 @@ pub fn after_draw_guarded(
   if !(burst_skip_enabled(kitty_supported) && burst_in_progress) {
     images::place_visible(reader, state, reader_area, kitty_supported);
   }
-  emit_preview(reader, state, preview_area, area, kitty_supported);
+  emit_preview(
+    reader,
+    state,
+    preview_area.map(render::preview_image_area),
+    area,
+    kitty_supported,
+  );
 }
 
 /// Render one figure into a dedicated preview pane (or clear it).
@@ -536,20 +582,16 @@ pub fn fetch_any(url: &str) -> Result<PaperData, String> {
     Format::Pdf => PaperData::from_pdf_bytes(&bytes),
     Format::Epub => PaperData::from_epub_bytes(&bytes),
     Format::Markdown => {
-      let text = String::from_utf8(bytes)
-        .map_err(|e| format!("{url}: invalid UTF-8 ({e})"))?;
+      let text = String::from_utf8(bytes).map_err(|e| format!("{url}: invalid UTF-8 ({e})"))?;
       Ok(PaperData::from_markdown(&text))
     }
     Format::Html => {
-      let text = String::from_utf8(bytes)
-        .map_err(|e| format!("{url}: invalid UTF-8 ({e})"))?;
+      let text = String::from_utf8(bytes).map_err(|e| format!("{url}: invalid UTF-8 ({e})"))?;
       Ok(PaperData::from_html(&text))
     }
     Format::PlainText => {
-      let text = String::from_utf8(bytes)
-        .map_err(|e| format!("{url}: invalid UTF-8 ({e})"))?;
-      let lines: Vec<String> =
-        text.split('\n').map(|l| l.trim_end().to_string()).collect();
+      let text = String::from_utf8(bytes).map_err(|e| format!("{url}: invalid UTF-8 ({e})"))?;
+      let lines: Vec<String> = text.split('\n').map(|l| l.trim_end().to_string()).collect();
       Ok(PaperData::from_plain_lines(lines))
     }
   }
@@ -614,8 +656,7 @@ mod fetch_any_tests {
       ("txt", "txt"),
     ];
     for (ext, want) in cases {
-      let got = format_from_extension(ext)
-        .unwrap_or_else(|| panic!("ext {ext} returned None"));
+      let got = format_from_extension(ext).unwrap_or_else(|| panic!("ext {ext} returned None"));
       assert_eq!(fmt_disc(got), want, "extension {ext}");
     }
   }
@@ -638,8 +679,7 @@ mod fetch_any_tests {
       ("text/plain", "txt"),
     ];
     for (ct, want) in cases {
-      let got = format_from_content_type(ct)
-        .unwrap_or_else(|| panic!("ct {ct} returned None"));
+      let got = format_from_content_type(ct).unwrap_or_else(|| panic!("ct {ct} returned None"));
       assert_eq!(fmt_disc(got), want, "ct {ct}");
     }
   }
@@ -710,8 +750,14 @@ impl Reader {
               ReaderAction::Continue
             }
           }
-          Mode::Search => { handle_search(self, key.code); ReaderAction::Continue }
-          Mode::Visual { .. } => { handle_visual(self, key.code); ReaderAction::Continue }
+          Mode::Search => {
+            handle_search(self, key.code);
+            ReaderAction::Continue
+          }
+          Mode::Visual { .. } => {
+            handle_visual(self, key.code);
+            ReaderAction::Continue
+          }
           Mode::AwaitingChar { kind } => {
             handle_awaiting_char(self, key.code, kind);
             ReaderAction::Continue
@@ -720,7 +766,10 @@ impl Reader {
             handle_awaiting_mark_name(self, key.code, for_set);
             ReaderAction::Continue
           }
-          Mode::AwaitingG => { handle_awaiting_g(self, key.code); ReaderAction::Continue }
+          Mode::AwaitingG => {
+            handle_awaiting_g(self, key.code);
+            ReaderAction::Continue
+          }
           Mode::AwaitingBracket { forward } => {
             handle_awaiting_bracket(self, key.code, forward);
             ReaderAction::Continue
@@ -738,8 +787,16 @@ impl Reader {
       }
       Event::Mouse(mouse) => {
         match mouse.kind {
-          MouseEventKind::ScrollDown => { for _ in 0..3 { self.nav_down(); } }
-          MouseEventKind::ScrollUp => { for _ in 0..3 { self.nav_up(); } }
+          MouseEventKind::ScrollDown => {
+            for _ in 0..3 {
+              self.nav_down();
+            }
+          }
+          MouseEventKind::ScrollUp => {
+            for _ in 0..3 {
+              self.nav_up();
+            }
+          }
           _ => {}
         }
         ReaderAction::Continue
@@ -793,75 +850,463 @@ impl Reader {
     // While voice is actively playing, the active-word highlight
     // moves continuously based on wall-clock time, so every tick
     // changes visible state even if no field flipped.
-    if matches!(self.voice_status, voice::PlaybackStatus::Playing | voice::PlaybackStatus::Loading) {
+    if matches!(
+      self.voice_status,
+      voice::PlaybackStatus::Playing | voice::PlaybackStatus::Loading
+    ) {
       changed = true;
     }
     changed
   }
 }
 
-/// Standalone-binary event loop.  Drives the embed surface from inside
-/// tread itself so the standalone path and the embedded path share one
-/// implementation.  Trench has its own equivalent loop that interleaves
-/// reader events with feed events.
-fn standalone_loop(
-  terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-  reader: &mut Reader,
-  mut theme: Theme,
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReaderEvent {
+  Input,
+  Resize,
+  Tick,
+  ReloadComplete,
+  ImageReady,
+  ConfigChange,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DirtyState {
+  content: bool,
+  status: bool,
+  layout: bool,
+  images: bool,
+  voice: bool,
+}
+
+impl DirtyState {
+  fn all() -> Self {
+    Self {
+      content: true,
+      status: true,
+      layout: true,
+      images: true,
+      voice: true,
+    }
+  }
+
+  fn any(self) -> bool {
+    self.content || self.status || self.layout || self.images || self.voice
+  }
+
+  fn clear_after_draw(&mut self) {
+    *self = Self::default();
+  }
+
+  fn mark(&mut self, event: ReaderEvent) {
+    match event {
+      ReaderEvent::Input => {
+        self.content = true;
+        self.status = true;
+      }
+      ReaderEvent::Resize => {
+        self.content = true;
+        self.status = true;
+        self.layout = true;
+        self.images = true;
+      }
+      ReaderEvent::Tick => {
+        self.status = true;
+        self.voice = true;
+      }
+      ReaderEvent::ReloadComplete => {
+        self.content = true;
+        self.status = true;
+        self.layout = true;
+        self.images = true;
+      }
+      ReaderEvent::ImageReady => {
+        self.images = true;
+      }
+      ReaderEvent::ConfigChange => {
+        self.content = true;
+        self.status = true;
+      }
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ReaderUpdate {
+  dirty: DirtyState,
+  quit: bool,
+}
+
+impl ReaderUpdate {
+  fn quit() -> Self {
+    Self {
+      quit: true,
+      dirty: DirtyState::default(),
+    }
+  }
+
+  fn from_event(event: ReaderEvent) -> Self {
+    let mut dirty = DirtyState::default();
+    dirty.mark(event);
+    Self { dirty, quit: false }
+  }
+}
+
+struct ReaderRuntime {
+  reader: Reader,
+  img_state: ImageState,
+  theme: Theme,
   kitty_supported: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-  let mut img_state = images::ImageState::default();
-  loop {
+  dirty: DirtyState,
+}
+
+impl ReaderRuntime {
+  fn new(reader: Reader, theme: Theme, kitty_supported: bool) -> Self {
+    Self {
+      reader,
+      img_state: ImageState::default(),
+      theme,
+      kitty_supported,
+      dirty: DirtyState::all(),
+    }
+  }
+
+  fn run(
+    mut self,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+  ) -> (Reader, Result<(), Box<dyn std::error::Error>>) {
+    let result = self.run_inner(terminal);
+    // Clear any lingering image placements so they don't bleed onto the
+    // user's shell after we leave the alt screen.
+    images::clear_all(&mut self.img_state);
+    (self.reader, result)
+  }
+
+  fn run_inner(
+    &mut self,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+  ) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+      self.draw_if_dirty(terminal)?;
+
+      if event::poll(self.poll_timeout())? {
+        let ev = event::read()?;
+        let update = self.handle_event(ev);
+        self.apply_update(update);
+        if update.quit {
+          break;
+        }
+      } else if images::poll_ready(&mut self.img_state) {
+        self.apply_update(ReaderUpdate::from_event(ReaderEvent::ImageReady));
+      } else if self.reader.tick() {
+        self.apply_update(ReaderUpdate::from_event(ReaderEvent::Tick));
+      }
+    }
+    Ok(())
+  }
+
+  fn draw_if_dirty(
+    &mut self,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+  ) -> Result<(), Box<dyn std::error::Error>> {
+    if !self.dirty.any() {
+      return Ok(());
+    }
     let mut drawn_area = Rect::default();
     terminal.draw(|f| {
       drawn_area = f.area();
-      render::draw(f, drawn_area, reader, &theme);
+      render::draw(f, drawn_area, &self.reader, &self.theme);
     })?;
 
-    if kitty_supported {
-      let burst_in_progress = burst_skip_enabled(kitty_supported)
-        && event::poll(std::time::Duration::ZERO)?;
+    if self.kitty_supported {
+      let burst_in_progress =
+        burst_skip_enabled(self.kitty_supported) && event::poll(Duration::ZERO)?;
       after_draw_guarded(
-        reader,
-        &mut img_state,
+        &self.reader,
+        &mut self.img_state,
         drawn_area,
-        kitty_supported,
+        self.kitty_supported,
         burst_in_progress,
       );
     }
+    self.dirty.clear_after_draw();
+    Ok(())
+  }
 
-    if !event::poll(std::time::Duration::from_millis(100))? {
-      // Idle tick — refresh voice state, then loop back to redraw.
-      reader.tick();
-      continue;
-    }
-
-    let ev = event::read()?;
-    // Image-cache cleanup events: host-side mirror of the contract.
-    let needs_image_clear = matches!(&ev, Event::Resize(_, _) | Event::FocusLost);
-
-    match reader.handle_event(ev) {
-      ReaderAction::Quit => break,
-      ReaderAction::ChangeTheme(t) => theme = t,
-      ReaderAction::Reload => {
-        // Paper just rebuilt with fresh blocks → all kitty_ids are new.
-        // Drop on-screen image placements so we don't try to reuse
-        // stale ids the terminal still has cached.
-        images::clear_all(&mut img_state);
-      }
-      ReaderAction::Error(msg) => reader.cmd_error = Some(msg),
-      ReaderAction::OpenHelp => reader.help_visible = true,
-      ReaderAction::Continue => {}
-    }
-
-    if needs_image_clear {
-      images::clear_all(&mut img_state);
+  fn poll_timeout(&self) -> Duration {
+    if self.dirty.any() {
+      Duration::ZERO
+    } else if images::has_pending_jobs(&self.img_state) {
+      Duration::from_millis(16)
+    } else if matches!(
+      self.reader.voice_status,
+      voice::PlaybackStatus::Playing | voice::PlaybackStatus::Loading
+    ) {
+      Duration::from_millis(33)
+    } else {
+      Duration::from_millis(16)
     }
   }
-  // Clear any lingering image placements so they don't bleed onto the
-  // user's shell after we leave the alt screen.
-  images::clear_all(&mut img_state);
-  Ok(())
+
+  fn handle_event(&mut self, ev: Event) -> ReaderUpdate {
+    let event_kind = match &ev {
+      Event::Resize(_, _) => ReaderEvent::Resize,
+      Event::Key(_) | Event::Mouse(_) | Event::Paste(_) => ReaderEvent::Input,
+      _ => ReaderEvent::Input,
+    };
+    let needs_image_clear = matches!(&ev, Event::Resize(_, _) | Event::FocusLost);
+
+    let action = self.reader.handle_event(ev);
+    let mut update = match action {
+      ReaderAction::Quit => ReaderUpdate::quit(),
+      ReaderAction::ChangeTheme(t) => {
+        self.theme = t;
+        ReaderUpdate::from_event(ReaderEvent::ConfigChange)
+      }
+      ReaderAction::Reload => {
+        images::clear_all(&mut self.img_state);
+        ReaderUpdate::from_event(ReaderEvent::ReloadComplete)
+      }
+      ReaderAction::Error(msg) => {
+        self.reader.cmd_error = Some(msg);
+        ReaderUpdate::from_event(ReaderEvent::Input)
+      }
+      ReaderAction::OpenHelp => {
+        self.reader.help_visible = true;
+        ReaderUpdate::from_event(ReaderEvent::Input)
+      }
+      ReaderAction::Continue => ReaderUpdate::from_event(event_kind),
+    };
+
+    if needs_image_clear {
+      images::clear_all(&mut self.img_state);
+      update.dirty.mark(ReaderEvent::Resize);
+    }
+    update
+  }
+
+  fn apply_update(&mut self, update: ReaderUpdate) {
+    self.dirty.content |= update.dirty.content;
+    self.dirty.status |= update.dirty.status;
+    self.dirty.layout |= update.dirty.layout;
+    self.dirty.images |= update.dirty.images;
+    self.dirty.voice |= update.dirty.voice;
+  }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+  use super::*;
+
+  #[test]
+  fn dirty_state_marks_redraw_for_visible_events() {
+    let cases = [
+      (ReaderEvent::Input, (true, true, false, false, false)),
+      (ReaderEvent::Resize, (true, true, true, true, false)),
+      (ReaderEvent::ReloadComplete, (true, true, true, true, false)),
+      (ReaderEvent::ImageReady, (false, false, false, true, false)),
+      (ReaderEvent::ConfigChange, (true, true, false, false, false)),
+      (ReaderEvent::Tick, (false, true, false, false, true)),
+    ];
+
+    for (event, expected) in cases {
+      let mut dirty = DirtyState::default();
+      dirty.mark(event);
+      assert_eq!(
+        (
+          dirty.content,
+          dirty.status,
+          dirty.layout,
+          dirty.images,
+          dirty.voice
+        ),
+        expected,
+        "event {event:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn reader_update_quit_does_not_force_redraw() {
+    let update = ReaderUpdate::quit();
+    assert!(update.quit);
+    assert!(!update.dirty.any());
+  }
+}
+
+#[cfg(test)]
+mod acceptance_tests {
+  use super::*;
+  use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+  use doc_model::{Block, ImageItem, InlineSpan};
+  use std::collections::HashMap;
+
+  fn key(code: KeyCode) -> Event {
+    Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
+  }
+
+  fn ctrl(c: char) -> Event {
+    Event::Key(KeyEvent::new(
+      KeyCode::Char(c),
+      KeyModifiers::CONTROL,
+    ))
+  }
+
+  fn char_key(c: char) -> Event {
+    key(KeyCode::Char(c))
+  }
+
+  fn send_chars(reader: &mut Reader, text: &str) {
+    for c in text.chars() {
+      reader.handle_event(char_key(c));
+    }
+  }
+
+  fn acceptance_reader() -> Reader {
+    let blocks = vec![
+      Block::Header {
+        level: 1,
+        text: "Abstract".to_string(),
+      },
+      Block::Line("alpha beta gamma delta".to_string()),
+      Block::Line("method paragraph with mark target".to_string()),
+      Block::Anchor("sec:results".to_string()),
+      Block::Header {
+        level: 1,
+        text: "Results".to_string(),
+      },
+      Block::StyledLine(vec![
+        InlineSpan::plain("See "),
+        InlineSpan::internal_link("Results", "sec:results"),
+        InlineSpan::plain(" and "),
+        InlineSpan::citation("[smith]", "smith"),
+        InlineSpan::plain("."),
+      ]),
+      Block::Image {
+        path: "figure-a.png".into(),
+        alt: "first figure".to_string(),
+        kitty_id: 1,
+        dims: Some((640, 360)),
+        stack_total: 1,
+      },
+      Block::ImageRow {
+        items: vec![
+          ImageItem {
+            path: "figure-b.png".into(),
+            kitty_id: 2,
+            dims: Some((320, 240)),
+          },
+          ImageItem {
+            path: "figure-c.png".into(),
+            kitty_id: 3,
+            dims: Some((320, 240)),
+          },
+        ],
+        alt: "row figure".to_string(),
+      },
+      Block::Anchor("ref-smith".to_string()),
+      Block::Line("Smith 2024. A useful reference.".to_string()),
+    ];
+    Reader::new_with_bibitems(
+      blocks,
+      100,
+      28,
+      HashMap::from([("smith".to_string(), "Smith 2024. A useful reference.".to_string())]),
+    )
+  }
+
+  #[test]
+  fn acceptance_preview_scroll_and_resize_stays_coherent() {
+    let mut reader = acceptance_reader();
+
+    reader.set_figure_preview_active(true);
+    assert!(reader.figure_preview_visible());
+    assert_eq!(reader.current_figure_kitty_id(), Some(1));
+    assert_eq!(reader.content_width(), 60);
+
+    for _ in 0..8 {
+      reader.handle_event(char_key('j'));
+    }
+    assert_eq!(reader.current_figure_kitty_id(), Some(1));
+    assert!(reader.figure_preview_visible());
+
+    reader.handle_event(Event::Resize(80, 20));
+    assert_eq!(reader.width, 80);
+    assert_eq!(reader.height, 20);
+    assert_eq!(reader.content_width(), 48);
+    assert!(reader.current_line() < reader.total_lines());
+
+    reader.handle_event(char_key(']'));
+    reader.handle_event(char_key('f'));
+    assert_eq!(reader.current_figure_kitty_id(), Some(2));
+  }
+
+  #[test]
+  fn acceptance_search_toc_and_command_mode_keep_navigation_sane() {
+    let mut reader = acceptance_reader();
+
+    reader.handle_event(char_key('/'));
+    send_chars(&mut reader, "method");
+    assert!(matches!(reader.mode, Mode::Search));
+    assert!(!reader.search_matches.is_empty());
+    reader.handle_event(key(KeyCode::Enter));
+    assert!(matches!(reader.mode, Mode::Normal));
+    assert!(reader.visual_lines[reader.current_line()].text.contains("method"));
+
+    reader.handle_event(char_key('\\'));
+    assert!(reader.toc_visible);
+    assert_eq!(reader.content_width(), 71);
+
+    reader.handle_event(char_key(':'));
+    send_chars(&mut reader, "2");
+    let action = reader.handle_event(key(KeyCode::Enter));
+    assert!(matches!(action, ReaderAction::Continue));
+    assert!(matches!(reader.mode, Mode::Normal));
+    assert_eq!(reader.current_line(), 1);
+  }
+
+  #[test]
+  fn acceptance_marks_highlights_and_voice_keys_round_trip() {
+    let mut reader = acceptance_reader();
+
+    reader.handle_event(char_key('j'));
+    let marked_line = reader.current_line();
+    reader.handle_event(char_key('m'));
+    reader.handle_event(char_key('a'));
+    reader.handle_event(char_key('j'));
+    assert_ne!(reader.current_line(), marked_line);
+    reader.handle_event(char_key('\''));
+    reader.handle_event(char_key('a'));
+    assert_eq!(reader.current_line(), marked_line);
+
+    reader.handle_event(char_key('V'));
+    reader.handle_event(char_key('j'));
+    reader.handle_event(char_key('H'));
+    assert!(matches!(reader.mode, Mode::Normal));
+    assert!(
+      !reader.highlights.highlights.is_empty(),
+      "visual highlight should create persistent block-byte highlights"
+    );
+    let highlight_count = reader.highlights.highlights.len();
+
+    reader.cursor_y = marked_line.saturating_sub(reader.offset);
+    reader.cursor_x = 0;
+    reader.handle_event(char_key('X'));
+    assert!(
+      reader.highlights.highlights.len() < highlight_count,
+      "X should remove the highlight under the cursor"
+    );
+
+    reader.handle_event(char_key('r'));
+    assert!(reader.reading_mode);
+    assert!(!reader.tick(), "no controller means idle ticks are invisible");
+    reader.handle_event(ctrl('p'));
+    assert!(reader.continuous_reading);
+    reader.handle_event(key(KeyCode::Esc));
+    assert!(!reader.reading_mode);
+    assert!(!reader.continuous_reading);
+  }
 }
 
 fn take_count(reader: &mut Reader) -> usize {
@@ -907,11 +1352,15 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
     }
     KeyCode::Char('j') | KeyCode::Down => {
       let n = take_count(reader);
-      for _ in 0..n { reader.nav_down(); }
+      for _ in 0..n {
+        reader.nav_down();
+      }
     }
     KeyCode::Char('k') | KeyCode::Up => {
       let n = take_count(reader);
-      for _ in 0..n { reader.nav_up(); }
+      for _ in 0..n {
+        reader.nav_up();
+      }
     }
     KeyCode::Char('g') => {
       reader.count_buf.clear();
@@ -922,7 +1371,9 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
         reader.nav_bottom();
       } else {
         let n = take_count(reader);
-        let target = n.saturating_sub(1).min(reader.total_lines().saturating_sub(1));
+        let target = n
+          .saturating_sub(1)
+          .min(reader.total_lines().saturating_sub(1));
         reader.push_nav_mark();
         reader.offset = target;
         reader.cursor_y = 0;
@@ -930,61 +1381,169 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
     }
     KeyCode::Char('d') if mods.contains(KeyModifiers::CONTROL) => {
       let n = take_count(reader);
-      for _ in 0..n { reader.nav_half_page_down(); }
+      for _ in 0..n {
+        reader.nav_half_page_down();
+      }
     }
     KeyCode::Char('u') if mods.contains(KeyModifiers::CONTROL) => {
       let n = take_count(reader);
-      for _ in 0..n { reader.nav_half_page_up(); }
+      for _ in 0..n {
+        reader.nav_half_page_up();
+      }
     }
     KeyCode::PageDown => {
       let n = take_count(reader);
-      for _ in 0..n { reader.nav_page_down(); }
+      for _ in 0..n {
+        reader.nav_page_down();
+      }
     }
     KeyCode::PageUp => {
       let n = take_count(reader);
-      for _ in 0..n { reader.nav_page_up(); }
+      for _ in 0..n {
+        reader.nav_page_up();
+      }
     }
     KeyCode::Char('}') => {
       let n = take_count(reader);
-      for _ in 0..n { reader.jump_next_paragraph(); }
+      for _ in 0..n {
+        reader.jump_next_paragraph();
+      }
     }
     KeyCode::Char('{') => {
       let n = take_count(reader);
-      for _ in 0..n { reader.jump_prev_paragraph(); }
+      for _ in 0..n {
+        reader.jump_prev_paragraph();
+      }
     }
-    KeyCode::Char('H') => { reader.count_buf.clear(); reader.jump_screen_top(); }
-    KeyCode::Char('M') => { reader.count_buf.clear(); reader.jump_screen_middle(); }
-    KeyCode::Char('L') => { reader.count_buf.clear(); reader.jump_screen_bottom(); }
-    KeyCode::Char('z') => { reader.count_buf.clear(); reader.center_cursor(); }
+    KeyCode::Char('H') => {
+      reader.count_buf.clear();
+      reader.jump_screen_top();
+    }
+    KeyCode::Char('M') => {
+      reader.count_buf.clear();
+      reader.jump_screen_middle();
+    }
+    KeyCode::Char('L') => {
+      reader.count_buf.clear();
+      reader.jump_screen_bottom();
+    }
+    KeyCode::Char('z') => {
+      reader.count_buf.clear();
+      reader.center_cursor();
+    }
     KeyCode::Char('h') | KeyCode::Left => {
       let n = take_count(reader);
-      for _ in 0..n { reader.nav_left(); }
+      for _ in 0..n {
+        reader.nav_left();
+      }
     }
     KeyCode::Char('l') | KeyCode::Right => {
       let n = take_count(reader);
-      for _ in 0..n { reader.nav_right(); }
+      for _ in 0..n {
+        reader.nav_right();
+      }
     }
     // Word motions — `w`/`W` forward, `b`/`B` back, `e`/`E` to word-end.
-    KeyCode::Char('w') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_forward(false); } reader.remember_column(); }
-    KeyCode::Char('W') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_forward(true); } reader.remember_column(); }
-    KeyCode::Char('b') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_back(false); } reader.remember_column(); }
-    KeyCode::Char('B') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_back(true); } reader.remember_column(); }
-    KeyCode::Char('e') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_end(false); } reader.remember_column(); }
-    KeyCode::Char('E') => { let n = take_count(reader); for _ in 0..n { reader.nav_word_end(true); } reader.remember_column(); }
+    KeyCode::Char('w') => {
+      let n = take_count(reader);
+      for _ in 0..n {
+        reader.nav_word_forward(false);
+      }
+      reader.remember_column();
+    }
+    KeyCode::Char('W') => {
+      let n = take_count(reader);
+      for _ in 0..n {
+        reader.nav_word_forward(true);
+      }
+      reader.remember_column();
+    }
+    KeyCode::Char('b') => {
+      let n = take_count(reader);
+      for _ in 0..n {
+        reader.nav_word_back(false);
+      }
+      reader.remember_column();
+    }
+    KeyCode::Char('B') => {
+      let n = take_count(reader);
+      for _ in 0..n {
+        reader.nav_word_back(true);
+      }
+      reader.remember_column();
+    }
+    KeyCode::Char('e') => {
+      let n = take_count(reader);
+      for _ in 0..n {
+        reader.nav_word_end(false);
+      }
+      reader.remember_column();
+    }
+    KeyCode::Char('E') => {
+      let n = take_count(reader);
+      for _ in 0..n {
+        reader.nav_word_end(true);
+      }
+      reader.remember_column();
+    }
     // Line edges — `0` to byte 0, `^` to first non-blank, `$` to last char.
-    KeyCode::Char('0') => { reader.count_buf.clear(); reader.nav_line_start(); reader.remember_column(); }
-    KeyCode::Char('^') => { reader.count_buf.clear(); reader.nav_line_first_nonblank(); reader.remember_column(); }
-    KeyCode::Char('$') => { reader.count_buf.clear(); reader.nav_line_end(); reader.remember_column(); }
+    KeyCode::Char('0') => {
+      reader.count_buf.clear();
+      reader.nav_line_start();
+      reader.remember_column();
+    }
+    KeyCode::Char('^') => {
+      reader.count_buf.clear();
+      reader.nav_line_first_nonblank();
+      reader.remember_column();
+    }
+    KeyCode::Char('$') => {
+      reader.count_buf.clear();
+      reader.nav_line_end();
+      reader.remember_column();
+    }
     // Find char on current line — enters AwaitingChar mode for the next keystroke.
-    KeyCode::Char('f') => { reader.count_buf.clear(); reader.mode = Mode::AwaitingChar { kind: FindKind::F }; }
-    KeyCode::Char('F') => { reader.count_buf.clear(); reader.mode = Mode::AwaitingChar { kind: FindKind::ShiftF }; }
-    KeyCode::Char('t') => { reader.count_buf.clear(); reader.mode = Mode::AwaitingChar { kind: FindKind::T }; }
-    KeyCode::Char('T') => { reader.count_buf.clear(); reader.mode = Mode::AwaitingChar { kind: FindKind::ShiftT }; }
+    KeyCode::Char('f') => {
+      reader.count_buf.clear();
+      reader.mode = Mode::AwaitingChar { kind: FindKind::F };
+    }
+    KeyCode::Char('F') => {
+      reader.count_buf.clear();
+      reader.mode = Mode::AwaitingChar {
+        kind: FindKind::ShiftF,
+      };
+    }
+    KeyCode::Char('t') => {
+      reader.count_buf.clear();
+      reader.mode = Mode::AwaitingChar { kind: FindKind::T };
+    }
+    KeyCode::Char('T') => {
+      reader.count_buf.clear();
+      reader.mode = Mode::AwaitingChar {
+        kind: FindKind::ShiftT,
+      };
+    }
     // Matching brace — `%` jumps between paired brackets on the current line.
-    KeyCode::Char('%') => { reader.count_buf.clear(); reader.nav_match_brace(); reader.remember_column(); }
+    KeyCode::Char('%') => {
+      reader.count_buf.clear();
+      reader.nav_match_brace();
+      reader.remember_column();
+    }
     // Sentence motion — `)` next, `(` previous.  Cross-line.
-    KeyCode::Char(')') => { let n = take_count(reader); for _ in 0..n { reader.nav_sentence_forward(); } reader.remember_column(); }
-    KeyCode::Char('(') => { let n = take_count(reader); for _ in 0..n { reader.nav_sentence_back(); } reader.remember_column(); }
+    KeyCode::Char(')') => {
+      let n = take_count(reader);
+      for _ in 0..n {
+        reader.nav_sentence_forward();
+      }
+      reader.remember_column();
+    }
+    KeyCode::Char('(') => {
+      let n = take_count(reader);
+      for _ in 0..n {
+        reader.nav_sentence_back();
+      }
+      reader.remember_column();
+    }
     // Cross-reference / citation actions.  `Enter` jumps to the link
     // target under the cursor (no-op if not on a link); `K` and
     // `Shift+Enter` show a citation popup instead of jumping.
@@ -1008,7 +1567,9 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
       reader.count_buf.clear();
       if let Some(vl) = reader.visual_lines.get(reader.current_line()) {
         if vl.block_byte_end > vl.block_byte_start {
-          let local = reader.cursor_x.min(vl.block_byte_end - vl.block_byte_start - 1);
+          let local = reader
+            .cursor_x
+            .min(vl.block_byte_end - vl.block_byte_start - 1);
           let byte_in_block = vl.block_byte_start + local;
           reader.highlights.remove_at(vl.block_idx, byte_in_block);
         }
@@ -1101,7 +1662,9 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
       reader.visual_anchor_x = 0;
       reader.mode = Mode::Visual { line_mode: true };
     }
-    _ => { reader.count_buf.clear(); }
+    _ => {
+      reader.count_buf.clear();
+    }
   }
   false
 }
@@ -1195,9 +1758,13 @@ fn handle_awaiting_text_object(reader: &mut Reader, code: KeyCode, op: Operator,
     KeyCode::Char('"') => text_objects::quote(reader, '"', around),
     KeyCode::Char('\'') => text_objects::quote(reader, '\'', around),
     KeyCode::Char('`') => text_objects::quote(reader, '`', around),
-    KeyCode::Char('(') | KeyCode::Char(')') | KeyCode::Char('b') => text_objects::pair(reader, '(', ')', around),
+    KeyCode::Char('(') | KeyCode::Char(')') | KeyCode::Char('b') => {
+      text_objects::pair(reader, '(', ')', around)
+    }
     KeyCode::Char('[') | KeyCode::Char(']') => text_objects::pair(reader, '[', ']', around),
-    KeyCode::Char('{') | KeyCode::Char('}') | KeyCode::Char('B') => text_objects::pair(reader, '{', '}', around),
+    KeyCode::Char('{') | KeyCode::Char('}') | KeyCode::Char('B') => {
+      text_objects::pair(reader, '{', '}', around)
+    }
     KeyCode::Char('p') => text_objects::paragraph(reader, around),
     KeyCode::Char('s') => text_objects::sentence(reader, around),
     _ => None,
@@ -1234,7 +1801,9 @@ fn link_at_cursor(reader: &Reader) -> Option<doc_model::LinkTarget> {
 /// Enter dispatch: jump to whatever the cursor is sitting on.  No-op if
 /// nothing is there.  Pushes onto the back-nav stack so `Ctrl+O` rewinds.
 fn follow_link_at_cursor(reader: &mut Reader) {
-  let Some(target) = link_at_cursor(reader) else { return };
+  let Some(target) = link_at_cursor(reader) else {
+    return;
+  };
   let line = match &target {
     doc_model::LinkTarget::Internal(label) => reader.label_lines.get(label).copied(),
     doc_model::LinkTarget::Citation(key) => reader.bib_entry_lines.get(key).copied(),
@@ -1251,12 +1820,17 @@ fn follow_link_at_cursor(reader: &mut Reader) {
 /// on `LinkTarget::Citation`; `Internal` targets are silently ignored
 /// (Enter is the right key for those).
 fn popup_citation_at_cursor(reader: &mut Reader) {
-  let Some(target) = link_at_cursor(reader) else { return };
+  let Some(target) = link_at_cursor(reader) else {
+    return;
+  };
   let key = match target {
     doc_model::LinkTarget::Citation(k) => k,
     _ => return,
   };
-  let entry = reader.bib_entries.get(&key).cloned()
+  let entry = reader
+    .bib_entries
+    .get(&key)
+    .cloned()
     .unwrap_or_else(|| "(no entry available)".to_string());
   // Wrap to ~60 chars for readability in the popup.
   let lines: Vec<String> = wrap_for_popup(&entry, 60);
@@ -1268,7 +1842,9 @@ fn popup_citation_at_cursor(reader: &mut Reader) {
 
 fn jump_to_line_for_link(reader: &mut Reader, line: usize) {
   let total = reader.total_lines();
-  if total == 0 { return; }
+  if total == 0 {
+    return;
+  }
   let line = line.min(total - 1);
   let ch = reader.content_height();
   if line >= reader.offset && line < reader.offset + ch {
@@ -1295,17 +1871,29 @@ fn wrap_for_popup(text: &str, width: usize) -> Vec<String> {
       line.push_str(word);
     }
   }
-  if !line.is_empty() { out.push(line); }
-  if out.is_empty() { out.push(String::new()); }
+  if !line.is_empty() {
+    out.push(line);
+  }
+  if out.is_empty() {
+    out.push(String::new());
+  }
   out
 }
 
 fn handle_awaiting_g(reader: &mut Reader, code: KeyCode) {
   // `gg` → top of doc; `ge` / `gE` → backward word-end.  Any other key cancels.
   match code {
-    KeyCode::Char('g') => { reader.nav_top(); }
-    KeyCode::Char('e') => { reader.nav_word_end_back(false); reader.remember_column(); }
-    KeyCode::Char('E') => { reader.nav_word_end_back(true); reader.remember_column(); }
+    KeyCode::Char('g') => {
+      reader.nav_top();
+    }
+    KeyCode::Char('e') => {
+      reader.nav_word_end_back(false);
+      reader.remember_column();
+    }
+    KeyCode::Char('E') => {
+      reader.nav_word_end_back(true);
+      reader.remember_column();
+    }
     _ => {}
   }
   reader.mode = Mode::Normal;
@@ -1317,8 +1905,12 @@ fn handle_awaiting_bracket(reader: &mut Reader, code: KeyCode, forward: bool) {
   // `]f` / `[f` step the figure-preview cursor.  Anything else
   // cancels with no movement — matches the `Mode::AwaitingG` shape.
   match code {
-    KeyCode::Char(']') if forward => { reader.jump_next_section(); }
-    KeyCode::Char('[') if !forward => { reader.jump_prev_section(); }
+    KeyCode::Char(']') if forward => {
+      reader.jump_next_section();
+    }
+    KeyCode::Char('[') if !forward => {
+      reader.jump_prev_section();
+    }
     KeyCode::Char('f') => {
       reader.step_figure(if forward { 1 } else { -1 });
     }
@@ -1389,11 +1981,19 @@ fn commit_selection_as_highlights(reader: &mut Reader) {
   // block, and merging consecutive same-block runs into one highlight.
   let mut current: Option<(usize, usize, usize)> = None; // (block_idx, byte_start, byte_end)
   for i in lo..=hi {
-    let Some(vl) = reader.visual_lines.get(i) else { continue };
+    let Some(vl) = reader.visual_lines.get(i) else {
+      continue;
+    };
     // Skip non-text blocks (Matrix, Rule, Blank) — they have zero byte range.
-    if vl.block_byte_end == vl.block_byte_start { continue; }
+    if vl.block_byte_end == vl.block_byte_start {
+      continue;
+    }
 
-    let local_start = if !is_line_mode && i == lo { start_x.min(vl.text.len()) } else { 0 };
+    let local_start = if !is_line_mode && i == lo {
+      start_x.min(vl.text.len())
+    } else {
+      0
+    };
     let local_end_excl = if !is_line_mode && i == hi {
       next_char_boundary(&vl.text, end_x_incl)
     } else {
@@ -1404,7 +2004,9 @@ fn commit_selection_as_highlights(reader: &mut Reader) {
 
     let byte_start = vl.block_byte_start + local_start;
     let byte_end = vl.block_byte_start + local_end_excl;
-    if byte_end <= byte_start { continue; }
+    if byte_end <= byte_start {
+      continue;
+    }
 
     match &mut current {
       Some((blk, _, end)) if *blk == vl.block_idx => {
@@ -1412,14 +2014,22 @@ fn commit_selection_as_highlights(reader: &mut Reader) {
       }
       _ => {
         if let Some((blk, s, e)) = current.take() {
-          reader.highlights.add(Highlight { block_idx: blk, byte_start: s, byte_end: e });
+          reader.highlights.add(Highlight {
+            block_idx: blk,
+            byte_start: s,
+            byte_end: e,
+          });
         }
         current = Some((vl.block_idx, byte_start, byte_end));
       }
     }
   }
   if let Some((blk, s, e)) = current {
-    reader.highlights.add(Highlight { block_idx: blk, byte_start: s, byte_end: e });
+    reader.highlights.add(Highlight {
+      block_idx: blk,
+      byte_start: s,
+      byte_end: e,
+    });
   }
 }
 
@@ -1466,12 +2076,21 @@ fn yank_selection(reader: &Reader) -> String {
       let (s, e) = (ax.min(cx), ax.max(cx) + 1);
       first.get(s..e.min(first.len())).unwrap_or("").to_string()
     } else {
-      let (first_start, last_end) = if anchor <= cur { (ax, cx + 1) } else { (cx, ax + 1) };
+      let (first_start, last_end) = if anchor <= cur {
+        (ax, cx + 1)
+      } else {
+        (cx, ax + 1)
+      };
       let mut parts = vec![first.get(first_start..).unwrap_or("").to_string()];
       if lines.len() > 2 {
         parts.extend(lines[1..lines.len() - 1].iter().map(|s| s.to_string()));
       }
-      parts.push(last.get(..last_end.min(last.len())).unwrap_or("").to_string());
+      parts.push(
+        last
+          .get(..last_end.min(last.len()))
+          .unwrap_or("")
+          .to_string(),
+      );
       parts.join("\n")
     }
   }
@@ -1493,8 +2112,16 @@ fn base64_encode(data: &[u8]) -> String {
     let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
     out.push(T[b0 >> 2] as char);
     out.push(T[((b0 & 3) << 4) | (b1 >> 4)] as char);
-    out.push(if chunk.len() > 1 { T[((b1 & 15) << 2) | (b2 >> 6)] as char } else { '=' });
-    out.push(if chunk.len() > 2 { T[b2 & 63] as char } else { '=' });
+    out.push(if chunk.len() > 1 {
+      T[((b1 & 15) << 2) | (b2 >> 6)] as char
+    } else {
+      '='
+    });
+    out.push(if chunk.len() > 2 {
+      T[b2 & 63] as char
+    } else {
+      '='
+    });
   }
   out
 }

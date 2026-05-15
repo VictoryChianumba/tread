@@ -24,9 +24,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use doc_model::{Block, VisualLineKind, compute_cell_footprint};
+use doc_model::{VisualLineKind, compute_cell_footprint};
 use image::imageops::FilterType;
 use kitty_graphics::transmit::BatchEmitter;
 use ratatui::layout::Rect;
@@ -43,6 +45,29 @@ use crate::state::Reader;
 /// Retry interval for image loads that failed at first sight.
 /// See `ImageState::negative_loads`.
 const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone)]
+pub(crate) struct ImageJob {
+  kitty_id: u32,
+  path: PathBuf,
+}
+
+impl ImageJob {
+  fn resolve_png(kitty_id: u32, path: PathBuf) -> Self {
+    Self { kitty_id, path }
+  }
+}
+
+#[derive(Debug)]
+pub(crate) struct ImageResult {
+  kitty_id: u32,
+  png_bytes: Result<Vec<u8>, String>,
+}
+
+struct ImageWorker {
+  jobs: Sender<ImageJob>,
+  results: Receiver<ImageResult>,
+}
 
 /// Frame-to-frame image bookkeeping for the post-draw injector.
 ///
@@ -98,6 +123,11 @@ pub struct ImageState {
   /// preview is active.  Distinct from `prev_visible`, which is
   /// only for inline images placed by `place_visible`.
   preview_id: Option<u32>,
+  /// Background image preparation worker.  Placement schedules jobs
+  /// here and keeps the previous frame stable until bytes arrive.
+  worker: Option<ImageWorker>,
+  /// Kitty ids currently queued or running on the image worker.
+  pending_jobs: HashSet<u32>,
 }
 
 /// Input-pacing signal for the image burst-skip gate.
@@ -120,7 +150,10 @@ pub struct BurstTracker {
 
 impl Default for BurstTracker {
   fn default() -> Self {
-    Self { last_event_at: None, burst_window: Duration::from_millis(100) }
+    Self {
+      last_event_at: None,
+      burst_window: Duration::from_millis(100),
+    }
   }
 }
 
@@ -130,7 +163,10 @@ impl BurstTracker {
   }
 
   pub fn in_burst(&self) -> bool {
-    self.last_event_at.map(|t| t.elapsed() < self.burst_window).unwrap_or(false)
+    self
+      .last_event_at
+      .map(|t| t.elapsed() < self.burst_window)
+      .unwrap_or(false)
   }
 }
 
@@ -138,15 +174,11 @@ impl BurstTracker {
 /// transmit (first time) and place each one at its current screen row.
 /// No-op if `supported == false` — keeps the hot path cheap on
 /// non-graphics terminals and on prose-only papers.
-pub fn place_visible(
-  reader: &Reader,
-  state: &mut ImageState,
-  content_area: Rect,
-  supported: bool,
-) {
+pub fn place_visible(reader: &Reader, state: &mut ImageState, content_area: Rect, supported: bool) {
   if !supported {
     return;
   }
+  poll_ready(state);
 
   // Expire stale negative-load entries so a file that became readable
   // after we first tried it (still-downloading asset, transient
@@ -200,7 +232,12 @@ pub fn place_visible(
     // disappears cleanly.  See v2.md for the scale-to-fit alternative.
     let viewport_bottom = content_area.y.saturating_add(content_area.height);
     match &reader.visual_lines[vl_idx].kind {
-      VisualLineKind::Image { kitty_id, cols, rows, is_first } => {
+      VisualLineKind::Image {
+        kitty_id,
+        cols,
+        rows,
+        is_first,
+      } => {
         if *is_first {
           let last_row = abs_row.saturating_add(*rows);
           if last_row <= viewport_bottom {
@@ -211,11 +248,23 @@ pub fn place_visible(
             let pad = content_area.width.saturating_sub(*cols) / 2;
             let abs_col = content_area.x.saturating_add(pad);
             current.insert(*kitty_id);
-            placements.push((*kitty_id, abs_row, *rows, abs_col, *cols));
+            // Suppress inline emission for the figure currently owned
+            // by the preview pane.  Both paths share the same Kitty
+            // image id with an implicit p=0 placement, so emitting
+            // here would relocate (and visibly steal) the preview's
+            // placement.  We still record it in `current` so the
+            // dropped-diff below treats the id as "still around".
+            if state.preview_id != Some(*kitty_id) {
+              placements.push((*kitty_id, abs_row, *rows, abs_col, *cols));
+            }
           }
         }
       }
-      VisualLineKind::ImageRow { items, rows, is_first } => {
+      VisualLineKind::ImageRow {
+        items,
+        rows,
+        is_first,
+      } => {
         if *is_first {
           let last_row = abs_row.saturating_add(*rows);
           if last_row <= viewport_bottom {
@@ -229,7 +278,9 @@ pub fn place_visible(
             let pad = content_area.width.saturating_sub(total_cols) / 2;
             let mut col = content_area.x.saturating_add(pad);
             for (id, item_cols) in items {
-              placements.push((*id, abs_row, *rows, col, *item_cols));
+              if state.preview_id != Some(*id) {
+                placements.push((*id, abs_row, *rows, col, *item_cols));
+              }
               col = col.saturating_add(*item_cols);
             }
           }
@@ -248,7 +299,10 @@ pub fn place_visible(
     eprintln!(
       "trace: offset={} content_area=({},{},{}x{}) placements={:?}",
       reader.offset,
-      content_area.x, content_area.y, content_area.width, content_area.height,
+      content_area.x,
+      content_area.y,
+      content_area.width,
+      content_area.height,
       placements,
     );
     for &(id, _, _, _, _) in &placements {
@@ -267,7 +321,17 @@ pub fn place_visible(
   // text is about to appear.  Also clear them from `last_emitted` so
   // the next time they scroll back in we know to re-emit (the terminal
   // has discarded the image at this point).
-  let dropped: Vec<u32> = state.prev_visible.difference(&current).copied().collect();
+  //
+  // The preview id is excluded from this drop set: deleting the image
+  // would wipe the preview pane's placement too (Kitty's `a=d,d=i`
+  // deletes ALL placements for an image id, not just the inline one).
+  // The preview path owns its own lifecycle via `place_one_figure`.
+  let dropped: Vec<u32> = state
+    .prev_visible
+    .difference(&current)
+    .copied()
+    .filter(|id| Some(*id) != state.preview_id)
+    .collect();
   for id in dropped {
     let _ = batch.delete_placement(id);
     state.last_emitted.remove(&id);
@@ -294,27 +358,26 @@ pub fn place_visible(
   // user-visible fallback.
   let has_cache = kitty_graphics::has_persistent_image_cache();
   for &(id, abs_row, rows, abs_col, cols) in &placements {
-    let path_for_load = reader.image_paths.get(&id).cloned();
-    // Trigger the lazy load inside a tight scope so the mutable
-    // borrow on `state.bytes` releases before the failure-path stamp
-    // touches `state.negative_loads` below.
-    {
-      state.bytes.entry(id).or_insert_with(|| {
-        path_for_load.as_ref().and_then(|p| {
-          let r = resolve_png(p);
-          if trace {
-            match &r {
-              Ok(b) => eprintln!("  load id={} path={:?} ok ({} bytes)", id, p, b.len()),
-              Err(e) => eprintln!("  load id={} path={:?} ERR: {}", id, p, e),
-            }
-          }
-          r.ok()
-        })
-      });
+    if !state.bytes.contains_key(&id) {
+      if let Some(path) = reader.image_paths.get(&id).cloned() {
+        schedule_image_job(
+          state,
+          ImageJob::resolve_png(id, path),
+          trace,
+          ImageLoadContext::Inline,
+        );
+      } else {
+        state.bytes.insert(id, None);
+      }
+    }
+    if state.pending_jobs.contains(&id) {
+      continue;
     }
     let Some(bytes) = state.bytes.get(&id).and_then(|v| v.as_ref()) else {
       state.negative_loads.entry(id).or_insert_with(Instant::now);
-      if trace { eprintln!("  skip id={} (no bytes)", id); }
+      if trace {
+        eprintln!("  skip id={} (no bytes)", id);
+      }
       continue;
     };
     // Lazy emission: skip the delete+transmit cycle when the placement
@@ -323,7 +386,14 @@ pub fn place_visible(
     // hit this fast path and pay zero terminal-IO for image upkeep.
     let placement_key = (abs_row, abs_col, cols, rows);
     if state.last_emitted.get(&id) == Some(&placement_key) {
-      if trace { eprintln!("  cached id={} at row={} col={}", id, abs_row + 1, abs_col + 1); }
+      if trace {
+        eprintln!(
+          "  cached id={} at row={} col={}",
+          id,
+          abs_row + 1,
+          abs_col + 1
+        );
+      }
       continue;
     }
     let _ = batch.delete_placement(id);
@@ -334,14 +404,26 @@ pub fn place_visible(
     let already_transmitted = has_cache && state.transmitted_ids.contains(&id);
     if already_transmitted {
       if trace {
-        eprintln!("  place id={} at row={} col={} cells={}x{} (cached)",
-          id, abs_row + 1, abs_col + 1, cols, rows);
+        eprintln!(
+          "  place id={} at row={} col={} cells={}x{} (cached)",
+          id,
+          abs_row + 1,
+          abs_col + 1,
+          cols,
+          rows
+        );
       }
       let _ = batch.place_by_id(id, cols, rows, abs_row + 1, abs_col + 1);
     } else {
       if trace {
-        eprintln!("  emit id={} at row={} col={} cells={}x{}",
-          id, abs_row + 1, abs_col + 1, cols, rows);
+        eprintln!(
+          "  emit id={} at row={} col={} cells={}x{}",
+          id,
+          abs_row + 1,
+          abs_col + 1,
+          cols,
+          rows
+        );
       }
       let _ = batch.transmit_and_place(id, bytes, cols, rows, abs_row + 1, abs_col + 1);
       if has_cache {
@@ -367,18 +449,41 @@ pub fn place_visible(
 /// take the cheap `a=p` path on native Kitty instead of a full `a=T`
 /// retransmit.
 pub fn clear_all(state: &mut ImageState) {
-  let mut batch = BatchEmitter::new();
-  for id in state.prev_visible.drain() {
-    let _ = batch.delete_placement(id);
+  clear_inline(state);
+  clear_preview(state);
+}
+
+pub(crate) fn clear_inline(state: &mut ImageState) {
+  clear_inline_inner(state, true);
+}
+
+fn clear_inline_inner(state: &mut ImageState, emit: bool) {
+  let ids: Vec<u32> = state.prev_visible.drain().collect();
+  if emit {
+    let mut batch = BatchEmitter::new();
+    for id in &ids {
+      let _ = batch.delete_placement(*id);
+    }
+    let _ = batch.flush();
   }
-  // Preview placements aren't tracked in `prev_visible` (they go
-  // through `place_one_figure`), so delete them explicitly or the
-  // figure would linger at stale coords across a resize.
+  state
+    .last_emitted
+    .retain(|id, _| Some(*id) == state.preview_id);
+}
+
+pub(crate) fn clear_preview(state: &mut ImageState) {
+  clear_preview_inner(state, true);
+}
+
+fn clear_preview_inner(state: &mut ImageState, emit: bool) {
   if let Some(id) = state.preview_id.take() {
-    let _ = batch.delete_placement(id);
+    if emit {
+      let mut batch = BatchEmitter::new();
+      let _ = batch.delete_placement(id);
+      let _ = batch.flush();
+    }
+    state.last_emitted.remove(&id);
   }
-  let _ = batch.flush();
-  state.last_emitted.clear();
 }
 
 /// Render one figure into a dedicated preview pane (or clear it).
@@ -408,6 +513,7 @@ pub fn place_one_figure(
   if !supported {
     return;
   }
+  poll_ready(state);
   let trace = std::env::var_os("TREAD_TRACE_IMAGES").is_some();
   let mut batch = BatchEmitter::new();
 
@@ -417,7 +523,9 @@ pub fn place_one_figure(
   if let Some(prev) = state.preview_id
     && Some(prev) != kitty_id
   {
-    if trace { eprintln!("preview: delete prev id={prev}"); }
+    if trace {
+      eprintln!("preview: delete prev id={prev}");
+    }
     let _ = batch.delete_placement(prev);
     state.last_emitted.remove(&prev);
     state.preview_id = None;
@@ -429,25 +537,27 @@ pub fn place_one_figure(
   };
 
   let Some((path, dims)) = find_figure_meta(reader, id) else {
-    if trace { eprintln!("preview: no figure meta for id={id}"); }
+    if trace {
+      eprintln!("preview: no figure meta for id={id}");
+    }
     let _ = batch.flush();
     return;
   };
 
   // Lazy load PNG bytes into the same `state.bytes` cache the inline
-  // path uses.  Scoped so the mutable borrow releases before we
-  // stamp `negative_loads` on failure.
-  {
-    state.bytes.entry(id).or_insert_with(|| {
-      let r = resolve_png(&path);
-      if trace {
-        match &r {
-          Ok(b) => eprintln!("preview: load id={id} ok ({} bytes)", b.len()),
-          Err(e) => eprintln!("preview: load id={id} ERR: {e}"),
-        }
-      }
-      r.ok()
-    });
+  // path uses.  This goes through the job/result boundary so a later
+  // worker thread can feed the same cache without changing placement.
+  if !state.bytes.contains_key(&id) {
+    schedule_image_job(
+      state,
+      ImageJob::resolve_png(id, path.clone()),
+      trace,
+      ImageLoadContext::Preview,
+    );
+  }
+  if state.pending_jobs.contains(&id) {
+    let _ = batch.flush();
+    return;
   }
   let Some(bytes) = state.bytes.get(&id).and_then(|v| v.as_ref()) else {
     state.negative_loads.entry(id).or_insert_with(Instant::now);
@@ -457,11 +567,7 @@ pub fn place_one_figure(
 
   // Aspect-preserved cell footprint that fits inside `area`, then
   // center both axes.
-  let (cols, rows) = compute_cell_footprint(
-    dims,
-    area.width as usize,
-    area.height,
-  );
+  let (cols, rows) = compute_cell_footprint(dims, area.width as usize, area.height);
   if cols == 0 || rows == 0 {
     let _ = batch.flush();
     return;
@@ -476,7 +582,13 @@ pub fn place_one_figure(
   // identical id since last frame means the terminal already has
   // this on screen and we owe zero IO this frame.
   if state.last_emitted.get(&id) == Some(&placement_key) {
-    if trace { eprintln!("preview: cached id={id} at row={} col={}", abs_row + 1, abs_col + 1); }
+    if trace {
+      eprintln!(
+        "preview: cached id={id} at row={} col={}",
+        abs_row + 1,
+        abs_col + 1
+      );
+    }
     state.preview_id = Some(id);
     let _ = batch.flush();
     return;
@@ -487,12 +599,20 @@ pub fn place_one_figure(
   let already_transmitted = has_cache && state.transmitted_ids.contains(&id);
   if already_transmitted {
     if trace {
-      eprintln!("preview: place id={id} at row={} col={} cells={cols}x{rows} (cached)", abs_row + 1, abs_col + 1);
+      eprintln!(
+        "preview: place id={id} at row={} col={} cells={cols}x{rows} (cached)",
+        abs_row + 1,
+        abs_col + 1
+      );
     }
     let _ = batch.place_by_id(id, cols, rows, abs_row + 1, abs_col + 1);
   } else {
     if trace {
-      eprintln!("preview: emit id={id} at row={} col={} cells={cols}x{rows}", abs_row + 1, abs_col + 1);
+      eprintln!(
+        "preview: emit id={id} at row={} col={} cells={cols}x{rows}",
+        abs_row + 1,
+        abs_col + 1
+      );
     }
     let _ = batch.transmit_and_place(id, bytes, cols, rows, abs_row + 1, abs_col + 1);
     if has_cache {
@@ -504,26 +624,172 @@ pub fn place_one_figure(
   let _ = batch.flush();
 }
 
-/// Walk `reader.blocks` for a figure by kitty_id, returning its
-/// on-disk path and pixel dims.  O(blocks) but blocks is short and
-/// preview-step events are infrequent — no need to pre-index.
-fn find_figure_meta(reader: &Reader, kitty_id: u32) -> Option<(std::path::PathBuf, Option<(u32, u32)>)> {
-  for block in &reader.blocks {
-    match block {
-      Block::Image { kitty_id: id, path, dims, .. } if *id == kitty_id => {
-        return Some((path.clone(), *dims));
+fn find_figure_meta(
+  reader: &Reader,
+  kitty_id: u32,
+) -> Option<(std::path::PathBuf, Option<(u32, u32)>)> {
+  reader
+    .figure_meta(kitty_id)
+    .map(|(path, dims)| (path.clone(), dims))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ImageLoadContext {
+  Inline,
+  Preview,
+}
+
+fn run_image_job(job: ImageJob) -> ImageResult {
+  ImageResult {
+    kitty_id: job.kitty_id,
+    png_bytes: resolve_png(&job.path).map_err(|err| err.to_string()),
+  }
+}
+
+fn spawn_image_worker() -> Option<ImageWorker> {
+  let (job_tx, job_rx) = mpsc::channel::<ImageJob>();
+  let (result_tx, result_rx) = mpsc::channel::<ImageResult>();
+  let spawn_result = thread::Builder::new()
+    .name("tread-image-worker".to_string())
+    .spawn(move || {
+      while let Ok(job) = job_rx.recv() {
+        let result = run_image_job(job);
+        if result_tx.send(result).is_err() {
+          break;
+        }
       }
-      Block::ImageRow { items, .. } => {
-        for item in items {
-          if item.kitty_id == kitty_id {
-            return Some((item.path.clone(), item.dims));
+    });
+
+  if spawn_result.is_ok() {
+    Some(ImageWorker {
+      jobs: job_tx,
+      results: result_rx,
+    })
+  } else {
+    None
+  }
+}
+
+fn apply_image_result(state: &mut ImageState, result: ImageResult) {
+  state.pending_jobs.remove(&result.kitty_id);
+  match result.png_bytes {
+    Ok(bytes) => {
+      state.negative_loads.remove(&result.kitty_id);
+      state.bytes.insert(result.kitty_id, Some(bytes));
+    }
+    Err(_) => {
+      state.bytes.insert(result.kitty_id, None);
+    }
+  }
+}
+
+pub(crate) fn poll_ready(state: &mut ImageState) -> bool {
+  let Some(worker) = state.worker.as_ref() else {
+    return false;
+  };
+
+  let mut disconnected = false;
+  let mut results = Vec::new();
+  loop {
+    match worker.results.try_recv() {
+      Ok(result) => results.push(result),
+      Err(TryRecvError::Empty) => break,
+      Err(TryRecvError::Disconnected) => {
+        disconnected = true;
+        break;
+      }
+    }
+  }
+
+  let changed = !results.is_empty();
+  for result in results {
+    apply_image_result(state, result);
+  }
+  if disconnected {
+    state.worker = None;
+    state.pending_jobs.clear();
+  }
+  changed
+}
+
+pub(crate) fn has_pending_jobs(state: &ImageState) -> bool {
+  !state.pending_jobs.is_empty()
+}
+
+fn schedule_image_job(
+  state: &mut ImageState,
+  job: ImageJob,
+  trace: bool,
+  context: ImageLoadContext,
+) {
+  let id = job.kitty_id;
+  if state.bytes.contains_key(&id) || state.pending_jobs.contains(&id) {
+    return;
+  }
+
+  if state.worker.is_none() {
+    state.worker = spawn_image_worker();
+  }
+
+  if let Some(worker) = &state.worker {
+    match worker.jobs.send(job) {
+      Ok(()) => {
+        state.pending_jobs.insert(id);
+        if trace {
+          match context {
+            ImageLoadContext::Inline => eprintln!("  schedule image job id={id}"),
+            ImageLoadContext::Preview => {
+              eprintln!("preview: schedule image job id={id}")
+            }
           }
         }
       }
-      _ => {}
+      Err(err) => {
+        ensure_image_bytes(state, err.0, trace, context);
+      }
+    }
+  } else {
+    ensure_image_bytes(state, job, trace, context);
+  }
+}
+
+fn ensure_image_bytes(
+  state: &mut ImageState,
+  job: ImageJob,
+  trace: bool,
+  context: ImageLoadContext,
+) {
+  if state.bytes.contains_key(&job.kitty_id) {
+    return;
+  }
+
+  let id = job.kitty_id;
+  let path = job.path.clone();
+  let result = run_image_job(job);
+  if trace {
+    match &result.png_bytes {
+      Ok(bytes) => match context {
+        ImageLoadContext::Inline => {
+          eprintln!(
+            "  load id={} path={:?} ok ({} bytes)",
+            id,
+            path,
+            bytes.len()
+          )
+        }
+        ImageLoadContext::Preview => {
+          eprintln!("preview: load id={id} ok ({} bytes)", bytes.len())
+        }
+      },
+      Err(err) => match context {
+        ImageLoadContext::Inline => {
+          eprintln!("  load id={} path={:?} ERR: {}", id, path, err)
+        }
+        ImageLoadContext::Preview => eprintln!("preview: load id={id} ERR: {err}"),
+      },
     }
   }
-  None
+  apply_image_result(state, result);
 }
 
 /// Resolve an image source path to PNG bytes.  PNGs read directly;
@@ -601,10 +867,7 @@ fn normalize_png_for_terminal_with_limit(
     // larger-cap session that wouldn't fit our current budget.  Any
     // miss falls through to re-encode and re-cache below.
     const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
-    if cached.len() >= 8
-      && &cached[..8] == PNG_SIGNATURE
-      && cached.len() <= max_bytes
-    {
+    if cached.len() >= 8 && &cached[..8] == PNG_SIGNATURE && cached.len() <= max_bytes {
       if trace {
         eprintln!(
           "  norm-cache hit {:?}: {} bytes (cap {})",
@@ -632,8 +895,12 @@ fn normalize_png_for_terminal_with_limit(
     }
 
     let scale = ((max_bytes as f64 / png_bytes.len() as f64).sqrt() * 0.90).clamp(0.10, 0.95);
-    let next_width = ((width as f64 * scale).round() as u32).max(1).min(width - 1);
-    let next_height = ((height as f64 * scale).round() as u32).max(1).min(height - 1);
+    let next_width = ((width as f64 * scale).round() as u32)
+      .max(1)
+      .min(width - 1);
+    let next_height = ((height as f64 * scale).round() as u32)
+      .max(1)
+      .min(height - 1);
 
     let resized = img.resize(next_width, next_height, FilterType::Lanczos3);
     let next_png = encode_dynamic_image_png(path, &resized)?;
@@ -726,7 +993,9 @@ fn normalized_cache_path(source: &Path, max_bytes: usize) -> Option<PathBuf> {
 
 fn source_fingerprint(source: &Path) -> Option<String> {
   let metadata = std::fs::metadata(source).ok()?;
-  let modified = metadata.modified().ok()
+  let modified = metadata
+    .modified()
+    .ok()
     .and_then(|ts| ts.duration_since(UNIX_EPOCH).ok())
     .unwrap_or_default();
   Some(format!(
@@ -778,6 +1047,7 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use doc_model::Block;
   use image::{DynamicImage, Rgb, RgbImage};
 
   fn noisy_png(width: u32, height: u32) -> Vec<u8> {
@@ -796,18 +1066,107 @@ mod tests {
   #[test]
   fn leaves_small_png_unchanged() {
     let png = noisy_png(32, 32);
-    let out = normalize_png_for_terminal_with_limit(Path::new("small.png"), png.clone(), png.len() + 1)
-      .unwrap();
+    let out =
+      normalize_png_for_terminal_with_limit(Path::new("small.png"), png.clone(), png.len() + 1)
+        .unwrap();
     assert_eq!(out, png);
+  }
+
+  #[test]
+  fn image_job_result_populates_byte_cache() {
+    let temp = std::env::temp_dir().join(format!(
+      "tread-image-job-{}-{}.png",
+      std::process::id(),
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+    ));
+    let png = noisy_png(16, 16);
+    std::fs::write(&temp, &png).unwrap();
+
+    let mut state = ImageState::default();
+    ensure_image_bytes(
+      &mut state,
+      ImageJob::resolve_png(7, temp.clone()),
+      false,
+      ImageLoadContext::Inline,
+    );
+
+    let _ = std::fs::remove_file(&temp);
+    assert_eq!(
+      state.bytes.get(&7).and_then(|value| value.as_ref()),
+      Some(&png)
+    );
+    assert!(!state.negative_loads.contains_key(&7));
+  }
+
+  #[test]
+  fn image_job_result_caches_failure_as_negative_bytes() {
+    let mut state = ImageState::default();
+    ensure_image_bytes(
+      &mut state,
+      ImageJob::resolve_png(8, PathBuf::from("/definitely/not/a/figure.png")),
+      false,
+      ImageLoadContext::Preview,
+    );
+
+    assert!(matches!(state.bytes.get(&8), Some(None)));
+  }
+
+  #[test]
+  fn scheduled_image_job_completes_through_worker_poll() {
+    let temp = std::env::temp_dir().join(format!(
+      "tread-image-worker-{}-{}.png",
+      std::process::id(),
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+    ));
+    let png = noisy_png(16, 16);
+    std::fs::write(&temp, &png).unwrap();
+
+    let mut state = ImageState::default();
+    schedule_image_job(
+      &mut state,
+      ImageJob::resolve_png(9, temp.clone()),
+      false,
+      ImageLoadContext::Inline,
+    );
+    assert!(state.pending_jobs.contains(&9));
+
+    let mut changed = false;
+    for _ in 0..50 {
+      if poll_ready(&mut state) {
+        changed = true;
+        break;
+      }
+      std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let _ = std::fs::remove_file(&temp);
+    assert!(changed, "worker should return the prepared image");
+    assert_eq!(
+      state.bytes.get(&9).and_then(|value| value.as_ref()),
+      Some(&png)
+    );
+    assert!(!state.pending_jobs.contains(&9));
   }
 
   #[test]
   fn downscales_oversized_png_to_budget() {
     let png = noisy_png(512, 512);
-    assert!(png.len() > 20_000, "synthetic png should exceed test budget");
+    assert!(
+      png.len() > 20_000,
+      "synthetic png should exceed test budget"
+    );
 
     let out = normalize_png_for_terminal_with_limit(Path::new("large.png"), png, 20_000).unwrap();
-    assert!(out.len() <= 20_000, "normalized png should respect byte budget");
+    assert!(
+      out.len() <= 20_000,
+      "normalized png should respect byte budget"
+    );
 
     let decoded = image::load_from_memory_with_format(&out, image::ImageFormat::Png).unwrap();
     assert!(decoded.width() < 512 || decoded.height() < 512);
@@ -881,5 +1240,98 @@ mod tests {
     let second = normalized_cache_path(&temp, 1234).unwrap();
     let _ = std::fs::remove_file(&temp);
     assert_ne!(first, second);
+  }
+
+  // Suppression contract: when an image id is owned by the preview pane,
+  // `place_visible` must not push it into `placements`.  Otherwise both
+  // paths would emit `a=p,i=<id>` against the same implicit p=0 slot and
+  // each emit would steal the other's on-screen placement.  We detect
+  // skipping by observing that the lazy byte-load (inside the placements
+  // loop) never ran for the suppressed id.
+  #[test]
+  fn place_visible_skips_inline_emit_for_preview_id() {
+    use crate::state::Reader;
+    let blocks = vec![
+      Block::Image {
+        path: std::path::PathBuf::from("/nonexistent/a.png"),
+        alt: String::new(),
+        kitty_id: 1,
+        dims: Some((40, 20)),
+        stack_total: 1,
+      },
+      Block::Image {
+        path: std::path::PathBuf::from("/nonexistent/b.png"),
+        alt: String::new(),
+        kitty_id: 2,
+        dims: Some((40, 20)),
+        stack_total: 1,
+      },
+    ];
+    let reader = Reader::new(blocks, 200, 80);
+    let mut state = ImageState::default();
+    state.preview_id = Some(1);
+    place_visible(&reader, &mut state, Rect::new(0, 0, 200, 80), true);
+    assert!(
+      !state.pending_jobs.contains(&1) && !state.bytes.contains_key(&1),
+      "preview-owned id must not enter the inline image-prep path",
+    );
+    assert!(
+      state.pending_jobs.contains(&2),
+      "non-previewed id must still be scheduled by the inline path",
+    );
+  }
+
+  // The dropped-diff filter: when the previewed image scrolls out of the
+  // inline viewport, the cleanup logic must NOT call `delete_placement`
+  // on it — that would wipe the preview placement too (Kitty's
+  // `a=d,d=i` deletes all placements of an image id).  We detect a
+  // would-be deletion by seeding `last_emitted` with a sentinel and
+  // asserting it survives the call.
+  #[test]
+  fn place_visible_does_not_delete_preview_id_when_image_scrolls_off() {
+    use crate::state::Reader;
+    let reader = Reader::new(vec![], 80, 24);
+    let mut state = ImageState::default();
+    state.preview_id = Some(7);
+    state.prev_visible.insert(7);
+    state.last_emitted.insert(7, (5, 10, 50, 30));
+    place_visible(&reader, &mut state, Rect::new(0, 0, 80, 24), true);
+    assert!(
+      state.last_emitted.contains_key(&7),
+      "preview id must survive the dropped-diff cleanup",
+    );
+    assert_eq!(state.preview_id, Some(7));
+  }
+
+  #[test]
+  fn clear_inline_preserves_preview_placement_state() {
+    let mut state = ImageState::default();
+    state.preview_id = Some(7);
+    state.prev_visible.insert(3);
+    state.last_emitted.insert(3, (1, 2, 3, 4));
+    state.last_emitted.insert(7, (5, 6, 7, 8));
+
+    clear_inline_inner(&mut state, false);
+
+    assert_eq!(state.preview_id, Some(7));
+    assert!(!state.prev_visible.contains(&3));
+    assert!(!state.last_emitted.contains_key(&3));
+    assert_eq!(state.last_emitted.get(&7), Some(&(5, 6, 7, 8)));
+  }
+
+  #[test]
+  fn clear_preview_preserves_inline_placement_state() {
+    let mut state = ImageState::default();
+    state.preview_id = Some(7);
+    state.prev_visible.insert(3);
+    state.last_emitted.insert(3, (1, 2, 3, 4));
+    state.last_emitted.insert(7, (5, 6, 7, 8));
+
+    clear_preview_inner(&mut state, false);
+
+    assert!(state.preview_id.is_none());
+    assert!(state.prev_visible.contains(&3));
+    assert_eq!(state.last_emitted.get(&3), Some(&(1, 2, 3, 4)));
+    assert!(!state.last_emitted.contains_key(&7));
   }
 }

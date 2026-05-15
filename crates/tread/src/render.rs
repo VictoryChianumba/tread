@@ -1,18 +1,17 @@
 use doc_model::VisualLineKind;
 use ratatui::{
   Frame,
-  layout::{Constraint, Direction, Layout, Rect},
+  layout::{Constraint, Direction, Layout, Margin, Rect},
   style::{Color, Modifier, Style},
   text::{Line, Span},
-  widgets::{Block, Borders, Clear, Paragraph},
+  widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use ui_theme::Theme;
 
 use crate::state::{Mode, Reader, TOC_WIDTH};
 
 pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
-  let (header_area, toc_area, content_area, status_area, search_area) =
-    split_layout(area, reader);
+  let (header_area, toc_area, content_area, status_area, search_area) = split_layout(area, reader);
 
   if let Some(ha) = header_area {
     draw_header(frame, reader, ha, t);
@@ -24,8 +23,11 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
   // content area is reserved for the figure (drawn post-draw by
   // `images::place_one_figure`).  The reader content fills the
   // left 60%.  When inactive, content fills the whole area.
-  let (reader_area, _preview_area) = split_content_for_preview(content_area, reader);
+  let (reader_area, preview_area) = split_content_for_preview(content_area, reader);
   draw_content(frame, reader, reader_area, t);
+  if let Some(pa) = preview_area {
+    draw_preview_pane(frame, reader, pa, t);
+  }
   draw_status(frame, reader, status_area, t);
   if reader.mode == Mode::Search {
     draw_search_bar(frame, reader, search_area.unwrap(), t);
@@ -53,7 +55,7 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
 /// Keeping the two callers in sync is critical or the image will land
 /// over the reader text.
 pub fn split_content_for_preview(area: Rect, reader: &Reader) -> (Rect, Option<Rect>) {
-  if !reader.figure_preview_active || reader.figure_kitty_ids().is_empty() {
+  if !reader.figure_preview_visible() {
     return (area, None);
   }
   let cols = Layout::default()
@@ -61,6 +63,17 @@ pub fn split_content_for_preview(area: Rect, reader: &Reader) -> (Rect, Option<R
     .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
     .split(area);
   (cols[0], Some(cols[1]))
+}
+
+pub fn preview_image_area(area: Rect) -> Rect {
+  if area.width <= 2 || area.height <= 2 {
+    area
+  } else {
+    area.inner(Margin {
+      horizontal: 1,
+      vertical: 1,
+    })
+  }
 }
 
 pub fn split_layout(
@@ -90,7 +103,14 @@ pub fn split_layout(
   };
 
   let (content_area, status_area, search_area) = match reader.mode {
-    Mode::Normal | Mode::Visual { .. } | Mode::AwaitingChar { .. } | Mode::AwaitingMarkName { .. } | Mode::AwaitingG | Mode::AwaitingBracket { .. } | Mode::AwaitingOperator { .. } | Mode::AwaitingTextObject { .. } => {
+    Mode::Normal
+    | Mode::Visual { .. }
+    | Mode::AwaitingChar { .. }
+    | Mode::AwaitingMarkName { .. }
+    | Mode::AwaitingG
+    | Mode::AwaitingBracket { .. }
+    | Mode::AwaitingOperator { .. }
+    | Mode::AwaitingTextObject { .. } => {
       let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -101,25 +121,72 @@ pub fn split_layout(
       // Command mode reuses the search-bar slot — same shape, different prefix.
       let v = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
+        .constraints([
+          Constraint::Min(1),
+          Constraint::Length(1),
+          Constraint::Length(1),
+        ])
         .split(right);
       (v[0], v[1], Some(v[2]))
     }
   };
 
-  (header_area, toc_area, content_area, status_area, search_area)
+  (
+    header_area,
+    toc_area,
+    content_area,
+    status_area,
+    search_area,
+  )
 }
 
 fn draw_header(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
   let Some(meta) = &reader.meta else { return };
   let w = area.width as usize;
-  let title = &meta.title;
-  let sep = if meta.authors.is_empty() { "" } else { "  " };
-  let raw = format!(" {}{}{}", title, sep, meta.authors);
-  let truncated = toc_trunc(&raw, w);
-  let header = Paragraph::new(truncated)
-    .style(Style::default().bg(t.bg_panel).fg(t.accent));
+  let title = format!(" {}", meta.title);
+  let authors = if meta.authors.is_empty() {
+    String::new()
+  } else {
+    format!("  {}", meta.authors)
+  };
+  let title_width = title.chars().count();
+  let authors_width = authors.chars().count();
+  let mut spans = Vec::new();
+  if authors.is_empty() || title_width + authors_width >= w {
+    spans.push(Span::styled(
+      toc_trunc(&title, w),
+      Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+    ));
+  } else {
+    spans.push(Span::styled(
+      title,
+      Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(
+      " ".repeat(w.saturating_sub(title_width + authors_width)),
+    ));
+    spans.push(Span::styled(authors, Style::default().fg(t.text_dim)));
+  }
+  let header = Paragraph::new(Line::from(spans)).style(Style::default().bg(t.bg_panel));
   frame.render_widget(header, area);
+}
+
+fn draw_preview_pane(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
+  let title = reader
+    .current_figure_position()
+    .map(|(idx, total)| format!(" Figure {idx}/{total} "))
+    .unwrap_or_else(|| " Figure ".to_string());
+  // Border + title styled, but no interior fill — iTerm2's Kitty graphics
+  // implementation does not layer images above text the way native Kitty
+  // does, so a `.style(bg)` on the Block would overpaint every interior
+  // cell each frame and obscure the placement.  Leaving the interior
+  // un-styled keeps the image visible on iTerm2 and is a no-op on
+  // terminals that already layer correctly (Ghostty, native Kitty).
+  let block = Block::default()
+    .title(title)
+    .borders(Borders::LEFT | Borders::TOP | Borders::BOTTOM)
+    .border_style(Style::default().fg(t.border_active));
+  frame.render_widget(block, area);
 }
 
 fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
@@ -150,16 +217,23 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
       let is_cursor = row == reader.cursor_y;
       let is_bookmarked = reader.bookmarks.values().any(|&l| l == vl_idx);
       let is_selected = visual_range.map_or(false, |(lo, hi)| vl_idx >= lo && vl_idx <= hi);
-      let cursor_col = if is_cursor { Some(reader.cursor_x) } else { None };
+      let cursor_col = if is_cursor {
+        Some(reader.cursor_x)
+      } else {
+        None
+      };
       // Compute persistent-highlight byte ranges that overlap this VL,
       // translated into vl-local byte coordinates for the renderer.
       let mut highlight_ranges: Vec<(usize, usize)> = if vl.block_byte_end > vl.block_byte_start {
-        reader.highlights
+        reader
+          .highlights
           .overlapping(vl.block_idx, vl.block_byte_start..vl.block_byte_end)
-          .map(|h| (
-            h.byte_start.max(vl.block_byte_start) - vl.block_byte_start,
-            h.byte_end.min(vl.block_byte_end) - vl.block_byte_start,
-          ))
+          .map(|h| {
+            (
+              h.byte_start.max(vl.block_byte_start) - vl.block_byte_start,
+              h.byte_end.min(vl.block_byte_end) - vl.block_byte_start,
+            )
+          })
           .collect()
       } else {
         Vec::new()
@@ -173,7 +247,18 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
           highlight_ranges.push((ws, we));
         }
       }
-      let mut line = render_visual_line(vl, is_cursor, is_bookmarked, is_selected, cursor_col, &q, &reader.search_matches, vl_idx, &highlight_ranges, t);
+      let mut line = render_visual_line(
+        vl,
+        is_cursor,
+        is_bookmarked,
+        is_selected,
+        cursor_col,
+        &q,
+        &reader.search_matches,
+        vl_idx,
+        &highlight_ranges,
+        t,
+      );
       // Dim non-paragraph lines during voice playback so the active
       // paragraph reads as the focused region.
       if voice_active && crate::voice_control::voice_line_dimmed(reader, vl_idx) {
@@ -234,9 +319,7 @@ fn render_visual_line<'a>(
       }
     }
 
-    VisualLineKind::MathLine { .. } => {
-      Line::styled(text.clone(), base_style.fg(t.math))
-    }
+    VisualLineKind::MathLine { .. } => Line::styled(text.clone(), base_style.fg(t.math)),
 
     VisualLineKind::Header(level) => {
       let (fg, modifier) = match level {
@@ -289,7 +372,10 @@ fn render_visual_line<'a>(
           byte_idx += ch_len;
         }
         if spans.is_empty() {
-          spans.push(Span::styled(" ", Style::default().bg(t.cursor_bg).fg(t.cursor_fg)));
+          spans.push(Span::styled(
+            " ",
+            Style::default().bg(t.cursor_bg).fg(t.cursor_fg),
+          ));
         }
         return Line::from(spans);
       }
@@ -320,24 +406,39 @@ fn render_visual_line<'a>(
       } else if !highlight_ranges.is_empty() {
         overlay_highlights_styled(spans, base_style, highlight_ranges, t.bg_highlight, t)
       } else {
-        let ratatui_spans: Vec<Span> = spans.iter().map(|s| {
-          let mut style = base_style;
-          if s.bold        { style = style.add_modifier(Modifier::BOLD); }
-          if s.italic      { style = style.add_modifier(Modifier::ITALIC); }
-          if s.underline   { style = style.add_modifier(Modifier::UNDERLINED); }
-          if s.strikethrough { style = style.add_modifier(Modifier::CROSSED_OUT); }
-          if s.monospace   { style = style.fg(t.mono); }
-          if let Some((r, g, b)) = s.color { style = style.fg(Color::Rgb(r, g, b)); }
-          if s.url.is_some() {
-            // Mark external URLs with underline. Embedding raw OSC 8 sequences in ratatui
-            // Spans corrupts cell-width accounting; ratatui counts escape bytes as columns.
-            style = style.add_modifier(Modifier::UNDERLINED);
-          }
-          if s.link_target.is_some() {
-            style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
-          }
-          Span::styled(s.text.clone(), style)
-        }).collect();
+        let ratatui_spans: Vec<Span> = spans
+          .iter()
+          .map(|s| {
+            let mut style = base_style;
+            if s.bold {
+              style = style.add_modifier(Modifier::BOLD);
+            }
+            if s.italic {
+              style = style.add_modifier(Modifier::ITALIC);
+            }
+            if s.underline {
+              style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            if s.strikethrough {
+              style = style.add_modifier(Modifier::CROSSED_OUT);
+            }
+            if s.monospace {
+              style = style.fg(t.mono);
+            }
+            if let Some((r, g, b)) = s.color {
+              style = style.fg(Color::Rgb(r, g, b));
+            }
+            if s.url.is_some() {
+              // Mark external URLs with underline. Embedding raw OSC 8 sequences in ratatui
+              // Spans corrupts cell-width accounting; ratatui counts escape bytes as columns.
+              style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            if s.link_target.is_some() {
+              style = style.fg(t.link_fg).add_modifier(Modifier::UNDERLINED);
+            }
+            Span::styled(s.text.clone(), style)
+          })
+          .collect();
         Line::from(ratatui_spans)
       }
     }
@@ -356,7 +457,13 @@ fn render_visual_line<'a>(
     }
 
     VisualLineKind::Code { is_first, is_last } => {
-      let prefix = if *is_first { "╔ " } else if *is_last { "╚ " } else { "║ " };
+      let prefix = if *is_first {
+        "╔ "
+      } else if *is_last {
+        "╚ "
+      } else {
+        "║ "
+      };
       let code_style = Style::default().bg(t.bg_code).fg(t.text);
       let combined = format!("{}{}", prefix, text);
       let prefix_len = prefix.len();
@@ -364,7 +471,8 @@ fn render_visual_line<'a>(
         // Cursor lives in the original text; shift past the prefix.
         apply_inline_cursor(&combined, code_style, prefix_len + col, t)
       } else if !highlight_ranges.is_empty() {
-        let shifted: Vec<(usize, usize)> = highlight_ranges.iter()
+        let shifted: Vec<(usize, usize)> = highlight_ranges
+          .iter()
           .map(|&(s, e)| (s + prefix_len, e + prefix_len))
           .collect();
         overlay_highlights(&combined, code_style, &shifted, t.bg_highlight)
@@ -373,9 +481,7 @@ fn render_visual_line<'a>(
       }
     }
 
-    VisualLineKind::Rule => {
-      Line::styled(text.clone(), Style::default().fg(t.rule))
-    }
+    VisualLineKind::Rule => Line::styled(text.clone(), Style::default().fg(t.rule)),
 
     VisualLineKind::Image { .. } | VisualLineKind::ImageRow { .. } => {
       // The actual image pixels arrive via the post-draw Kitty `a=T`
@@ -385,15 +491,14 @@ fn render_visual_line<'a>(
     }
 
     VisualLineKind::Quote { .. } => {
-      let quote_style = base_style
-        .fg(t.text_dim)
-        .add_modifier(Modifier::ITALIC);
+      let quote_style = base_style.fg(t.text_dim).add_modifier(Modifier::ITALIC);
       let combined = format!("    {}", text);
       let prefix_len = 4; // "    "
       if let Some(col) = cursor_col {
         apply_inline_cursor(&combined, quote_style, prefix_len + col, t)
       } else if !highlight_ranges.is_empty() {
-        let shifted: Vec<(usize, usize)> = highlight_ranges.iter()
+        let shifted: Vec<(usize, usize)> = highlight_ranges
+          .iter()
           .map(|&(s, e)| (s + prefix_len, e + prefix_len))
           .collect();
         overlay_highlights(&combined, quote_style, &shifted, t.bg_highlight)
@@ -408,7 +513,12 @@ fn render_visual_line<'a>(
 /// Splits `text` at the range boundaries, emits Spans with the highlight bg
 /// applied to bytes inside any range and the base style elsewhere.  All
 /// indices in `ranges` must be valid char boundaries within `text`.
-fn overlay_highlights(text: &str, base_style: Style, ranges: &[(usize, usize)], hl_bg: Color) -> Line<'static> {
+fn overlay_highlights(
+  text: &str,
+  base_style: Style,
+  ranges: &[(usize, usize)],
+  hl_bg: Color,
+) -> Line<'static> {
   let bytes = text.len();
   if bytes == 0 || ranges.is_empty() {
     return Line::styled(text.to_string(), base_style);
@@ -428,10 +538,16 @@ fn overlay_highlights(text: &str, base_style: Style, ranges: &[(usize, usize)], 
   let mut out: Vec<Span<'static>> = Vec::with_capacity(cuts.len());
   for w in cuts.windows(2) {
     let (s, e) = (w[0], w[1]);
-    if s >= e || !text.is_char_boundary(s) || !text.is_char_boundary(e) { continue; }
+    if s >= e || !text.is_char_boundary(s) || !text.is_char_boundary(e) {
+      continue;
+    }
     let segment = text[s..e].to_string();
     let in_range = ranges.iter().any(|&(rs, re)| s >= rs && e <= re);
-    let style = if in_range { base_style.bg(hl_bg) } else { base_style };
+    let style = if in_range {
+      base_style.bg(hl_bg)
+    } else {
+      base_style
+    };
     out.push(Span::styled(segment, style));
   }
   Line::from(out)
@@ -458,13 +574,27 @@ fn overlay_highlights_styled(
     byte_cursor = span_end;
 
     let mut style = base_style;
-    if ispan.bold        { style = style.add_modifier(Modifier::BOLD); }
-    if ispan.italic      { style = style.add_modifier(Modifier::ITALIC); }
-    if ispan.underline   { style = style.add_modifier(Modifier::UNDERLINED); }
-    if ispan.strikethrough { style = style.add_modifier(Modifier::CROSSED_OUT); }
-    if ispan.monospace   { style = style.fg(t.mono); }
-    if let Some((r, g, b)) = ispan.color { style = style.fg(Color::Rgb(r, g, b)); }
-    if ispan.url.is_some() { style = style.add_modifier(Modifier::UNDERLINED); }
+    if ispan.bold {
+      style = style.add_modifier(Modifier::BOLD);
+    }
+    if ispan.italic {
+      style = style.add_modifier(Modifier::ITALIC);
+    }
+    if ispan.underline {
+      style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    if ispan.strikethrough {
+      style = style.add_modifier(Modifier::CROSSED_OUT);
+    }
+    if ispan.monospace {
+      style = style.fg(t.mono);
+    }
+    if let Some((r, g, b)) = ispan.color {
+      style = style.fg(Color::Rgb(r, g, b));
+    }
+    if ispan.url.is_some() {
+      style = style.add_modifier(Modifier::UNDERLINED);
+    }
     if ispan.link_target.is_some() {
       // Refs / citations get `t.link_fg` + underline so they're visibly
       // clickable in body prose.  Combined with the prefix-word
@@ -486,7 +616,9 @@ fn overlay_highlights_styled(
 
     for w in cuts.windows(2) {
       let (s, e) = (w[0], w[1]);
-      if s >= e { continue; }
+      if s >= e {
+        continue;
+      }
       let local_s = s - span_start;
       let local_e = e - span_start;
       if !ispan.text.is_char_boundary(local_s) || !ispan.text.is_char_boundary(local_e) {
@@ -517,13 +649,19 @@ fn apply_char_cursor(text: &str, byte_col: usize, bg: Color, t: &Theme) -> Line<
     .unwrap_or(0);
   let before = &text[..safe];
   let mut rest_chars = text[safe..].chars();
-  let cur: String = rest_chars.next().map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+  let cur: String = rest_chars
+    .next()
+    .map(|c| c.to_string())
+    .unwrap_or_else(|| " ".to_string());
   let after: String = rest_chars.collect();
   let mut spans: Vec<Span<'static>> = Vec::new();
   if !before.is_empty() {
     spans.push(Span::styled(before.to_string(), Style::default().bg(bg)));
   }
-  spans.push(Span::styled(cur, Style::default().bg(t.cursor_bg).fg(t.cursor_fg)));
+  spans.push(Span::styled(
+    cur,
+    Style::default().bg(t.cursor_bg).fg(t.cursor_fg),
+  ));
   if !after.is_empty() {
     spans.push(Span::styled(after, Style::default().bg(bg)));
   }
@@ -539,10 +677,14 @@ fn is_box_drawing(ch: char) -> bool {
 /// Snap `byte_col` down to the nearest UTF-8 char boundary at or before it,
 /// clamped to the last char start in `text`.
 fn snap_to_char_boundary(text: &str, byte_col: usize) -> usize {
-  if text.is_empty() { return 0; }
+  if text.is_empty() {
+    return 0;
+  }
   let max = text.len() - 1;
   let mut i = byte_col.min(max);
-  while i > 0 && !text.is_char_boundary(i) { i -= 1; }
+  while i > 0 && !text.is_char_boundary(i) {
+    i -= 1;
+  }
   i
 }
 
@@ -559,13 +701,19 @@ fn apply_inline_cursor(text: &str, base_style: Style, byte_col: usize, t: &Theme
   let safe = snap_to_char_boundary(text, byte_col);
   let before = &text[..safe];
   let mut rest = text[safe..].chars();
-  let cur: String = rest.next().map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+  let cur: String = rest
+    .next()
+    .map(|c| c.to_string())
+    .unwrap_or_else(|| " ".to_string());
   let after: String = rest.collect();
   let mut spans: Vec<Span<'static>> = Vec::new();
   if !before.is_empty() {
     spans.push(Span::styled(before.to_string(), base_style));
   }
-  spans.push(Span::styled(cur, Style::default().bg(t.cursor_bg).fg(t.cursor_fg)));
+  spans.push(Span::styled(
+    cur,
+    Style::default().bg(t.cursor_bg).fg(t.cursor_fg),
+  ));
   if !after.is_empty() {
     spans.push(Span::styled(after, base_style));
   }
@@ -603,13 +751,27 @@ fn apply_styled_cursor(
     byte_cursor = span_end;
 
     let mut style = base_style;
-    if ispan.bold        { style = style.add_modifier(Modifier::BOLD); }
-    if ispan.italic      { style = style.add_modifier(Modifier::ITALIC); }
-    if ispan.underline   { style = style.add_modifier(Modifier::UNDERLINED); }
-    if ispan.strikethrough { style = style.add_modifier(Modifier::CROSSED_OUT); }
-    if ispan.monospace   { style = style.fg(t.mono); }
-    if let Some((r, g, b)) = ispan.color { style = style.fg(Color::Rgb(r, g, b)); }
-    if ispan.url.is_some() { style = style.add_modifier(Modifier::UNDERLINED); }
+    if ispan.bold {
+      style = style.add_modifier(Modifier::BOLD);
+    }
+    if ispan.italic {
+      style = style.add_modifier(Modifier::ITALIC);
+    }
+    if ispan.underline {
+      style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    if ispan.strikethrough {
+      style = style.add_modifier(Modifier::CROSSED_OUT);
+    }
+    if ispan.monospace {
+      style = style.fg(t.mono);
+    }
+    if let Some((r, g, b)) = ispan.color {
+      style = style.fg(Color::Rgb(r, g, b));
+    }
+    if ispan.url.is_some() {
+      style = style.add_modifier(Modifier::UNDERLINED);
+    }
     if ispan.link_target.is_some() {
       // Refs / citations get `t.link_fg` + underline so they're visibly
       // clickable in body prose.  Combined with the prefix-word
@@ -621,12 +783,17 @@ fn apply_styled_cursor(
     if !cursor_painted && safe_col >= span_start && safe_col < span_end {
       let local = snap_to_char_boundary(&ispan.text, safe_col - span_start);
       let mut next = local + 1;
-      while next < ispan.text.len() && !ispan.text.is_char_boundary(next) { next += 1; }
+      while next < ispan.text.len() && !ispan.text.is_char_boundary(next) {
+        next += 1;
+      }
       if local > 0 {
         out.push(Span::styled(ispan.text[..local].to_string(), style));
       }
       let cur_text = ispan.text.get(local..next).unwrap_or(" ").to_string();
-      out.push(Span::styled(cur_text, Style::default().bg(t.cursor_bg).fg(t.cursor_fg)));
+      out.push(Span::styled(
+        cur_text,
+        Style::default().bg(t.cursor_bg).fg(t.cursor_fg),
+      ));
       if next < ispan.text.len() {
         out.push(Span::styled(ispan.text[next..].to_string(), style));
       }
@@ -656,7 +823,10 @@ fn highlight_query(text: &str, query: &str, bg: Color, t: &Theme) -> Line<'stati
   while let Some(start) = lower[pos..].find(query) {
     let abs = pos + start;
     if abs > pos {
-      spans.push(Span::styled(text[pos..abs].to_string(), Style::default().bg(bg)));
+      spans.push(Span::styled(
+        text[pos..abs].to_string(),
+        Style::default().bg(bg),
+      ));
     }
     spans.push(Span::styled(
       text[abs..abs + ql].to_string(),
@@ -665,7 +835,10 @@ fn highlight_query(text: &str, query: &str, bg: Color, t: &Theme) -> Line<'stati
     pos = abs + ql;
   }
   if pos < text.len() {
-    spans.push(Span::styled(text[pos..].to_string(), Style::default().bg(bg)));
+    spans.push(Span::styled(
+      text[pos..].to_string(),
+      Style::default().bg(bg),
+    ));
   }
 
   Line::from(spans)
@@ -674,17 +847,34 @@ fn highlight_query(text: &str, query: &str, bg: Color, t: &Theme) -> Line<'stati
 /// Render a StyledProse line with search term highlighting.
 /// Each span is rendered with its own style; the matching substring is
 /// overridden with a yellow-bg highlight wherever it appears.
-fn highlight_spans(spans: &[doc_model::InlineSpan], query: &str, bg: Color, t: &Theme) -> Line<'static> {
+fn highlight_spans(
+  spans: &[doc_model::InlineSpan],
+  query: &str,
+  bg: Color,
+  t: &Theme,
+) -> Line<'static> {
   let mut ratatui_spans: Vec<Span<'static>> = Vec::new();
 
   for s in spans {
     let mut style = Style::default().bg(bg);
-    if s.bold        { style = style.add_modifier(Modifier::BOLD); }
-    if s.italic      { style = style.add_modifier(Modifier::ITALIC); }
-    if s.underline   { style = style.add_modifier(Modifier::UNDERLINED); }
-    if s.strikethrough { style = style.add_modifier(Modifier::CROSSED_OUT); }
-    if s.monospace   { style = style.fg(t.mono); }
-    if let Some((r, g, b)) = s.color { style = style.fg(Color::Rgb(r, g, b)); }
+    if s.bold {
+      style = style.add_modifier(Modifier::BOLD);
+    }
+    if s.italic {
+      style = style.add_modifier(Modifier::ITALIC);
+    }
+    if s.underline {
+      style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    if s.strikethrough {
+      style = style.add_modifier(Modifier::CROSSED_OUT);
+    }
+    if s.monospace {
+      style = style.fg(t.mono);
+    }
+    if let Some((r, g, b)) = s.color {
+      style = style.fg(Color::Rgb(r, g, b));
+    }
 
     let lower = s.text.to_lowercase();
     let ql = query.len();
@@ -738,7 +928,10 @@ fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
       let label = format!(" {}{}", " ".repeat(indent), toc_trunc(text, avail));
       let is_current = cur_sec.map_or(false, |c| c == sec_idx);
       if is_current {
-        Line::styled(label, Style::default().fg(t.accent).add_modifier(Modifier::BOLD))
+        Line::styled(
+          label,
+          Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        )
       } else {
         Line::styled(label, Style::default().fg(t.toc_dim))
       }
@@ -761,7 +954,11 @@ fn toc_trunc(s: &str, max: usize) -> String {
   if count <= max {
     s.to_string()
   } else if max > 1 {
-    let end = s.char_indices().nth(max - 1).map(|(i, _)| i).unwrap_or(s.len());
+    let end = s
+      .char_indices()
+      .nth(max - 1)
+      .map(|(i, _)| i)
+      .unwrap_or(s.len());
     format!("{}…", &s[..end])
   } else {
     s.chars().take(max).collect()
@@ -772,80 +969,169 @@ fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
   let cur = reader.current_line() + 1;
   let tot = reader.total_lines();
   let pct = if tot == 0 { 0 } else { cur * 100 / tot };
-  let match_info = if !reader.search_matches.is_empty() {
-    format!("  [{}/{}]", reader.search_idx + 1, reader.search_matches.len())
-  } else {
-    String::new()
-  };
-  let mode_str = match &reader.mode {
-    Mode::Normal | Mode::Search => String::new(),
-    Mode::Visual { line_mode } => {
-      if *line_mode { "  VISUAL LINE".to_string() } else { "  VISUAL".to_string() }
-    }
-    Mode::AwaitingChar { kind } => {
-      // Show the operator we're awaiting a target for, e.g. "  f_".
-      let prefix = match kind {
-        crate::state::FindKind::F      => "f",
-        crate::state::FindKind::ShiftF => "F",
-        crate::state::FindKind::T      => "t",
-        crate::state::FindKind::ShiftT => "T",
-      };
-      format!("  {prefix}_")
-    }
-    Mode::AwaitingMarkName { for_set } => {
-      if *for_set { "  m_".to_string() } else { "  '_".to_string() }
-    }
-    Mode::AwaitingG => "  g_".to_string(),
-    Mode::AwaitingBracket { forward } => {
-      if *forward { "  ]_".to_string() } else { "  [_".to_string() }
-    }
-    Mode::Command => String::new(), // command bar shows its own prompt
-    Mode::AwaitingOperator { op } => match op {
-      crate::state::Operator::Yank => "  y_".to_string(),
-    },
-    Mode::AwaitingTextObject { op, around } => {
-      let prefix = match op { crate::state::Operator::Yank => "y" };
-      let mid = if *around { "a" } else { "i" };
-      format!("  {prefix}{mid}_")
-    }
-  };
-  let count_str = if !reader.count_buf.is_empty() {
-    format!("  {}_", reader.count_buf)
-  } else {
-    String::new()
-  };
   // Errors from the most recent `:` command override the rest of the status
   // line so they're hard to miss.  Cleared on the next keystroke.
   if let Some(err) = &reader.cmd_error {
-    let status = Paragraph::new(format!(" {err}"))
-      .style(Style::default().bg(t.bg_input).fg(t.error));
+    let status =
+      Paragraph::new(format!(" {err}")).style(Style::default().bg(t.bg_input).fg(t.error));
     frame.render_widget(status, area);
     return;
   }
-  // Voice status takes precedence over normal mode indicators because
-  // audio playback is the user's active focus when present.  Spinner
-  // glyph rotates via wall-clock so the Loading state animates.
-  let voice_str = crate::voice_control::voice_status_label(reader)
-    .map(|s| format!("  {s}"))
-    .unwrap_or_default();
-  let text = format!(" {cur}/{tot}  {pct}%{match_info}{mode_str}{count_str}{voice_str}");
-  let status = Paragraph::new(text)
-    .style(Style::default().bg(t.bg_input).fg(t.text_dim));
+
+  let mode = mode_label(reader);
+  let mut details: Vec<String> = Vec::new();
+  if !reader.search_matches.is_empty() {
+    details.push(format!(
+      "match {}/{}",
+      reader.search_idx + 1,
+      reader.search_matches.len()
+    ));
+  }
+  if let Some((idx, total)) = reader
+    .current_figure_position()
+    .filter(|_| reader.figure_preview_visible())
+  {
+    details.push(format!("fig {idx}/{total}"));
+  }
+  if let Some(pending) = pending_input_label(reader) {
+    details.push(pending);
+  }
+  if !reader.count_buf.is_empty() {
+    details.push(format!("count {}_", reader.count_buf));
+  }
+  if let Some(voice) = crate::voice_control::voice_status_label(reader) {
+    details.push(voice);
+  }
+
+  let mode_text = format!(" {mode} ");
+  let right = format!("{cur}/{tot}  {pct}% ");
+  let detail_text = if details.is_empty() {
+    String::new()
+  } else {
+    format!(" {}", details.join("  "))
+  };
+  let available = area.width as usize;
+  let used = mode_text.chars().count() + right.chars().count();
+  let detail = toc_trunc(&detail_text, available.saturating_sub(used));
+  let spacer_width = available
+    .saturating_sub(mode_text.chars().count() + detail.chars().count() + right.chars().count());
+
+  let line = Line::from(vec![
+    Span::styled(
+      mode_text,
+      Style::default()
+        .bg(t.accent)
+        .fg(t.text_on_accent)
+        .add_modifier(Modifier::BOLD),
+    ),
+    Span::styled(detail, Style::default().fg(t.text_dim)),
+    Span::raw(" ".repeat(spacer_width)),
+    Span::styled(right, Style::default().fg(t.text_dim)),
+  ]);
+  let status = Paragraph::new(line).style(Style::default().bg(t.bg_input));
   frame.render_widget(status, area);
 }
 
 fn draw_search_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
-  let text = format!("/{}", reader.search_query);
-  let bar = Paragraph::new(text)
-    .style(Style::default().bg(t.bg_input).fg(t.cursor_bg));
+  let suffix = if reader.search_matches.is_empty() {
+    String::new()
+  } else {
+    format!(" {}/{}", reader.search_idx + 1, reader.search_matches.len())
+  };
+  let line = prompt_line("/", &reader.search_query, &suffix, area.width as usize, t);
+  let bar = Paragraph::new(line).style(Style::default().bg(t.bg_input));
   frame.render_widget(bar, area);
 }
 
 fn draw_command_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
-  let text = format!(":{}_", reader.cmd_buf);
-  let bar = Paragraph::new(text)
-    .style(Style::default().bg(t.bg_input).fg(t.cursor_bg));
+  let line = prompt_line(
+    ":",
+    &format!("{}_", reader.cmd_buf),
+    "",
+    area.width as usize,
+    t,
+  );
+  let bar = Paragraph::new(line).style(Style::default().bg(t.bg_input));
   frame.render_widget(bar, area);
+}
+
+fn mode_label(reader: &Reader) -> &'static str {
+  match reader.mode {
+    Mode::Normal => "READ",
+    Mode::Search => "SEARCH",
+    Mode::Visual { line_mode: true } => "VISUAL LINE",
+    Mode::Visual { line_mode: false } => "VISUAL",
+    Mode::AwaitingChar { .. }
+    | Mode::AwaitingMarkName { .. }
+    | Mode::AwaitingG
+    | Mode::AwaitingBracket { .. }
+    | Mode::AwaitingOperator { .. }
+    | Mode::AwaitingTextObject { .. } => "PENDING",
+    Mode::Command => "COMMAND",
+  }
+}
+
+fn pending_input_label(reader: &Reader) -> Option<String> {
+  match &reader.mode {
+    Mode::AwaitingChar { kind } => {
+      let prefix = match kind {
+        crate::state::FindKind::F => "f",
+        crate::state::FindKind::ShiftF => "F",
+        crate::state::FindKind::T => "t",
+        crate::state::FindKind::ShiftT => "T",
+      };
+      Some(format!("{prefix}_"))
+    }
+    Mode::AwaitingMarkName { for_set } => {
+      if *for_set {
+        Some("m_".to_string())
+      } else {
+        Some("'_".to_string())
+      }
+    }
+    Mode::AwaitingG => Some("g_".to_string()),
+    Mode::AwaitingBracket { forward } => {
+      if *forward {
+        Some("]_".to_string())
+      } else {
+        Some("[_".to_string())
+      }
+    }
+    Mode::AwaitingOperator { op } => match op {
+      crate::state::Operator::Yank => Some("y_".to_string()),
+    },
+    Mode::AwaitingTextObject { op, around } => {
+      let prefix = match op {
+        crate::state::Operator::Yank => "y",
+      };
+      let mid = if *around { "a" } else { "i" };
+      Some(format!("{prefix}{mid}_"))
+    }
+    _ => None,
+  }
+}
+
+fn prompt_line<'a>(
+  prefix: &'static str,
+  body: &str,
+  suffix: &str,
+  width: usize,
+  t: &Theme,
+) -> Line<'a> {
+  let prefix_width = prefix.chars().count() + 1;
+  let suffix_width = suffix.chars().count();
+  let body_width = width.saturating_sub(prefix_width + suffix_width);
+  let body = toc_trunc(body, body_width);
+  let spacer_width = width.saturating_sub(prefix_width + body.chars().count() + suffix_width);
+  Line::from(vec![
+    Span::styled(
+      format!(" {prefix}"),
+      Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+    ),
+    Span::styled(body, Style::default().fg(t.text)),
+    Span::raw(" ".repeat(spacer_width)),
+    Span::styled(suffix.to_string(), Style::default().fg(t.text_dim)),
+  ])
 }
 
 /// Render a generic text popup (used by `:marks`, `:highlights`, `:about`,
@@ -853,13 +1139,27 @@ fn draw_command_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
 /// Dismissed by any keystroke (handled in the event loop).
 fn draw_text_popup(frame: &mut Frame, area: Rect, t: &Theme, popup: &crate::state::PopupContent) {
   use ratatui::text::Line;
-  let max_line = popup.lines.iter().map(|l| l.chars().count()).max().unwrap_or(0)
+  let max_line = popup
+    .lines
+    .iter()
+    .map(|l| l.chars().count())
+    .max()
+    .unwrap_or(0)
     .max(popup.title.chars().count() + 4);
-  let w = (max_line as u16 + 4).min(area.width.saturating_sub(4)).max(20);
-  let h = (popup.lines.len() as u16 + 4).min(area.height.saturating_sub(4)).max(6);
+  let w = (max_line as u16 + 4)
+    .min(area.width.saturating_sub(4))
+    .max(20);
+  let h = (popup.lines.len() as u16 + 4)
+    .min(area.height.saturating_sub(4))
+    .max(6);
   let x = area.x + area.width.saturating_sub(w) / 2;
   let y = area.y + area.height.saturating_sub(h) / 2;
-  let popup_area = Rect { x, y, width: w, height: h };
+  let popup_area = Rect {
+    x,
+    y,
+    width: w,
+    height: h,
+  };
 
   let mut lines: Vec<Line> = Vec::new();
   lines.push(Line::styled(
@@ -888,131 +1188,224 @@ fn draw_text_popup(frame: &mut Frame, area: Rect, t: &Theme, popup: &crate::stat
 }
 
 fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
-  const W: u16 = 64;
-  const H: u16 = 53;
+  const W: u16 = 94;
+  const H: u16 = 32;
   let x = area.x + area.width.saturating_sub(W) / 2;
   let y = area.y + area.height.saturating_sub(H) / 2;
-  let popup = Rect { x, y, width: W.min(area.width), height: H.min(area.height) };
+  let popup = Rect {
+    x,
+    y,
+    width: W.min(area.width),
+    height: H.min(area.height),
+  };
 
   let help_bg = t.bg_popup;
   let key_fg = t.accent;
   let dim_fg = t.text_dim;
   let sec_fg = t.header;
 
-  let rows: &[(&str, &str, &str, &str)] = &[
-    ("j / k",         "scroll down / up",        "]] / [[",  "next / prev section"),
-    ("PageDn / Up",   "full page scroll",        "Ctrl+d/u", "half page"),
-    ("} / {",         "next / prev paragraph",   "( / )",    "prev / next sentence"),
-    ("gg / G",        "top / bottom",            "H / M / L","screen top/mid/bottom"),
-    ("h / l",         "cursor ← / → (wraps)",    "z",        "center cursor"),
-    ("w / W",         "word forward (small/BIG)","b / B",    "word back (small/BIG)"),
-    ("e / E",         "word end (small/BIG)",    "ge / gE",  "back to word end"),
-    ("0  ^  $",       "line start / first / end","5j 10G",   "count prefix"),
-    ("f / F",         "find char fwd / back",    "t / T",    "till char fwd / back"),
-    ("%",             "matching brace",          "*",        "search word under cursor"),
-    ("/  n  N",       "search / next / prev",    "m{a} '{a}","set/jump named mark"),
-    ("i",             "toggle figure preview",   "]f / [f",  "next / prev figure"),
-    ("yy",            "yank current line (OSC 52)","\\",      "toggle TOC"),
-    ("yi/ya<obj>",    "yank inner / around obj",  "X",        "remove highlight"),
-    ("Enter",         "follow link / citation",   "K",        "popup citation entry"),
-    (":",             "command mode (see below)", "Ctrl+O",   "go back"),
-    ("?",             "this help",                "q / Esc",  "quit"),
-  ];
-
-  let visual_rows: &[(&str, &str)] = &[
-    ("v / V",         "enter char / line visual mode"),
-    ("j / k  h / l",  "extend selection"),
-    ("y",             "yank selection to clipboard"),
-    ("H",             "highlight selection (persists)"),
-    ("Esc / v / V",   "cancel visual mode"),
-  ];
-
-  let voice_rows: &[(&str, &str)] = &[
-    ("r",             "read current paragraph aloud"),
-    ("R",             "read from cursor to end of paragraph"),
-    ("Ctrl+P",        "continuous reading (paragraph by paragraph)"),
-    ("Space",         "pause / resume playback"),
-    ("c",             "recenter viewport on cursor"),
-    ("Esc",           "stop playback + exit reading mode"),
-  ];
-
-  let cmd_rows: &[(&str, &str)] = &[
-    (":<N>",            "go to line N"),
-    (":goto <N|text>",  "jump to section"),
-    (":abstract",       "jump to abstract"),
-    (":references",     "jump to references"),
-    (":set theme=<id>", "change theme (or 'trench' to sync)"),
-    (":marks",          "list named marks"),
-    (":highlights",     "list highlights"),
-    (":about",          "paper metadata"),
-    (":url  :cite",     "copy URL / BibTeX to clipboard"),
-    (":open",           "open URL in browser"),
-    (":reload  :e",     "re-fetch and re-parse the paper"),
-    (":q  :help",       "quit / help"),
-  ];
-
-  let mut lines: Vec<Line> = vec![
-    Line::styled(
-      "  Keybindings",
-      Style::default().fg(key_fg).add_modifier(Modifier::BOLD),
-    ),
-    Line::raw(""),
-  ];
-  for (k1, d1, k2, d2) in rows {
-    let left  = format!("  {:<14} {:<24}", k1, d1);
-    let right = format!("{:<10} {}", k2, d2);
-    lines.push(Line::from(vec![
-      Span::styled(left,  Style::default().fg(key_fg)),
-      Span::styled(right, Style::default().fg(dim_fg)),
-    ]));
-  }
-  lines.push(Line::raw(""));
-  lines.push(Line::styled(
-    "  Visual mode",
-    Style::default().fg(sec_fg).add_modifier(Modifier::BOLD),
-  ));
-  for (k, d) in visual_rows {
-    lines.push(Line::from(vec![
-      Span::styled(format!("  {:<16} ", k), Style::default().fg(key_fg)),
-      Span::styled(d.to_string(), Style::default().fg(dim_fg)),
-    ]));
-  }
-  lines.push(Line::raw(""));
-  lines.push(Line::styled(
-    "  Voice / TTS playback",
-    Style::default().fg(sec_fg).add_modifier(Modifier::BOLD),
-  ));
-  for (k, d) in voice_rows {
-    lines.push(Line::from(vec![
-      Span::styled(format!("  {:<16} ", k), Style::default().fg(key_fg)),
-      Span::styled(d.to_string(), Style::default().fg(dim_fg)),
-    ]));
-  }
-  lines.push(Line::raw(""));
-  lines.push(Line::styled(
-    "  Command mode  (`:` to enter)",
-    Style::default().fg(sec_fg).add_modifier(Modifier::BOLD),
-  ));
-  for (k, d) in cmd_rows {
-    lines.push(Line::from(vec![
-      Span::styled(format!("  {:<18} ", k), Style::default().fg(key_fg)),
-      Span::styled(d.to_string(), Style::default().fg(dim_fg)),
-    ]));
-  }
-  lines.push(Line::raw(""));
-  lines.push(Line::styled(
-    "  Press any key to dismiss",
-    Style::default().fg(dim_fg),
-  ));
-
   frame.render_widget(Clear, popup);
-  let widget = Paragraph::new(lines)
-    .style(Style::default().bg(help_bg))
-    .block(
-      Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(t.text_dim))
-        .style(Style::default().bg(help_bg)),
-    );
+  let widget = Block::default()
+    .title(Span::styled(
+      " Help ",
+      Style::default().fg(sec_fg).add_modifier(Modifier::BOLD),
+    ))
+    .title_bottom(Span::styled(
+      " Press any key to dismiss ",
+      Style::default().fg(dim_fg),
+    ))
+    .borders(Borders::ALL)
+    .border_style(Style::default().fg(t.text_dim))
+    .style(Style::default().bg(help_bg));
   frame.render_widget(widget, popup);
+
+  let inner = popup.inner(Margin {
+    vertical: 1,
+    horizontal: 2,
+  });
+  let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(inner);
+  let header = Paragraph::new(vec![
+    Line::styled(
+      "Reader keymap",
+      Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+    ),
+    Line::styled(
+      "Navigation, figures, links, voice, and command actions",
+      Style::default().fg(dim_fg),
+    ),
+  ])
+  .style(Style::default().bg(help_bg));
+  frame.render_widget(header, rows[0]);
+
+  let cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+    .split(rows[1]);
+  let left = Rect {
+    x: cols[0].x,
+    y: cols[0].y,
+    width: cols[0].width.saturating_sub(1),
+    height: cols[0].height,
+  };
+  let right = Rect {
+    x: cols[1].x.saturating_add(1),
+    y: cols[1].y,
+    width: cols[1].width.saturating_sub(1),
+    height: cols[1].height,
+  };
+
+  let left_lines = help_section(
+    "Movement",
+    &[
+      ("j / k", "scroll down / up"),
+      ("PageDn / Up", "full page scroll"),
+      ("Ctrl+d / Ctrl+u", "half-page down / up"),
+      ("gg / G", "top / bottom"),
+      ("H / M / L", "top / middle / bottom of screen"),
+      ("z", "center cursor"),
+      ("} / {", "next / previous paragraph"),
+      (") / (", "next / previous sentence"),
+      ("w / W", "word forward (small / BIG)"),
+      ("b / B", "word back (small / BIG)"),
+      ("e / E", "word end (small / BIG)"),
+      ("ge / gE", "back to word end"),
+      ("0  ^  $", "line start / first text / line end"),
+      ("5j  10G", "count prefix"),
+      ("]] / [[", "next / previous section"),
+    ],
+    key_fg,
+    sec_fg,
+    dim_fg,
+  );
+
+  let right_lines = [
+    help_section(
+      "Search + links",
+      &[
+        ("/  n  N", "search / next / previous"),
+        ("*", "search word under cursor"),
+        ("f / F", "find char forward / backward"),
+        ("t / T", "till char forward / backward"),
+        ("%", "matching brace"),
+        ("m{a}  '{a}", "set / jump named mark"),
+        ("Enter", "follow link or citation"),
+        ("K", "show citation entry"),
+        ("Ctrl+O", "go back"),
+      ],
+      key_fg,
+      sec_fg,
+      dim_fg,
+    ),
+    vec![Line::raw("")],
+    help_section(
+      "Figures + selection",
+      &[
+        ("i", "toggle figure preview"),
+        ("]f / [f", "next / previous figure"),
+        ("\\", "toggle TOC"),
+        ("v / V", "enter char / line visual mode"),
+        ("y", "yank selection"),
+        ("yy", "yank current line"),
+        ("yi / ya <obj>", "yank inner / around object"),
+        ("H", "highlight selection"),
+        ("X", "remove highlight"),
+      ],
+      key_fg,
+      sec_fg,
+      dim_fg,
+    ),
+    vec![Line::raw("")],
+    help_section(
+      "Voice + commands",
+      &[
+        ("r / R", "read paragraph / to paragraph end"),
+        ("Ctrl+P", "continuous reading"),
+        ("Space", "pause / resume playback"),
+        ("c", "recenter while reading"),
+        ("Esc", "stop reading or back out"),
+        (":<N>", "go to line"),
+        (":goto <N|text>", "jump to section"),
+        (":abstract", "jump to abstract"),
+        (":references", "jump to references"),
+        (":set theme=<id>", "change theme"),
+        (":marks  :highlights", "inspect marks / highlights"),
+        (":about  :url  :cite", "metadata / copy URL / copy BibTeX"),
+        (":open  :reload  :q", "open / reload / quit"),
+        ("?", "toggle this help"),
+      ],
+      key_fg,
+      sec_fg,
+      dim_fg,
+    ),
+  ]
+  .concat();
+
+  frame.render_widget(
+    Paragraph::new(left_lines)
+      .style(Style::default().bg(help_bg))
+      .wrap(Wrap { trim: false }),
+    left,
+  );
+  frame.render_widget(
+    Paragraph::new(right_lines)
+      .style(Style::default().bg(help_bg))
+      .wrap(Wrap { trim: false }),
+    right,
+  );
+}
+
+fn help_section(
+  title: &str,
+  rows: &[(&str, &str)],
+  key_fg: Color,
+  sec_fg: Color,
+  dim_fg: Color,
+) -> Vec<Line<'static>> {
+  let mut out = vec![Line::styled(
+    format!(" {title}"),
+    Style::default().fg(sec_fg).add_modifier(Modifier::BOLD),
+  )];
+  for (key, desc) in rows {
+    out.push(Line::from(vec![
+      Span::styled(format!("  {:<18}", key), Style::default().fg(key_fg)),
+      Span::styled(desc.to_string(), Style::default().fg(dim_fg)),
+    ]));
+  }
+  out
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use doc_model::Block;
+
+  fn reader_with_preview() -> Reader {
+    let mut reader = Reader::new(
+      vec![Block::Image {
+        path: std::path::PathBuf::from("figure.png"),
+        alt: "figure".to_string(),
+        kitty_id: 1,
+        dims: Some((100, 100)),
+        stack_total: 1,
+      }],
+      100,
+      24,
+    );
+    reader.set_figure_preview_active(true);
+    reader
+  }
+
+  #[test]
+  fn split_content_for_preview_reserves_side_pane() {
+    let reader = reader_with_preview();
+    let (reader_area, preview_area) = split_content_for_preview(Rect::new(0, 0, 100, 20), &reader);
+
+    assert_eq!(reader_area.width, 60);
+    assert_eq!(preview_area.map(|area| area.width), Some(40));
+  }
+
+  #[test]
+  fn preview_image_area_leaves_room_for_frame() {
+    let area = preview_image_area(Rect::new(60, 2, 40, 20));
+
+    assert_eq!(area, Rect::new(61, 3, 38, 18));
+  }
 }

@@ -20,6 +20,24 @@ fn main() {
        set -g focus-events on         (lets the reader clear images on pane switch)"
     );
   }
+  // Zellij has no passthrough envelope.  When Ghostty/Kitty hosts
+  // Zellij the figure pipeline still works because Zellij re-renders
+  // via the host's image protocol.  Over iTerm2 that re-render is
+  // broken (empty figure pane, no error).  Warn the user up-front so
+  // they don't waste time debugging a tread bug that isn't one.
+  if kitty_graphics::in_zellij()
+    && kitty_graphics::is_iterm2()
+    && matches!(kitty_capability, kitty_graphics::Capability::Supported)
+  {
+    eprintln!(
+      "zellij over iTerm2 detected: the figure preview pane may stay\n  \
+       empty because Zellij's Kitty-graphics re-render path is unreliable\n  \
+       on iTerm2.  Workarounds:\n    \
+       - run a Zellij fullscreen pane (Alt+f) for the tread session\n    \
+       - run tread outside Zellij\n    \
+       - switch host terminal to Ghostty"
+    );
+  }
   let kitty_supported = matches!(kitty_capability, kitty_graphics::Capability::Supported);
 
   // Routing precedence:
