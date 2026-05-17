@@ -289,7 +289,7 @@ fn try_tar_gz(bytes: &[u8], asset_dir: &Path) -> Result<Vec<(String, String)>, S
       .to_string_lossy()
       .to_string();
 
-    if path.ends_with(".tex") {
+    if path.ends_with(".tex") || path.ends_with(".bbl") {
       let mut content = String::new();
       entry
         .read_to_string(&mut content)
@@ -297,6 +297,11 @@ fn try_tar_gz(bytes: &[u8], asset_dir: &Path) -> Result<Vec<(String, String)>, S
       // Preserve the full relative path (e.g. "content/intro/intro.tex") so that
       // Pandoc can resolve \input{} directives when run from the temp dir root.
       // Stripping to file_name() broke multi-file papers by flattening the tree.
+      //
+      // `.bbl` is BibTeX's precompiled output — its `\bibitem` syntax is
+      // identical to inline thebibliography, so feeding it through the
+      // same vec lets `extract_bibitems` pick up entries from papers that
+      // ship .bbl instead of inline bibitems (e.g. GPT-3 / 2005.14165).
       files.push((path, content));
     } else if is_asset_path(&path) {
       // Write asset bytes to disk under asset_dir at the same relative
