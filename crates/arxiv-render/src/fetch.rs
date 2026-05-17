@@ -40,8 +40,26 @@ pub struct FetchedSource {
 /// found.  Image extraction failures are non-fatal — the run continues
 /// without those figures.
 pub fn fetch_source(id: &str) -> Result<FetchedSource, String> {
+  fetch_source_with(id, false)
+}
+
+/// Same as `fetch_source` but bypasses the etag conditional cache and
+/// pulls a fresh copy regardless of `If-None-Match` revalidation.  Used
+/// by the in-reader `:refresh` command for the case where the user
+/// suspects a paper has been revised and wants to force a re-pull
+/// without exiting and unsetting the cache by hand.
+pub fn fetch_source_refresh(id: &str) -> Result<FetchedSource, String> {
+  fetch_source_with(id, true)
+}
+
+fn fetch_source_with(id: &str, force_refresh: bool) -> Result<FetchedSource, String> {
   let url = format!("https://arxiv.org/e-print/{id}");
-  let bytes = cached_fetch(&url, &format!("{id}.tar.gz"), MAX_SOURCE_BYTES)?;
+  let bytes = cached_fetch_with(
+    &url,
+    &format!("{id}.tar.gz"),
+    MAX_SOURCE_BYTES,
+    force_refresh,
+  )?;
   let asset_dir = prepare_asset_dir(id);
   let tex = extract_tex_files(&bytes, &asset_dir)?;
   Ok(FetchedSource { tex, asset_dir })
@@ -74,8 +92,18 @@ fn prepare_asset_dir(id: &str) -> PathBuf {
 ///
 /// Returns `Err` on network failure, non-2xx status, or oversize response.
 pub fn fetch_pdf(id: &str) -> Result<Vec<u8>, String> {
+  fetch_pdf_with(id, false)
+}
+
+/// Like `fetch_source_refresh` but for the rendered PDF.  Always pulls
+/// a fresh copy even when an etag would have produced a 304.
+pub fn fetch_pdf_refresh(id: &str) -> Result<Vec<u8>, String> {
+  fetch_pdf_with(id, true)
+}
+
+fn fetch_pdf_with(id: &str, force_refresh: bool) -> Result<Vec<u8>, String> {
   let url = format!("https://arxiv.org/pdf/{id}");
-  cached_fetch(&url, &format!("{id}.pdf"), MAX_PDF_BYTES)
+  cached_fetch_with(&url, &format!("{id}.pdf"), MAX_PDF_BYTES, force_refresh)
 }
 
 /// Disk-backed conditional HTTP GET.
@@ -97,9 +125,17 @@ pub fn fetch_pdf(id: &str) -> Result<Vec<u8>, String> {
 ///
 /// TREAD_REFRESH=1 in env forces a full fetch (skips the conditional
 /// header) so users can pull a new version of a paper without having
-/// to find and delete the cache file by hand.
-fn cached_fetch(url: &str, basename: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
-  let force_refresh = std::env::var_os("TREAD_REFRESH").is_some();
+/// to find and delete the cache file by hand.  The in-reader `:refresh`
+/// command sets `force_refresh = true` via `cached_fetch_with` directly,
+/// scoped to a single fetch_paper invocation so it doesn't leak to
+/// future :reload calls in the same session.
+fn cached_fetch_with(
+  url: &str,
+  basename: &str,
+  max_bytes: usize,
+  force_refresh: bool,
+) -> Result<Vec<u8>, String> {
+  let force_refresh = force_refresh || std::env::var_os("TREAD_REFRESH").is_some();
   let cache_dir = raw_cache_dir();
   let body_path = cache_dir.as_ref().map(|d| d.join(basename));
   let etag_path = cache_dir

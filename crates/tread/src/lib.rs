@@ -276,6 +276,22 @@ pub fn extract_arxiv_id(url_or_id: &str) -> Option<String> {
 }
 
 pub fn fetch_paper(id: &str, kitty_supported: bool) -> Result<PaperData, String> {
+  fetch_paper_inner(id, kitty_supported, false)
+}
+
+/// Same as `fetch_paper` but forces both the source tarball and the
+/// rendered PDF to bypass the etag conditional cache.  Used by the
+/// in-reader `:refresh` command for the case where a paper has been
+/// revised on arXiv and the user wants a guaranteed-fresh copy.
+pub fn fetch_paper_refresh(id: &str, kitty_supported: bool) -> Result<PaperData, String> {
+  fetch_paper_inner(id, kitty_supported, true)
+}
+
+fn fetch_paper_inner(
+  id: &str,
+  kitty_supported: bool,
+  force_refresh: bool,
+) -> Result<PaperData, String> {
   use arxiv_render::{fetch, parse, pdf_anchors, placement};
 
   // The source tarball and the rendered PDF are independent HTTPS GETs
@@ -286,8 +302,22 @@ pub fn fetch_paper(id: &str, kitty_supported: bool) -> Result<PaperData, String>
   // drops from sum to max.  arXiv tolerates the two-concurrent-request
   // pattern; trench's openreview audit hit the same shape.
   std::thread::scope(|s| {
-    let pdf_handle = s.spawn(|| bench::time("fetch_pdf", || fetch::fetch_pdf(id)));
-    let fetched = bench::time("fetch_source", || fetch::fetch_source(id))?;
+    let pdf_handle = s.spawn(|| {
+      bench::time("fetch_pdf", || {
+        if force_refresh {
+          fetch::fetch_pdf_refresh(id)
+        } else {
+          fetch::fetch_pdf(id)
+        }
+      })
+    });
+    let fetched = bench::time("fetch_source", || {
+      if force_refresh {
+        fetch::fetch_source_refresh(id)
+      } else {
+        fetch::fetch_source(id)
+      }
+    })?;
     let sources = fetched.tex;
     let asset_dir = fetched.asset_dir;
     let bibitems = bench::time("extract_bibitems", || {

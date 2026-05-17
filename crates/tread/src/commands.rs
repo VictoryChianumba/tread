@@ -89,6 +89,7 @@ fn command_table() -> &'static [(&'static str, &'static [&'static str], Handler)
     ("open",       &[],                cmd_open),
     ("placement",  &[],                cmd_placement),
     ("reload",     &["e"],             cmd_reload),
+    ("refresh",    &["refr"],          cmd_refresh),
   ]
 }
 
@@ -107,6 +108,24 @@ fn cmd_reload(reader: &mut Reader, _args: &[&str]) -> ReaderAction {
       ReaderAction::Reload
     }
     Err(e) => ReaderAction::Error(format!("reload: {e}")),
+  }
+}
+
+/// `:refresh` — like `:reload` but bypasses the etag conditional cache
+/// and force-pulls both the source tarball and the PDF.  Use when arXiv
+/// has published a new version of the open paper and the etag-driven
+/// `:reload` keeps returning the cached body (`304 Not Modified`).
+/// Synchronous; the UI freezes for the full network round-trip.
+fn cmd_refresh(reader: &mut Reader, _args: &[&str]) -> ReaderAction {
+  let Some(id) = reader.arxiv_id.clone() else {
+    return ReaderAction::Error("no paper loaded — :refresh requires an arxiv id".to_string());
+  };
+  match crate::fetch_paper_refresh(&id, reader.kitty_supported) {
+    Ok(data) => {
+      reader.reload_with(data.blocks, data.bibitems);
+      ReaderAction::Reload
+    }
+    Err(e) => ReaderAction::Error(format!("refresh: {e}")),
   }
 }
 
