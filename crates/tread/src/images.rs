@@ -971,6 +971,82 @@ fn cache_dir() -> PathBuf {
   std::env::temp_dir().join("tread-figures")
 }
 
+/// Maximum bytes retained in the figure cache.  Both PDF rasterisations
+/// (`<key>-1.png`, often 1-3 MB each, up to ~20 MB for dense
+/// engineering diagrams) and downscaled "norm" PNGs (~200-300 KB each)
+/// live here.  At ~1 MB average, 500 MB holds figures for roughly 500
+/// papers — comfortably above what a daily reader accumulates between
+/// runs.  Eviction is age-based (oldest mtime first), which approximates
+/// LRU for our workload since cache hits don't update mtime: a
+/// frequently-revisited paper has the same mtime as its first rasterisation,
+/// but a never-revisited paper from months ago has the same mtime too —
+/// and the never-revisited one is cheaper to lose.  Both write paths
+/// (kitty-graphics's pdf_to_png and tread's normalize_png_for_terminal)
+/// re-create on miss, so eviction is always safe.
+const FIGURE_CACHE_CAP_BYTES: u64 = 500 * 1024 * 1024;
+
+/// Walk the figure cache, sort by mtime ascending, delete oldest files
+/// until total size is at or under `FIGURE_CACHE_CAP_BYTES`.  Idempotent
+/// and best-effort: every step (read_dir, stat, remove) is fallible and
+/// silently skipped on failure rather than blocking startup.  Called
+/// once per process, before any image-cache writes — both the PDF and
+/// "norm" caches recreate on miss so even an over-eager eviction is
+/// recoverable at the cost of one rasterisation.
+pub fn enforce_cache_cap() {
+  let _span = crate::bench::Span::new("figure_cache_enforce");
+  let dir = cache_dir();
+  let Ok(read) = std::fs::read_dir(&dir) else {
+    return; // dir doesn't exist or unreadable; nothing to do
+  };
+  let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = read
+    .filter_map(|e| e.ok())
+    .filter_map(|e| {
+      let path = e.path();
+      let meta = e.metadata().ok()?;
+      if !meta.is_file() {
+        return None;
+      }
+      let mtime = meta.modified().ok()?;
+      Some((path, meta.len(), mtime))
+    })
+    .collect();
+  let total: u64 = files.iter().map(|(_, sz, _)| sz).sum();
+  if total <= FIGURE_CACHE_CAP_BYTES {
+    crate::bench::emit_fields(
+      "figure_cache_under_cap",
+      &[
+        ("total_bytes", total as i64),
+        ("cap_bytes", FIGURE_CACHE_CAP_BYTES as i64),
+        ("files", files.len() as i64),
+      ],
+    );
+    return;
+  }
+  files.sort_by_key(|(_, _, t)| *t);
+  let mut to_evict = total - FIGURE_CACHE_CAP_BYTES;
+  let mut evicted_bytes: u64 = 0;
+  let mut evicted_count: u64 = 0;
+  for (path, sz, _) in &files {
+    if to_evict == 0 {
+      break;
+    }
+    if std::fs::remove_file(path).is_ok() {
+      to_evict = to_evict.saturating_sub(*sz);
+      evicted_bytes += *sz;
+      evicted_count += 1;
+    }
+  }
+  crate::bench::emit_fields(
+    "figure_cache_evicted",
+    &[
+      ("evicted_bytes", evicted_bytes as i64),
+      ("evicted_files", evicted_count as i64),
+      ("kept_bytes", (total - evicted_bytes) as i64),
+      ("cap_bytes", FIGURE_CACHE_CAP_BYTES as i64),
+    ],
+  );
+}
+
 /// Filesystem path for the cached normalized PNG produced from
 /// `(source freshness, max_bytes)`.  Returns `None` when `source`
 /// doesn't canonicalize or stat cleanly (test fixtures with

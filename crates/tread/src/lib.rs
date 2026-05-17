@@ -351,6 +351,12 @@ pub fn run_with_theme(
   theme: Theme,
   kitty_supported: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+  // One-shot figure-cache eviction.  Cheap (a read_dir + sort + a few
+  // unlinks); harmless if the cache is under cap or doesn't exist.
+  // Done before the runtime starts so any rasterisation during the
+  // session writes into an already-trimmed dir.
+  images::enforce_cache_cap();
+
   // Standalone tread: tread itself owns terminal setup and teardown.
   // When embedded in a host TUI (trench), the host owns terminal state
   // and constructs the Reader directly via `Reader::init`.
