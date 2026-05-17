@@ -1022,6 +1022,17 @@ impl ReaderRuntime {
       .and_then(|s| s.parse::<f64>().ok())
       .map(|secs| std::time::Instant::now() + Duration::from_secs_f64(secs));
 
+    // TREAD_BENCH_JCOUNT=<n>: after the first frame, inject N
+    // synthetic `j` keypresses one per loop iteration.  Bypasses
+    // crossterm so we don't need a PTY — measures pure scroll-loop
+    // cost (handle_event → apply_update → draw_if_dirty).  Combine
+    // with TREAD_BENCH=<path> to capture frame + event_to_frame
+    // distributions under sustained input.
+    let mut remaining_synthetic_j: u32 = std::env::var("TREAD_BENCH_JCOUNT")
+      .ok()
+      .and_then(|s| s.parse().ok())
+      .unwrap_or(0);
+
     loop {
       self.draw_if_dirty(terminal)?;
 
@@ -1030,6 +1041,23 @@ impl ReaderRuntime {
       {
         bench::emit_us("autoquit", 0);
         break;
+      }
+
+      // Synthetic-input path: only after the first real draw, so we
+      // measure steady-state and not the warm-up frame.
+      if self.first_draw_done && remaining_synthetic_j > 0 {
+        remaining_synthetic_j -= 1;
+        let ev = Event::Key(crossterm::event::KeyEvent::new(
+          crossterm::event::KeyCode::Char('j'),
+          crossterm::event::KeyModifiers::NONE,
+        ));
+        self.pending_event_start = Some(std::time::Instant::now());
+        let update = self.handle_event(ev);
+        self.apply_update(update);
+        if update.quit {
+          break;
+        }
+        continue;
       }
 
       if event::poll(self.poll_timeout())? {

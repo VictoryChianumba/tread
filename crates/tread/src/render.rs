@@ -14,9 +14,11 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
   let (header_area, toc_area, content_area, status_area, search_area) = split_layout(area, reader);
 
   if let Some(ha) = header_area {
+    let _s = crate::bench::Span::new("draw_header");
     draw_header(frame, reader, ha, t);
   }
   if let Some(ta) = toc_area {
+    let _s = crate::bench::Span::new("draw_toc");
     draw_toc(frame, reader, ta, t);
   }
   // When the figure-preview pane is active, the right 40% of the
@@ -24,11 +26,18 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
   // `images::place_one_figure`).  The reader content fills the
   // left 60%.  When inactive, content fills the whole area.
   let (reader_area, preview_area) = split_content_for_preview(content_area, reader);
-  draw_content(frame, reader, reader_area, t);
+  {
+    let _s = crate::bench::Span::new("draw_content");
+    draw_content(frame, reader, reader_area, t);
+  }
   if let Some(pa) = preview_area {
+    let _s = crate::bench::Span::new("draw_preview_pane");
     draw_preview_pane(frame, reader, pa, t);
   }
-  draw_status(frame, reader, status_area, t);
+  {
+    let _s = crate::bench::Span::new("draw_status");
+    draw_status(frame, reader, status_area, t);
+  }
   if reader.mode == Mode::Search {
     draw_search_bar(frame, reader, search_area.unwrap(), t);
   }

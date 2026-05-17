@@ -52,13 +52,20 @@ pub struct LayoutCache {
 
 impl LayoutCache {
   pub fn rebuild_layout(
-    _reason: LayoutRebuildReason,
+    reason: LayoutRebuildReason,
     blocks: &[Block],
     content_width: usize,
     height: usize,
     text_only: bool,
     external_bibitems: &HashMap<String, String>,
   ) -> Self {
+    let _s = crate::bench::Span::new(match reason {
+      LayoutRebuildReason::Initial => "layout_build_initial",
+      LayoutRebuildReason::Reload => "layout_build_reload",
+      LayoutRebuildReason::Resize => "layout_build_resize",
+      LayoutRebuildReason::TextOnlyToggle => "layout_build_text_only",
+      LayoutRebuildReason::TocToggle => "layout_build_toc_toggle",
+    });
     let visual_lines = build_lines_for(blocks, content_width, height, text_only);
     let sections = build_sections(&visual_lines);
     let (label_lines, mut bib_entries, bib_entry_lines) = build_link_indexes(blocks, &visual_lines);
