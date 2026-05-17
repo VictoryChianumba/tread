@@ -78,33 +78,45 @@ fn parse_anchors(text: &str) -> Vec<TableAnchor> {
   let mut out = Vec::new();
 
   for (idx, line) in lines.iter().enumerate() {
-    if let Some(n) = parse_table_caption_line(line) {
-      if let Some((preview, hash)) = anchor_before(&lines, idx) {
-        out.push(TableAnchor {
-          table_number: n,
-          anchor_fingerprint: hash,
-          anchor_preview: preview,
-        });
-      }
+    if is_table_caption_line(line)
+      && let Some((preview, hash)) = anchor_before(&lines, idx)
+    {
+      // `table_number` is Nth-table-in-source-order rather than the
+      // literal caption number.  Flat-numbered papers (`Table 1:`,
+      // `Table 2:`, ...) yield 1, 2, ... — same as the old behaviour.
+      // Section-numbered papers (GPT-3 with `Table 2.1:`, `Table 2.2:`,
+      // `Table 3.1:`, ...) yield 1, 2, 3, ... — the encounter order
+      // matches the downstream `placement.rs` indexing
+      // (`table_number - 1` into the parsed Matrix groups).
+      out.push(TableAnchor {
+        table_number: out.len() + 1,
+        anchor_fingerprint: hash,
+        anchor_preview: preview,
+      });
     }
   }
   out
 }
 
-/// If `line` begins with `Table N:` (after optional leading whitespace),
-/// return `Some(N)`.  Otherwise `None`.
-fn parse_table_caption_line(line: &str) -> Option<usize> {
+/// True when `line` (after optional leading whitespace) begins with
+/// `Table <digits>(.<digits>)*:` — covers both flat-numbered papers
+/// (`Table 1:`) and section.table-numbered papers (`Table 2.1:`, as
+/// GPT-3 / 2005.14165 uses).  Returns false on `Table 2 shows`,
+/// `Tablet 1:`, `Table: missing number`, and other near-misses.
+fn is_table_caption_line(line: &str) -> bool {
   let trimmed = line.trim_start();
-  let rest = trimmed.strip_prefix("Table ")?;
-  let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-  if digits.is_empty() {
-    return None;
+  let Some(rest) = trimmed.strip_prefix("Table ") else {
+    return false;
+  };
+  // Must start with a digit, then any run of digits and dots, then `:`.
+  if !rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+    return false;
   }
-  let after = &rest[digits.len()..];
-  if !after.starts_with(':') {
-    return None;
-  }
-  digits.parse().ok()
+  rest
+    .chars()
+    .find(|c| !c.is_ascii_digit() && *c != '.')
+    .map(|c| c == ':')
+    .unwrap_or(false)
 }
 
 /// Walk backwards from `idx` skipping blank lines, page numbers, footnote
@@ -222,12 +234,18 @@ mod tests {
   use super::*;
 
   #[test]
-  fn parses_caption_line() {
-    assert_eq!(parse_table_caption_line("Table 1: Maximum path lengths"), Some(1));
-    assert_eq!(parse_table_caption_line("  Table 42: Foo"), Some(42));
-    assert_eq!(parse_table_caption_line("Table 2 summarizes our results"), None);
-    assert_eq!(parse_table_caption_line("Tablet 1: nope"), None);
-    assert_eq!(parse_table_caption_line("Table: missing number"), None);
+  fn detects_caption_line() {
+    // Flat numbering (Attention / most CS papers)
+    assert!(is_table_caption_line("Table 1: Maximum path lengths"));
+    assert!(is_table_caption_line("  Table 42: Foo"));
+    // Section.table numbering (GPT-3 / 2005.14165 and similar)
+    assert!(is_table_caption_line("Table 2.1: Sizes, architectures..."));
+    assert!(is_table_caption_line("Table 3.10.2: deeply nested"));
+    // Negatives
+    assert!(!is_table_caption_line("Table 2 summarizes our results"));
+    assert!(!is_table_caption_line("Tablet 1: nope"));
+    assert!(!is_table_caption_line("Table: missing number"));
+    assert!(!is_table_caption_line("Table 2A: alphanumeric")); // not pure digits/dots
   }
 
   #[test]
@@ -278,7 +296,9 @@ Table 2: The Transformer achieves better BLEU scores
 ";
     let anchors = parse_anchors(text);
     assert_eq!(anchors.len(), 1);
-    assert_eq!(anchors[0].table_number, 2);
+    // table_number is encounter-order (1-based) now, not the literal
+    // caption number — see parse_anchors doc.
+    assert_eq!(anchors[0].table_number, 1);
     assert!(anchors[0].anchor_preview.starts_with("we employ three"));
   }
 
@@ -317,7 +337,32 @@ Table 3: Variations on the Transformer architecture
 ";
     let anchors = parse_anchors(text);
     assert_eq!(anchors.len(), 1);
-    assert_eq!(anchors[0].table_number, 3);
+    assert_eq!(anchors[0].table_number, 1);
     assert!(anchors[0].anchor_preview.starts_with("to evaluate the importance"));
+  }
+
+  #[test]
+  fn section_numbered_captions_use_encounter_order() {
+    // GPT-3-style "Table 2.1:", "Table 2.2:", "Table 3.1:" all flatten
+    // to 1, 2, 3 in source order so the downstream placement step
+    // (`anchor.table_number - 1` into parsed Matrix groups) keeps
+    // working without a parallel mapping table.
+    let text = "\
+First anchor paragraph that mentions the experiment setup
+
+Table 2.1: First section-numbered table
+
+Second anchor paragraph that mentions another experiment
+
+Table 2.2: Second section-numbered table
+
+Third anchor paragraph that mentions a different topic entirely
+
+Table 3.1: Third section-numbered table
+";
+    let anchors = parse_anchors(text);
+    assert_eq!(anchors.len(), 3);
+    let nums: Vec<usize> = anchors.iter().map(|a| a.table_number).collect();
+    assert_eq!(nums, vec![1, 2, 3]);
   }
 }
