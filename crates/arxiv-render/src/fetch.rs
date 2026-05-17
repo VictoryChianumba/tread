@@ -64,11 +64,15 @@ pub fn fetch_source(id: &str) -> Result<FetchedSource, String> {
   Ok(FetchedSource { tex, asset_dir })
 }
 
-/// Per-id asset directory under XDG cache.  Wiped on every fetch so a
-/// re-download always reflects the latest tarball — preventing a
-/// stale figure from a previous version sticking around when the
-/// paper is re-fetched.  Falls back to `$TMPDIR/tread/sources/<id>`
-/// when `HOME` is unset.
+/// Per-id asset directory under XDG cache.  Created if missing, but
+/// NOT wiped on re-runs: extracting fresh files with new mtimes
+/// invalidates the downstream `pdf_to_png` cache (keyed on canonical
+/// path + size + mtime), turning every "warm" run into a full
+/// Poppler-rasterisation pass for every PDF figure.  Stale-asset
+/// concern from a re-fetched paper version is handled in
+/// `write_asset`, which only writes when the destination is absent
+/// or differs in size from the tarball entry.  Falls back to
+/// `$TMPDIR/tread/sources/<id>` when `HOME` is unset.
 fn prepare_asset_dir(id: &str) -> PathBuf {
   let base = if let Some(home) = std::env::var_os("HOME") {
     PathBuf::from(home).join(".cache").join("tread").join("sources")
@@ -76,7 +80,6 @@ fn prepare_asset_dir(id: &str) -> PathBuf {
     std::env::temp_dir().join("tread").join("sources")
   };
   let dir = base.join(id);
-  let _ = std::fs::remove_dir_all(&dir);
   let _ = std::fs::create_dir_all(&dir);
   dir
 }
@@ -199,6 +202,16 @@ fn write_asset(
   }
   let mut buf = Vec::new();
   entry.read_to_end(&mut buf)?;
+  // Skip the write when the destination already exists at the same
+  // size — preserves the inode's mtime so the pdf_to_png cache key
+  // stays valid across reruns.  Size-equality is a strong-enough
+  // signal because arXiv tarballs are deterministic per-(id, version);
+  // a content change ships as a new version with a different tarball.
+  if let Ok(meta) = std::fs::metadata(&dest)
+    && meta.len() == buf.len() as u64
+  {
+    return Ok(());
+  }
   std::fs::write(&dest, &buf)?;
   Ok(())
 }

@@ -178,6 +178,7 @@ pub fn place_visible(reader: &Reader, state: &mut ImageState, content_area: Rect
   if !supported {
     return;
   }
+  let _span = crate::bench::Span::new("place_visible");
   poll_ready(state);
 
   // Expire stale negative-load entries so a file that became readable
@@ -800,6 +801,7 @@ fn ensure_image_bytes(
 /// in `ImageState.bytes` per-session.  GIFs and other formats remain
 /// unsupported until a paper actually contains one.
 fn resolve_png(path: &Path) -> std::io::Result<Vec<u8>> {
+  let _span = crate::bench::Span::new("image_resolve_png");
   let ext = path
     .extension()
     .and_then(|s| s.to_str())

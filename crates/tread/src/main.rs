@@ -1,6 +1,8 @@
 use std::path::Path;
 
 fn main() {
+  tread::bench::init();
+  tread::bench::emit_us("startup_main_entered", 0);
   let arg = std::env::args().nth(1).unwrap_or_default();
   if arg.is_empty() {
     eprintln!(

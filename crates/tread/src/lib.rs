@@ -1,3 +1,4 @@
+pub mod bench;
 mod bookmarks;
 mod commands;
 mod config;
@@ -277,22 +278,34 @@ pub fn extract_arxiv_id(url_or_id: &str) -> Option<String> {
 pub fn fetch_paper(id: &str, kitty_supported: bool) -> Result<PaperData, String> {
   use arxiv_render::{fetch, parse, pdf_anchors, placement};
 
-  let fetched = fetch::fetch_source(id)?;
+  let fetched = bench::time("fetch_source", || fetch::fetch_source(id))?;
   let sources = fetched.tex;
   let asset_dir = fetched.asset_dir;
-  let bibitems = arxiv_render::extract_bibitems(&sources);
-  let mut blocks = parse::to_blocks(sources);
+  let bibitems = bench::time("extract_bibitems", || {
+    arxiv_render::extract_bibitems(&sources)
+  });
+  let mut blocks = bench::time("parse_to_blocks", || parse::to_blocks(sources));
   if kitty_supported {
-    arxiv_render::absolutize_image_paths(&mut blocks, &asset_dir);
+    bench::time("absolutize_image_paths", || {
+      arxiv_render::absolutize_image_paths(&mut blocks, &asset_dir)
+    });
   } else {
     arxiv_render::degrade_images_to_captions(&mut blocks);
   }
   // Best-effort PDF anchor extraction; failures leave blocks in source order.
-  let anchors = match fetch::fetch_pdf(id) {
-    Ok(pdf) => pdf_anchors::extract_anchors(&pdf),
+  let anchors = match bench::time("fetch_pdf", || fetch::fetch_pdf(id)) {
+    Ok(pdf) => bench::time("extract_anchors", || pdf_anchors::extract_anchors(&pdf)),
     Err(_) => Vec::new(),
   };
-  let blocks = placement::lift_tables(blocks, &anchors);
+  let blocks = bench::time("lift_tables", || placement::lift_tables(blocks, &anchors));
+  bench::emit_fields(
+    "fetch_paper_done",
+    &[
+      ("blocks", blocks.len() as i64),
+      ("bibitems", bibitems.len() as i64),
+      ("anchors", anchors.len() as i64),
+    ],
+  );
   Ok(PaperData {
     blocks,
     bibitems,
@@ -379,7 +392,8 @@ pub fn run_with_theme(
   let (reader, result) = runtime.run(&mut terminal);
 
   // Persist reading progress, bookmarks, and highlights on clean exit.
-  reader.save_progress();
+  bench::time("shutdown_save", || reader.save_progress());
+  bench::dump_summary();
 
   // Balance the keyboard-enhancement push.  Ignored on terminals
   // that didn't accept it.
@@ -968,6 +982,8 @@ struct ReaderRuntime {
   theme: Theme,
   kitty_supported: bool,
   dirty: DirtyState,
+  first_draw_done: bool,
+  pending_event_start: Option<std::time::Instant>,
 }
 
 impl ReaderRuntime {
@@ -978,6 +994,8 @@ impl ReaderRuntime {
       theme,
       kitty_supported,
       dirty: DirtyState::all(),
+      first_draw_done: false,
+      pending_event_start: None,
     }
   }
 
@@ -996,11 +1014,35 @@ impl ReaderRuntime {
     &mut self,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
   ) -> Result<(), Box<dyn std::error::Error>> {
+    // TREAD_BENCH_AUTOQUIT=<secs>: clean exit after N seconds so
+    // cold/warm benchmark runs terminate deterministically without
+    // manual `:q`.
+    let autoquit_deadline = std::env::var("TREAD_BENCH_AUTOQUIT")
+      .ok()
+      .and_then(|s| s.parse::<f64>().ok())
+      .map(|secs| std::time::Instant::now() + Duration::from_secs_f64(secs));
+
     loop {
       self.draw_if_dirty(terminal)?;
 
+      if let Some(deadline) = autoquit_deadline
+        && std::time::Instant::now() >= deadline
+      {
+        bench::emit_us("autoquit", 0);
+        break;
+      }
+
       if event::poll(self.poll_timeout())? {
         let ev = event::read()?;
+        // Per-event latency: start clock when the event arrives;
+        // stop at the end of the next draw_if_dirty.  Skip mouse
+        // motion so trackpad spam doesn't dominate the histogram.
+        if matches!(
+          &ev,
+          Event::Key(_) | Event::Resize(_, _) | Event::FocusLost | Event::FocusGained
+        ) {
+          self.pending_event_start = Some(std::time::Instant::now());
+        }
         let update = self.handle_event(ev);
         self.apply_update(update);
         if update.quit {
@@ -1022,6 +1064,7 @@ impl ReaderRuntime {
     if !self.dirty.any() {
       return Ok(());
     }
+    let frame_start = std::time::Instant::now();
     let mut drawn_area = Rect::default();
     terminal.draw(|f| {
       drawn_area = f.area();
@@ -1040,6 +1083,17 @@ impl ReaderRuntime {
       );
     }
     self.dirty.clear_after_draw();
+
+    let frame_us = frame_start.elapsed().as_micros().min(u32::MAX as u128) as u32;
+    bench::record_frame(frame_us);
+    if let Some(t0) = self.pending_event_start.take() {
+      let lat = t0.elapsed().as_micros().min(u32::MAX as u128) as u32;
+      bench::record_event_to_frame(lat);
+    }
+    if !self.first_draw_done {
+      self.first_draw_done = true;
+      bench::emit_us("startup_to_interactive", 0);
+    }
     Ok(())
   }
 
