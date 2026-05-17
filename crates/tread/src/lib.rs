@@ -278,38 +278,52 @@ pub fn extract_arxiv_id(url_or_id: &str) -> Option<String> {
 pub fn fetch_paper(id: &str, kitty_supported: bool) -> Result<PaperData, String> {
   use arxiv_render::{fetch, parse, pdf_anchors, placement};
 
-  let fetched = bench::time("fetch_source", || fetch::fetch_source(id))?;
-  let sources = fetched.tex;
-  let asset_dir = fetched.asset_dir;
-  let bibitems = bench::time("extract_bibitems", || {
-    arxiv_render::extract_bibitems(&sources)
-  });
-  let mut blocks = bench::time("parse_to_blocks", || parse::to_blocks(sources));
-  if kitty_supported {
-    bench::time("absolutize_image_paths", || {
-      arxiv_render::absolutize_image_paths(&mut blocks, &asset_dir)
+  // The source tarball and the rendered PDF are independent HTTPS GETs
+  // against arxiv.org — only `lift_tables` (the final step) needs both
+  // results.  Spawn the PDF fetch on its own thread so its ~3-4s of
+  // network latency overlaps the source download, parse, and image-path
+  // absolutisation rather than running after them.  Total network phase
+  // drops from sum to max.  arXiv tolerates the two-concurrent-request
+  // pattern; trench's openreview audit hit the same shape.
+  std::thread::scope(|s| {
+    let pdf_handle = s.spawn(|| bench::time("fetch_pdf", || fetch::fetch_pdf(id)));
+    let fetched = bench::time("fetch_source", || fetch::fetch_source(id))?;
+    let sources = fetched.tex;
+    let asset_dir = fetched.asset_dir;
+    let bibitems = bench::time("extract_bibitems", || {
+      arxiv_render::extract_bibitems(&sources)
     });
-  } else {
-    arxiv_render::degrade_images_to_captions(&mut blocks);
-  }
-  // Best-effort PDF anchor extraction; failures leave blocks in source order.
-  let anchors = match bench::time("fetch_pdf", || fetch::fetch_pdf(id)) {
-    Ok(pdf) => bench::time("extract_anchors", || pdf_anchors::extract_anchors(&pdf)),
-    Err(_) => Vec::new(),
-  };
-  let blocks = bench::time("lift_tables", || placement::lift_tables(blocks, &anchors));
-  bench::emit_fields(
-    "fetch_paper_done",
-    &[
-      ("blocks", blocks.len() as i64),
-      ("bibitems", bibitems.len() as i64),
-      ("anchors", anchors.len() as i64),
-    ],
-  );
-  Ok(PaperData {
-    blocks,
-    bibitems,
-    asset_dir,
+    let mut blocks = bench::time("parse_to_blocks", || parse::to_blocks(sources));
+    if kitty_supported {
+      bench::time("absolutize_image_paths", || {
+        arxiv_render::absolutize_image_paths(&mut blocks, &asset_dir)
+      });
+    } else {
+      arxiv_render::degrade_images_to_captions(&mut blocks);
+    }
+    // Best-effort PDF anchor extraction; thread panic or HTTP failure
+    // leaves blocks in source order.
+    let pdf_result = pdf_handle
+      .join()
+      .unwrap_or_else(|_| Err("pdf fetch thread panicked".to_string()));
+    let anchors = match pdf_result {
+      Ok(pdf) => bench::time("extract_anchors", || pdf_anchors::extract_anchors(&pdf)),
+      Err(_) => Vec::new(),
+    };
+    let blocks = bench::time("lift_tables", || placement::lift_tables(blocks, &anchors));
+    bench::emit_fields(
+      "fetch_paper_done",
+      &[
+        ("blocks", blocks.len() as i64),
+        ("bibitems", bibitems.len() as i64),
+        ("anchors", anchors.len() as i64),
+      ],
+    );
+    Ok(PaperData {
+      blocks,
+      bibitems,
+      asset_dir,
+    })
   })
 }
 
