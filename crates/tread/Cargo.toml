@@ -11,6 +11,15 @@ path = "src/lib.rs"
 name = "tread"
 path = "src/main.rs"
 
+[features]
+# Voice playback via rodio (cpal + symphonia + lewton + ...).
+# Default-on: standalone tread CLI users and trench both pick it up
+# automatically.  Opt out with `default-features = false` (or
+# `--no-default-features`) when the audio stack isn't wanted — saves
+# ~500 KB-1 MB of binary by dropping rodio's decoder pyramid.
+default = ["voice"]
+voice = ["dep:rodio"]
+
 [dependencies]
 doc-model = { path = "../doc-model" }
 arxiv-render = { path = "../arxiv-render" }
@@ -40,8 +49,9 @@ epub = "2.1"
 # flattened to plain text.
 scraper = "0.20"
 ego-tree = "0.6"
-# Voice / TTS subsystem.
-rodio = "0.19"
+# Voice / TTS subsystem.  Gated by the `voice` feature so non-voice
+# builds can shed rodio + cpal + symphonia (~500 KB-1 MB).
+rodio = { version = "0.19", optional = true }
 # HTTP for fetch_any (auto-format URL fetch) and ElevenLabs voice
 # synthesis.  Sharing reqwest with arxiv-render lets cargo dedupe the
 # HTTP/TLS stack into a single copy (~150 KiB binary) instead of

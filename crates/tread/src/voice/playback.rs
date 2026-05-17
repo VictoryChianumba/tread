@@ -143,6 +143,7 @@ impl Drop for PlaybackController {
 // Background playback loop
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "voice")]
 fn playback_loop(
   provider: Box<dyn TtsProvider>,
   cmd_rx: Receiver<PlaybackCommand>,
@@ -321,6 +322,27 @@ fn playback_loop(
         *session.lock().unwrap_or_else(|e| e.into_inner()) = None;
       }
       PlaybackCommand::Pause | PlaybackCommand::Resume => {}
+    }
+  }
+}
+
+/// No-rodio playback loop used when the `voice` feature is off.
+/// Accepts and drains commands so the channel doesn't fill, but never
+/// touches an audio backend.  A Start surfaces a user-visible error
+/// once per request rather than panicking or silently doing nothing.
+#[cfg(not(feature = "voice"))]
+fn playback_loop(
+  _provider: Box<dyn TtsProvider>,
+  cmd_rx: Receiver<PlaybackCommand>,
+  _status: Arc<Mutex<PlaybackStatus>>,
+  error: Arc<Mutex<Option<String>>>,
+  _playing_info: Arc<Mutex<Option<VoicePlayingInfo>>>,
+  _session: Arc<Mutex<Option<u64>>>,
+) {
+  for cmd in cmd_rx.iter() {
+    if matches!(cmd, PlaybackCommand::Start { .. }) {
+      *error.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some("voice not compiled in (build with --features voice)".to_string());
     }
   }
 }
