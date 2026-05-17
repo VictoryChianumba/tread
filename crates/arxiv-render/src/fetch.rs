@@ -1,10 +1,18 @@
 use flate2::read::GzDecoder;
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tar::Archive;
 
 const MAX_SOURCE_BYTES: usize = 50 * 1024 * 1024; // 50 MB
-const MAX_PDF_BYTES: usize = 30 * 1024 * 1024; // 30 MB — typical paper PDFs are 1–5 MB
+// Originally 30 MB on the rationale that "typical paper PDFs are 1-5 MB",
+// but modern ML papers with embedded figures routinely cross 30 MB —
+// 2605.04035 ships a 34 MB PDF.  When the cap fires the anchor-extraction
+// path silently fails (best-effort), and worse: the cache never gets
+// written, so every run pays the network cost.  Symmetric with
+// MAX_SOURCE_BYTES so a paper with a working tarball almost always has
+// a working PDF too.
+const MAX_PDF_BYTES: usize = 50 * 1024 * 1024;
 const TIMEOUT_SECS: u64 = 30;
 
 /// Image / asset extensions we lift out of the source tarball alongside
@@ -33,32 +41,7 @@ pub struct FetchedSource {
 /// without those figures.
 pub fn fetch_source(id: &str) -> Result<FetchedSource, String> {
   let url = format!("https://arxiv.org/e-print/{id}");
-
-  let client = reqwest::blocking::Client::builder()
-    .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-    .build()
-    .map_err(|e| format!("failed to build HTTP client: {e}"))?;
-
-  let resp = client
-    .get(&url)
-    .send()
-    .map_err(|e| format!("request failed: {e}"))?;
-
-  if !resp.status().is_success() {
-    return Err(format!("HTTP {}: {url}", resp.status()));
-  }
-
-  // Read response bytes up to the cap.
-  let mut bytes = Vec::new();
-  let reader = resp
-    .bytes()
-    .map_err(|e| format!("failed to read response: {e}"))?;
-  // reqwest bytes() returns the full Bytes object — convert and cap.
-  if reader.len() > MAX_SOURCE_BYTES {
-    return Err(format!("source too large: {} bytes", reader.len()));
-  }
-  bytes.extend_from_slice(&reader);
-
+  let bytes = cached_fetch(&url, &format!("{id}.tar.gz"), MAX_SOURCE_BYTES)?;
   let asset_dir = prepare_asset_dir(id);
   let tex = extract_tex_files(&bytes, &asset_dir)?;
   Ok(FetchedSource { tex, asset_dir })
@@ -92,28 +75,142 @@ fn prepare_asset_dir(id: &str) -> PathBuf {
 /// Returns `Err` on network failure, non-2xx status, or oversize response.
 pub fn fetch_pdf(id: &str) -> Result<Vec<u8>, String> {
   let url = format!("https://arxiv.org/pdf/{id}");
+  cached_fetch(&url, &format!("{id}.pdf"), MAX_PDF_BYTES)
+}
+
+/// Disk-backed conditional HTTP GET.
+///
+/// On warm runs, sends `If-None-Match: <cached ETag>`.  If the server
+/// returns 304 Not Modified, we read the body from disk — saving the
+/// full payload transfer (~7-10s for tarballs on slow links, ~3s for
+/// PDFs).  arXiv serves stable ETags for both e-print and pdf URLs;
+/// when a paper revises, the ETag flips and we re-download.  On
+/// network failure we silently fall back to the cached body if any —
+/// the reader stays usable offline once a paper has been opened once.
+///
+/// Cache layout under `~/.cache/tread/raw/`:
+///   `<basename>`      — the response body bytes
+///   `<basename>.etag` — the ETag string for conditional revalidation
+///
+/// Writes use the .tmp + rename pattern so a crash mid-write doesn't
+/// produce a truncated cache file on disk.
+///
+/// TREAD_REFRESH=1 in env forces a full fetch (skips the conditional
+/// header) so users can pull a new version of a paper without having
+/// to find and delete the cache file by hand.
+fn cached_fetch(url: &str, basename: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+  let force_refresh = std::env::var_os("TREAD_REFRESH").is_some();
+  let cache_dir = raw_cache_dir();
+  let body_path = cache_dir.as_ref().map(|d| d.join(basename));
+  let etag_path = cache_dir
+    .as_ref()
+    .map(|d| d.join(format!("{basename}.etag")));
 
   let client = reqwest::blocking::Client::builder()
     .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
     .build()
     .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
-  let resp = client
-    .get(&url)
-    .send()
-    .map_err(|e| format!("PDF request failed: {e}"))?;
+  let mut req = client.get(url);
+  let have_cached_body = body_path.as_ref().is_some_and(|p| p.exists());
+  if !force_refresh
+    && have_cached_body
+    && let Some(ref ep) = etag_path
+    && let Ok(stored) = std::fs::read_to_string(ep)
+  {
+    let trimmed = stored.trim().to_string();
+    if !trimmed.is_empty() {
+      req = req.header(reqwest::header::IF_NONE_MATCH, trimmed);
+    }
+  }
+
+  let resp = match req.send() {
+    Ok(r) => r,
+    Err(e) => {
+      // Offline-tolerant fallback: serve cached body if present.
+      if let Some(ref p) = body_path
+        && let Ok(b) = std::fs::read(p)
+        && b.len() <= max_bytes
+      {
+        return Ok(b);
+      }
+      return Err(format!("request failed: {e}"));
+    }
+  };
+
+  if resp.status().as_u16() == 304
+    && let Some(ref p) = body_path
+    && let Ok(b) = std::fs::read(p)
+  {
+    return Ok(b);
+  }
 
   if !resp.status().is_success() {
+    // 5xx / 429 / etc. — same fallback as network failure: prefer
+    // stale data over no data.
+    if let Some(ref p) = body_path
+      && let Ok(b) = std::fs::read(p)
+      && b.len() <= max_bytes
+    {
+      return Ok(b);
+    }
     return Err(format!("HTTP {}: {url}", resp.status()));
   }
 
+  let new_etag = resp
+    .headers()
+    .get(reqwest::header::ETAG)
+    .and_then(|v| v.to_str().ok())
+    .map(str::to_owned);
   let bytes = resp
     .bytes()
-    .map_err(|e| format!("failed to read PDF response: {e}"))?;
-  if bytes.len() > MAX_PDF_BYTES {
-    return Err(format!("PDF too large: {} bytes", bytes.len()));
+    .map_err(|e| format!("failed to read response: {e}"))?;
+  if bytes.len() > max_bytes {
+    return Err(format!("response too large: {} bytes", bytes.len()));
   }
-  Ok(bytes.to_vec())
+  let bytes = bytes.to_vec();
+
+  if let (Some(body), Some(etag_p)) = (&body_path, &etag_path) {
+    if let Some(parent) = body.parent() {
+      let _ = std::fs::create_dir_all(parent);
+    }
+    let body_tmp = append_ext(body, ".tmp");
+    if std::fs::write(&body_tmp, &bytes).is_ok() {
+      let _ = std::fs::rename(&body_tmp, body);
+    }
+    if let Some(etag_value) = new_etag {
+      let etag_tmp = append_ext(etag_p, ".tmp");
+      if std::fs::write(&etag_tmp, &etag_value).is_ok() {
+        let _ = std::fs::rename(&etag_tmp, etag_p);
+      }
+    }
+  }
+
+  Ok(bytes)
+}
+
+fn raw_cache_dir() -> Option<PathBuf> {
+  std::env::var_os("HOME").map(|h| {
+    PathBuf::from(h)
+      .join(".cache")
+      .join("tread")
+      .join("raw")
+  })
+}
+
+/// Append `suffix` to a path's final component without `with_extension`'s
+/// "replace the last extension" semantics — we want `foo.tar.gz` →
+/// `foo.tar.gz.tmp`, not `foo.tar.tmp`.
+fn append_ext(path: &Path, suffix: &str) -> PathBuf {
+  let mut name = path
+    .file_name()
+    .map(OsString::from)
+    .unwrap_or_default();
+  name.push(suffix);
+  path
+    .parent()
+    .map(|p| p.join(&name))
+    .unwrap_or_else(|| PathBuf::from(&name))
 }
 
 fn extract_tex_files(bytes: &[u8], asset_dir: &Path) -> Result<Vec<(String, String)>, String> {
