@@ -151,19 +151,33 @@ fn playback_loop(
   playing_info: Arc<Mutex<Option<VoicePlayingInfo>>>,
   session: Arc<Mutex<Option<u64>>>,
 ) {
-  let (_stream, handle) = match rodio::OutputStream::try_default() {
-    Ok(r) => r,
-    Err(e) => {
-      *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("Audio init failed: {e}"));
-      return;
-    }
-  };
+  // Lazy audio init.  Creating an `OutputStream` spins up a cpal
+  // playback thread (a real OS thread that wakes for buffer fills)
+  // and opens the default audio device — work that's pure overhead
+  // for the common case where the user never invokes voice mode.
+  // Build it on the first Start command instead, reuse for the
+  // remaining lifetime of the playback thread.  If init fails we
+  // surface the error and `continue` rather than tearing down the
+  // whole loop, so a later Start with the audio system fixed can
+  // still succeed.
+  let mut output: Option<(rodio::OutputStream, rodio::OutputStreamHandle)> = None;
 
   for cmd in cmd_rx.iter() {
     match cmd {
       // ------------------------------------------------------------------ //
       PlaybackCommand::Start { text, doc_start_line, doc_end_line, session_id: my_session } => {
-        let sink = match rodio::Sink::try_new(&handle) {
+        if output.is_none() {
+          match rodio::OutputStream::try_default() {
+            Ok(r) => output = Some(r),
+            Err(e) => {
+              *error.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(format!("Audio init failed: {e}"));
+              continue;
+            }
+          }
+        }
+        let handle = &output.as_ref().expect("output just set").1;
+        let sink = match rodio::Sink::try_new(handle) {
           Ok(s) => s,
           Err(e) => {
             *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("Audio sink error: {e}"));
