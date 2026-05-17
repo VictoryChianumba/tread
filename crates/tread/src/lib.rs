@@ -998,6 +998,15 @@ struct ReaderRuntime {
   dirty: DirtyState,
   first_draw_done: bool,
   pending_event_start: Option<std::time::Instant>,
+  // Wall-clock of the most recent user-driven event (key / mouse /
+  // resize / focus).  Drives the idle-poll cadence in `poll_timeout`:
+  // if more than IDLE_THRESHOLD has passed without input, we drop the
+  // poll timeout from 16ms (60 wakeups/s, ~zero-latency redraw) to
+  // 250ms (4 wakeups/s) so a paper open in the background doesn't
+  // burn battery.  The next keypress pays at most one idle-poll cycle
+  // of input latency — acceptable cost for an order-of-magnitude
+  // wakeup reduction during long reading sessions.
+  last_input_at: Option<std::time::Instant>,
 }
 
 impl ReaderRuntime {
@@ -1010,6 +1019,7 @@ impl ReaderRuntime {
       dirty: DirtyState::all(),
       first_draw_done: false,
       pending_event_start: None,
+      last_input_at: None,
     }
   }
 
@@ -1076,6 +1086,16 @@ impl ReaderRuntime {
 
       if event::poll(self.poll_timeout())? {
         let ev = event::read()?;
+        // Refresh idle clock on every real input.  Keeps the poll
+        // cadence at the snappy 16ms tier while the user is active;
+        // we drop to 250ms after IDLE_THRESHOLD of silence (see
+        // `poll_timeout`).
+        if matches!(
+          &ev,
+          Event::Key(_) | Event::Mouse(_) | Event::Resize(_, _)
+        ) {
+          self.last_input_at = Some(std::time::Instant::now());
+        }
         // Per-event latency: start clock when the event arrives;
         // stop at the end of the next draw_if_dirty.  Skip mouse
         // motion so trackpad spam doesn't dominate the histogram.
@@ -1140,17 +1160,31 @@ impl ReaderRuntime {
   }
 
   fn poll_timeout(&self) -> Duration {
+    // After this much silence we assume the reader is parked and
+    // drop poll cadence from 16ms to 250ms.  Under that, every key
+    // still drives a redraw within one poll cycle of receipt; the
+    // worst-case input latency on resume is the idle timeout itself,
+    // ~250ms.
+    const IDLE_THRESHOLD: Duration = Duration::from_secs(1);
+    const IDLE_POLL: Duration = Duration::from_millis(250);
+    const ACTIVE_POLL: Duration = Duration::from_millis(16);
+
     if self.dirty.any() {
       Duration::ZERO
     } else if images::has_pending_jobs(&self.img_state) {
-      Duration::from_millis(16)
+      ACTIVE_POLL
     } else if matches!(
       self.reader.voice_status,
       voice::PlaybackStatus::Playing | voice::PlaybackStatus::Loading
     ) {
       Duration::from_millis(33)
+    } else if self
+      .last_input_at
+      .is_none_or(|t| t.elapsed() > IDLE_THRESHOLD)
+    {
+      IDLE_POLL
     } else {
-      Duration::from_millis(16)
+      ACTIVE_POLL
     }
   }
 
