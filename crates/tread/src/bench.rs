@@ -143,6 +143,13 @@ pub fn record_event_to_frame(us: u32) {
     emit_fields("event_to_frame", &[("us", us as i64)]);
 }
 
+/// Frames over this threshold also emit a separate `slow_frame` event
+/// so a future regression that pushes a frame past the TUI budget shows
+/// up in the JSONL stream immediately, without waiting for the
+/// shutdown summary.  16ms matches the 60 FPS budget; below this the
+/// percentile summary catches drift.
+const SLOW_FRAME_THRESHOLD_US: u32 = 16_000;
+
 /// Record a single frame duration (terminal.draw + after_draw).
 pub fn record_frame(us: u32) {
     if let Some(st) = state()
@@ -151,6 +158,9 @@ pub fn record_frame(us: u32) {
         s.frame_us.push(us);
     }
     emit_fields("frame", &[("us", us as i64)]);
+    if us >= SLOW_FRAME_THRESHOLD_US {
+        emit_fields("slow_frame", &[("us", us as i64)]);
+    }
 }
 
 fn percentile(sorted: &[u32], p: f64) -> u32 {
