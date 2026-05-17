@@ -596,22 +596,23 @@ pub fn fetch_any(url: &str) -> Result<PaperData, String> {
     .and_then(|e| e.to_str())
     .map(|e| e.to_ascii_lowercase());
 
-  // 3. Fetch the body.  ureq's call() returns Err for non-2xx, so
-  // we propagate that as a clean error string.
-  let resp = ureq::get(url)
-    .call()
-    .map_err(|e| format!("fetch {url}: {e}"))?;
+  // 3. Fetch the body.  reqwest's send() doesn't error on non-2xx
+  // (unlike ureq's call), so we surface that explicitly.
+  let resp = reqwest::blocking::get(url).map_err(|e| format!("fetch {url}: {e}"))?;
+  if !resp.status().is_success() {
+    return Err(format!("fetch {url}: HTTP {}", resp.status()));
+  }
   let content_type = resp
-    .header("content-type")
+    .headers()
+    .get(reqwest::header::CONTENT_TYPE)
+    .and_then(|v| v.to_str().ok())
     .unwrap_or("")
     .to_ascii_lowercase();
 
-  let mut bytes: Vec<u8> = Vec::new();
-  use std::io::Read;
-  resp
-    .into_reader()
-    .read_to_end(&mut bytes)
-    .map_err(|e| format!("read body of {url}: {e}"))?;
+  let bytes = resp
+    .bytes()
+    .map_err(|e| format!("read body of {url}: {e}"))?
+    .to_vec();
 
   // 4. Pick a parser based on extension first, then Content-Type,
   // then fall through to HTML.

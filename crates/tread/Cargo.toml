@@ -42,7 +42,13 @@ scraper = "0.20"
 ego-tree = "0.6"
 # Voice / TTS subsystem.
 rodio = "0.19"
-ureq = { version = "2.12", features = ["json"] }
+# HTTP for fetch_any (auto-format URL fetch) and ElevenLabs voice
+# synthesis.  Sharing reqwest with arxiv-render lets cargo dedupe the
+# HTTP/TLS stack into a single copy (~150 KiB binary) instead of
+# linking both reqwest and ureq.  Features kept narrow: blocking is
+# all the call sites need; `json` enables RequestBuilder::json for
+# the ElevenLabs request body.
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 # JPEG decode → PNG re-encode for the Kitty image loader. Default
 # features disabled: we only need jpeg + png codecs. Memory cost is
 # bounded by the largest figure in the visible window; bytes are
