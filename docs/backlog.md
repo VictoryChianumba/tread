@@ -27,28 +27,33 @@ Last revalidation: **2026-05-18**.
 | **#1** Reader public surface — Seam 3 (voice) | `voice_control.rs` moved into `state/`; 10 voice fields private | `db741fe` |
 | **#1** Reader public surface — Seam 4 (bookmarks) | `state/bookmarks.rs` owns marks; storage moved to block-byte addressing; reflow-survival regression test | `945eb3b` |
 | **D1** Persistence files silently reset on parse error | New `persist::load_json` helper renames corrupt files to `<name>.corrupt-<unix-ts>` before returning Default; eprintln warning. Applied to progress / bookmarks / highlights / config. | `1e7f690` |
-| **C1** Text slicing on non-UTF-8 char boundary | `clamp_to_char_boundary` snaps highlight / search range endpoints before slicing; pre-fix the affected segment was silently dropped. Three regression tests cover multi-byte cases. | _this commit_ |
-| **C5** `fetch_any` had no timeout / redirect cap / body cap | Built a `reqwest::blocking::Client` with 30s timeout, 10-redirect limit; capped body at 64 MB via `Read::take`. | _this commit_ |
-| **C6** Render array indexing race | `&reader.visual_lines[vl_idx]` switched to `.get(vl_idx)` with a blank-line fallback — defends against future refactors of `total_lines` decoupling from `visual_lines.len()`. | _this commit_ |
-| **C7** Lock poisoning recovery didn't clear poison | New `MutexExt::lock_clearing_poison` calls `Mutex::clear_poison()` after recovering the guard; bulk-migrated 21 sites in `voice/playback.rs`. | _this commit_ |
+| **C1** Text slicing on non-UTF-8 char boundary | `clamp_to_char_boundary` snaps highlight / search range endpoints before slicing; pre-fix the affected segment was silently dropped. Three regression tests cover multi-byte cases. | `d1db8e1` |
+| **C5** `fetch_any` had no timeout / redirect cap / body cap | Built a `reqwest::blocking::Client` with 30s timeout, 10-redirect limit; capped body at 64 MB via `Read::take`. | `d1db8e1` |
+| **C6** Render array indexing race | `&reader.visual_lines[vl_idx]` switched to `.get(vl_idx)` with a blank-line fallback — defends against future refactors of `total_lines` decoupling from `visual_lines.len()`. | `d1db8e1` |
+| **C7** Lock poisoning recovery didn't clear poison | New `MutexExt::lock_clearing_poison` calls `Mutex::clear_poison()` after recovering the guard; bulk-migrated 21 sites in `voice/playback.rs`. | `d1db8e1` |
+| **ADR-0002 follow-up** Preview geometry invalidation discipline | `Reader::rebuild_layout` now clears `last_geometry` unconditionally — auto-invalidates on every resize / reload / text-only / TOC toggle. | _this commit_ |
 
-The resilience cluster is closed.  Remaining open items are
-parser/rendering (B*) and trench integration (A*); those need
-papers / a separate repo audit respectively.
+The resilience cluster and the actionable ADR follow-ups are closed.
+What's left below is explicitly deferred — each item has a blocker
+that this session can't satisfy.  Future picks should re-read the
+blocker note before reopening, in case it's resolved (e.g. a real
+test paper for B5/B6, or a trench-repo audit pass for A*).
 
-## Open — parser / rendering
+## Deferred — parser / rendering
 
-| # | Item | Location |
+| # | Item | Blocker |
 |---|---|---|
-| **B3a** | `\bibliography{file.bib}` external BibTeX — Pandoc doesn't expand without `--citeproc`; needs a BibTeX file reader stage | `arxiv-render/src/fetch.rs` + new stage |
-| **B5** | Tables don't highlight best-result cells | `pandoc_parse.rs` + `doc-model::Block::Matrix` cell shape |
-| **B6** | Some tables structurally wrong when `take_matching_spec` falls back to default | `pandoc_parse::take_matching_spec` |
-| **B8** | Image rendering edge cases on standalone tread (image-emit corruption / AAAA walls) — needs reclassification per May 2026 note; image subsystem changed substantially since the audit | `tread/src/images/` |
+| **B3a** | `\bibliography{file.bib}` external BibTeX — Pandoc doesn't expand without `--citeproc`; needs a BibTeX file reader stage | New `arxiv-render` fetch stage; needs a test paper that uses the external-bib form (most arXiv papers inline `\bibitem`) |
+| **B5** | Tables don't highlight best-result cells | Feature, not a bug — no spec; need a paper with a clearly-marked best-result table to anchor the design |
+| **B6** | Some tables structurally wrong when `take_matching_spec` falls back to default | Need a paper that triggers the fallback so the corruption is reproducible; audit didn't capture an example |
+| **B8** | Image rendering edge cases on standalone tread (image-emit corruption / AAAA walls) | Audit explicitly flags "needs reclassification" — the image subsystem changed materially in `6332f7f`; re-audit before fixing |
 
-## Open — trench integration (A-series)
+## Deferred — trench integration (A-series)
 
 Not revalidated since May 2026. A separate audit pass in the
-`trench` repo is needed before scheduling.
+`trench` repo is required before any of these can be closed —
+the fixes live in `trench`'s tread-binding code, not in `tread`
+itself.
 
 | # | Item |
 |---|---|
@@ -58,37 +63,32 @@ Not revalidated since May 2026. A separate audit pass in the
 | **A4** | `theme_for_tread()` hardcodes dark-theme `bg_highlight` + `link_fg` |
 | **A5** | Popup reader hardcodes `kitty_supported = false` |
 
-## Open — ADR-level follow-ups
+## Deferred — ADR-level follow-ups
 
-Each ADR's `Open follow-up` section lists smaller loose ends. The
-notable ones:
-
-- **ADR-0001:** Pandoc figure extraction *was* deepened this session
-  into `pandoc_parse/figure.rs`. ✓ Remaining: the fallback hand-rolled
-  parser doesn't emit `column_gaps_after` or `header_rows`; figures
-  degrade to a flat grid when Pandoc is absent.
-- **ADR-0002:** `FigurePreviewState::last_geometry` invalidation
-  relies on call-site discipline; a stale geometry after a layout
-  rebuild could mis-place once. User-visible damage is one frame at
-  worst; seam is worth tightening eventually.
-- **ADR-0003:** Split private implementation modules behind
-  `ImageState` *was* done this session (`inline`, `preview`,
-  `worker`, `png`). ✓ Remaining: capability re-detection on focus
-  regained (detached/reattached tmux); investigation of iTerm2's
-  native inline-image protocol vs its Kitty emulation for our
-  payload sizes.
+- **ADR-0001:** The fallback hand-rolled parser doesn't emit
+  `Block::Figure`; figures degrade to a `[Figure: caption]` text
+  line when Pandoc is absent. Closing this requires lifting tabular
+  parsing into the hand-rolled path — substantial scope expansion.
+  **Blocker:** acceptable as-is since Pandoc is the recommended
+  path; defer until the fallback becomes load-bearing.
+- **ADR-0003:** Two follow-ups remain. Investigating iTerm2's
+  native inline-image protocol vs Kitty emulation needs a benchmark
+  setup; capability re-detection on focus regained needs a real
+  tmux-detach scenario to validate against the UX cost (extra query
+  escape per focus event). **Blocker:** both need terminal-specific
+  benchmarking environments.
 
 ## How to use this document
 
-- When picking up: scan **Open — resilience** for bug-fix work,
-  **Open — parser** for feature work, **Open — trench integration**
-  for cross-repo work.  (Architecture refactor is closed: ADR-0004's
-  four-seam plan landed in commits `5f6312c` / `984b86c` / `db741fe`
-  / `945eb3b`.)
-- When closing items: move the row from the open table to the
+- When picking up: scan **Deferred — parser / rendering** for feature
+  work, **Deferred — trench integration** for cross-repo work.  The
+  architecture refactor (ADR-0004 four-seam plan) and the resilience
+  cluster (D1, C1, C5, C6, C7) are closed.
+- When closing items: move the row from the deferred table to the
   **Recently resolved** table with the commit ref. If an item is
   large enough to need a design doc, open a new ADR and link it from
   the row.
 - When revalidating: bump the "Last revalidation" date and re-spot-
-  check each open item against current code. The May 2026 note in
-  AUDIT.md is the prior example of how to do this.
+  check each deferred item against current code AND the stated
+  blocker — a blocker may have been resolved out-of-band (e.g. a
+  new test paper surfaced for B5).

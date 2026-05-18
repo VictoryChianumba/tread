@@ -199,13 +199,17 @@ and clean shutdown — but internal paths use the split methods.
 
 ## Open follow-up
 
-- Split private implementation modules behind `ImageState` (worker,
-  byte loading, PNG normalize, emission). The public seam stays the
-  same — internal locality is the target.
+- ~~Split private implementation modules behind `ImageState`~~ Done
+  2026-05 (commit `6332f7f`; `inline.rs` / `preview.rs` / `worker.rs`
+  / `png.rs`).
 - The retransmit path on iTerm2 is the single largest source of bytes-
   to-terminal. Worth investigating whether iTerm2's native inline-image
   protocol (`OSC 1337 ; File=...`) has lower overhead than its Kitty
-  emulation for our payload sizes.
+  emulation for our payload sizes. **Deferred** — requires benchmark
+  setup on iTerm2 with representative figure-heavy papers.
 - Capability detection currently runs once at startup. A `:reload` or
   detached/reattached tmux session can change the effective capability
-  set; re-detect on focus regained would close that gap.
+  set; re-detect on focus regained would close that gap. **Deferred**
+  — implementing this adds a query escape on every focus event, which
+  has its own UX cost (terminal flicker / extra round-trip). Worth
+  doing only with a real tmux-detach scenario to validate against.

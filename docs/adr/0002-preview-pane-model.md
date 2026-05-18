@@ -148,8 +148,10 @@ Acceptance tests in `crates/tread/`:
 - Preview placement still re-emits the full `a=T` payload on iTerm2
   because that terminal does not persist image bytes between frames.
   See ADR-0003 for the cache strategy and constraints.
-- `FigurePreviewState::last_geometry` invalidation is currently a
-  manual call site discipline; a stale geometry after a layout rebuild
-  on resize would mis-place once. The image emitter snaps on the next
-  frame, so user-visible damage is one-frame at worst, but the seam
-  is worth tightening.
+- ~~`FigurePreviewState::last_geometry` invalidation is currently a
+  manual call-site discipline.~~ Tightened 2026-05-18:
+  `Reader::rebuild_layout` now clears `last_geometry` unconditionally,
+  so any rebuild (resize, reload, text-only toggle, TOC toggle)
+  auto-invalidates the cached preview area. The next `after_draw`
+  recomputes against the new content area instead of mis-placing
+  the image for one frame.

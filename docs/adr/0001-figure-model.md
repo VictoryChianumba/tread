@@ -115,10 +115,15 @@ including the Attention and Ava-256 stress cases.
 
 ## Open follow-up
 
-- Deepen the Pandoc figure extraction into its own module behind a
-  `Vec<Value> → Vec<Block::Figure>` seam. Currently lives in the big
-  `walk_blocks` match arm in `pandoc_parse.rs`.
-- The fallback hand-rolled parser does not yet emit `column_gaps_after`
-  or `header_rows`; figures degrade to a flat grid when Pandoc is
-  absent. Acceptable today (Pandoc is the recommended path), worth
-  closing if the fallback becomes load-bearing.
+- ~~Deepen the Pandoc figure extraction into its own module behind a
+  `Vec<Value> → Vec<Block::Figure>` seam.~~ Done 2026-05 (commit
+  `42cb3c7`; `arxiv-render/src/pandoc_parse/figure.rs`).
+- The fallback hand-rolled LaTeX parser doesn't emit `Block::Figure`
+  at all — figures degrade to a plain `Block::Line("[Figure: <cap>]")`
+  text caption when Pandoc is missing. That's *more* degraded than
+  "flat grid"; the original audit text overstated it. Acceptable
+  today since Pandoc is the recommended path; the legacy parser
+  exists only so the reader doesn't hard-fail on systems without
+  Pandoc. Closing this requires lifting tabular parsing into the
+  hand-rolled path, which is a substantial scope expansion — defer
+  until the fallback becomes load-bearing (which it isn't today).

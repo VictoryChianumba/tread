@@ -1105,6 +1105,12 @@ impl Reader {
         self.bib_entries = self.layout_cache.bib_entries.clone();
         self.bib_entry_lines = self.layout_cache.bib_entry_lines.clone();
         self.remap_search_matches_after_layout();
+        // ADR-0002 follow-up: a rebuild can move every visual line, so
+        // the cached preview geometry (in cell coords relative to the
+        // OLD layout) is stale by definition.  Drop it here so the
+        // next `after_draw` recomputes against the new content area
+        // instead of mis-placing the image for one frame.
+        self.preview_state.last_geometry.set(None);
     }
 
     /// Re-derive `search_matches` against the new `visual_lines` and
