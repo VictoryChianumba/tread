@@ -137,14 +137,7 @@ pub fn advance_to_next_paragraph_for_continuous_reading(reader: &mut Reader) -> 
     }
 
     // Move cursor to the new paragraph (centred in viewport).
-    let half = reader.content_height() / 2;
-    if next >= half {
-        reader.offset = next - half;
-        reader.cursor_y = half;
-    } else {
-        reader.offset = 0;
-        reader.cursor_y = next;
-    }
+    reader.center_on_line(next);
 
     let Some((text, start, end)) = paragraph_with_range(reader, false) else {
         return false;
@@ -163,7 +156,7 @@ pub fn voice_rendering_active(reader: &Reader) -> bool {
     if !matches!(reader.voice_status, PlaybackStatus::Playing) {
         return false;
     }
-    let cursor_line = reader.offset + reader.cursor_y;
+    let cursor_line = reader.offset() + reader.cursor_y();
     let detached = reader.reading_mode
         && (cursor_line < reader.voice_para_start || cursor_line > reader.voice_para_end);
     !detached

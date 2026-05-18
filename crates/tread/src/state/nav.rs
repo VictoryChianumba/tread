@@ -1,4 +1,4 @@
-use crate::state::{FindKind, Reader};
+use super::{FindKind, Reader};
 
 // ── Char-class helpers (used by word motions) ─────────────────────────────────
 

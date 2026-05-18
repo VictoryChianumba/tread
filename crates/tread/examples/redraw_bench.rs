@@ -113,7 +113,7 @@ fn main() {
 
     run_scenario("scrolling (offset++)", |r, i| {
         let max_off = r.visual_lines.len().saturating_sub(HEIGHT as usize).max(1);
-        r.offset = i % max_off;
+        r.jump_to_line(i % max_off);
     });
 
     run_scenario("TOC toggle (reflow)", |r, _| {

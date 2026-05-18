@@ -7,7 +7,6 @@ mod highlights;
 mod html;
 mod images;
 mod markdown;
-mod nav;
 mod pdf;
 mod progress;
 mod render;
@@ -1493,8 +1492,7 @@ mod acceptance_tests {
     );
     let highlight_count = reader.highlights.highlights.len();
 
-    reader.cursor_y = marked_line.saturating_sub(reader.offset);
-    reader.cursor_x = 0;
+    reader.cursor_set_for_test(marked_line.saturating_sub(reader.offset()), 0);
     reader.handle_event(char_key('X'));
     assert!(
       reader.highlights.highlights.len() < highlight_count,
@@ -1577,8 +1575,7 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
           .saturating_sub(1)
           .min(reader.total_lines().saturating_sub(1));
         reader.push_nav_mark();
-        reader.offset = target;
-        reader.cursor_y = 0;
+        reader.jump_to_line(target);
       }
     }
     KeyCode::Char('d') if mods.contains(KeyModifiers::CONTROL) => {
@@ -1762,7 +1759,7 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
       if let Some(vl) = reader.visual_lines.get(reader.current_line()) {
         if vl.block_byte_end > vl.block_byte_start {
           let local = reader
-            .cursor_x
+            .cursor_x()
             .min(vl.block_byte_end - vl.block_byte_start - 1);
           let byte_in_block = vl.block_byte_start + local;
           reader.highlights.remove_at(vl.block_idx, byte_in_block);
@@ -1870,8 +1867,7 @@ fn handle_awaiting_char(reader: &mut Reader, code: KeyCode, kind: FindKind) {
   // anything else (Esc, arrow keys, etc.) is a quiet cancel.
   if let KeyCode::Char(c) = code {
     if let Some(idx) = reader.find_char_in_line(c, kind) {
-      reader.cursor_x = idx;
-      reader.remember_column();
+      reader.set_cursor_x(idx);
     }
   }
   reader.return_to_normal();
@@ -1969,7 +1965,7 @@ fn link_at_cursor(reader: &Reader) -> Option<doc_model::LinkTarget> {
   let mut byte = 0usize;
   for span in spans {
     let next = byte + span.text.len();
-    if reader.cursor_x >= byte && reader.cursor_x < next {
+    if reader.cursor_x() >= byte && reader.cursor_x() < next {
       return span.link_target.clone();
     }
     byte = next;
@@ -1992,7 +1988,7 @@ fn follow_link_at_cursor(reader: &mut Reader) {
   // below the cursor (vim convention for jumps).  Clamp at 0.
   let target_line = line.saturating_sub(1);
   reader.push_nav_mark();
-  jump_to_line_for_link(reader, target_line);
+  reader.jump_to_line(target_line);
 }
 
 /// `K` / `Shift+Enter`: show the citation entry in a popup.  Only acts
@@ -2017,23 +2013,6 @@ fn popup_citation_at_cursor(reader: &mut Reader) {
     title: format!("[{key}]"),
     lines,
   });
-}
-
-fn jump_to_line_for_link(reader: &mut Reader, line: usize) {
-  let total = reader.total_lines();
-  if total == 0 {
-    return;
-  }
-  let line = line.min(total - 1);
-  let ch = reader.content_height();
-  if line >= reader.offset && line < reader.offset + ch {
-    reader.cursor_y = line - reader.offset;
-  } else {
-    reader.offset = line;
-    reader.cursor_y = 0;
-  }
-  reader.cursor_x = 0;
-  reader.desired_column = 0;
 }
 
 fn wrap_for_popup(text: &str, width: usize) -> Vec<String> {
@@ -2146,7 +2125,7 @@ fn commit_selection_as_highlights(reader: &mut Reader) {
   let (lo, hi) = (cur.min(anchor), cur.max(anchor));
   let is_line_mode = matches!(reader.mode(), Mode::Visual { line_mode: true });
   let ax = reader.visual_anchor_x;
-  let cx = reader.cursor_x;
+  let cx = reader.cursor_x();
 
   // Empty char-visual selection: anchor and cursor identical → no-op.
   if !is_line_mode && lo == hi && ax == cx {
@@ -2244,13 +2223,13 @@ fn yank_selection(reader: &Reader) -> String {
     .map(|vl| vl.text.as_str())
     .collect();
 
-  if is_line_mode || (lo == hi && reader.cursor_x == reader.visual_anchor_x) {
+  if is_line_mode || (lo == hi && reader.cursor_x() == reader.visual_anchor_x) {
     lines.join("\n")
   } else {
     let first = lines.first().copied().unwrap_or("");
     let last = lines.last().copied().unwrap_or("");
     let ax = reader.visual_anchor_x;
-    let cx = reader.cursor_x;
+    let cx = reader.cursor_x();
     if lo == hi {
       let (s, e) = (ax.min(cx), ax.max(cx) + 1);
       first.get(s..e.min(first.len())).unwrap_or("").to_string()

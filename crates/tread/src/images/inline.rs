@@ -63,7 +63,7 @@ pub fn place_visible(reader: &Reader, state: &mut ImageState, content_area: Rect
     let mut current: HashSet<u32> = HashSet::new();
     let _ = cell_cols; // total content width — kept for the trace log only.
     for screen_row in 0..height {
-        let vl_idx = reader.offset + screen_row;
+        let vl_idx = reader.offset() + screen_row;
         if vl_idx >= total {
             break;
         }
@@ -145,7 +145,7 @@ pub fn place_visible(reader: &Reader, state: &mut ImageState, content_area: Rect
     if trace && !placements.is_empty() {
         eprintln!(
             "trace: offset={} content_area=({},{},{}x{}) placements={:?}",
-            reader.offset,
+            reader.offset(),
             content_area.x,
             content_area.y,
             content_area.width,

@@ -1,7 +1,7 @@
 # ADR-0004 — Reader public surface
 
-- **Status:** Accepted (2026-05-18) — Seam 1 (mode state machine) landed;
-  Seams 2–4 still queued
+- **Status:** Accepted (2026-05-18) — Seams 1 (mode) and 2 (cursor/scroll)
+  landed; Seams 3–4 still queued
 - **Crate:** `tread` (`state/` and every other file in the crate)
 - **Relates to:** [ADR-0002 — Preview pane model](0002-preview-pane-model.md)
 
@@ -162,14 +162,69 @@ through the transition methods. Read-side access is via
   (mode + buffers) per seam, not dozens. Worth doing anyway because
   the invariants are real.
 
+## Seam 2 — Cursor / scroll — landed 2026-05-18
+
+The four cursor fields (`offset`, `cursor_y`, `cursor_x`,
+`desired_column`) are now private to `state/`.  Writes route through
+the new `state/cursor.rs` module; reads through getter methods.
+
+Landed shape — `state/cursor.rs`:
+
+```rust
+impl Reader {
+    pub fn offset(&self) -> usize;
+    pub fn cursor_y(&self) -> usize;
+    pub fn cursor_x(&self) -> usize;
+    pub fn desired_column(&self) -> usize;
+
+    pub fn jump_to_line(&mut self, line: usize);
+    pub fn jump_to_line_with_context_above(&mut self, line: usize);
+    pub fn center_on_line(&mut self, line: usize);
+    pub fn set_cursor_x(&mut self, x: usize);
+}
+```
+
+The invariants the methods own:
+
+- `jump_to_line` and `jump_to_line_with_context_above` always reset
+  `cursor_x` and `desired_column` to 0.  This was the historical
+  source of "`j` after a jump goes to the wrong column" bugs —
+  `desired_column` lingered from before the jump.
+- `jump_to_line` top-aligns the viewport on scroll (link follows,
+  citation jumps, `G N`); `jump_to_line_with_context_above`
+  bottom-aligns it (the `:N` numeric-goto command, where the user
+  typed a specific line and wants context above it).
+- `center_on_line` preserves `cursor_x` / `desired_column` —
+  voice playback follows the paragraph being read; the user is being
+  moved, not jumping.
+- `nav.rs` (the lower-level motion methods like `nav_down` /
+  `nav_word_forward`) was promoted to `state/nav.rs` so it stays
+  inside `impl Reader` with private-field access.
+
+#### Migration metrics (2026-05-18 audit → post-Seam-2)
+
+| Metric | Before | After |
+|---|---|---|
+| Public cursor/scroll fields | 4 (`offset`, `cursor_y`, `cursor_x`, `desired_column`) | 0 |
+| Bare cursor/scroll writes outside `state/` | ~25 | 0 |
+| Crate-wide tests | 140 | 143 |
+
+Three new transition-invariant tests pin the per-method contracts:
+
+- `jump_to_line_resets_cursor_x_and_desired_column`
+- `center_on_line_preserves_cursor_x`
+- `jump_to_line_with_context_above_lands_target_at_bottom`
+
+Two pre-existing duplicated `jump_to_line` helpers (one in `lib.rs`,
+one in `commands.rs`, byte-identical) were deleted and replaced with
+calls to the new method.  `commands.rs::goto_line` previously
+inlined the bottom-aligned scroll-and-cursor dance for `:N`; that's
+now a single `jump_to_line_with_context_above` call.
+
 ## Open follow-up
 
-After seam 1, the remaining seams in this ADR's priority order:
+After seams 1 and 2, the remaining seams in this ADR's priority order:
 
-- **Seam 2 — Cursor / scroll.** Migrate the dozen-plus
-  `reader.offset = …` / `reader.cursor_y = …` / `reader.cursor_x = …`
-  sites onto `cursor::jump_to_line` / `cursor::scroll_by` etc.
-  Likely-touched files: `lib.rs`, `commands.rs`, `nav.rs`.
 - **Seam 3 — Voice.** 8 fields collapse behind a `voice::*` module
   surface. Likely-touched files: `voice_control.rs`, `voice/playback.rs`,
   `lib.rs`.

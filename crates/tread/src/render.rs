@@ -227,16 +227,16 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
 
     let lines: Vec<Line> = (0..ch)
         .map(|row| {
-            let vl_idx = reader.offset + row;
+            let vl_idx = reader.offset() + row;
             if vl_idx >= total {
                 return Line::raw("");
             }
             let vl = &reader.visual_lines[vl_idx];
-            let is_cursor = row == reader.cursor_y;
+            let is_cursor = row == reader.cursor_y();
             let is_bookmarked = reader.bookmarks.values().any(|&l| l == vl_idx);
             let is_selected = visual_range.map_or(false, |(lo, hi)| vl_idx >= lo && vl_idx <= hi);
             let cursor_col = if is_cursor {
-                Some(reader.cursor_x)
+                Some(reader.cursor_x())
             } else {
                 None
             };

@@ -22,7 +22,7 @@ pub fn word(reader: &Reader, big: bool, around: bool) -> Option<String> {
     if bytes.is_empty() {
         return None;
     }
-    let x = reader.cursor_x.min(bytes.len() - 1);
+    let x = reader.cursor_x().min(bytes.len() - 1);
 
     let is_word_byte = |b: u8| -> bool {
         if big {
@@ -84,7 +84,7 @@ pub fn quote(reader: &Reader, ch: char, around: bool) -> Option<String> {
         return None;
     }
     let target = ch as u8;
-    let x = reader.cursor_x.min(bytes.len() - 1);
+    let x = reader.cursor_x().min(bytes.len() - 1);
 
     // Find the previous quote at-or-before x, and the next quote after the
     // previous one.  Skip backslash-escaped instances (LaTeX commonly has
@@ -147,7 +147,7 @@ pub fn pair(reader: &Reader, open: char, close: char, around: bool) -> Option<St
     }
     let o = open as u8;
     let c = close as u8;
-    let x = reader.cursor_x.min(bytes.len() - 1);
+    let x = reader.cursor_x().min(bytes.len() - 1);
 
     // Walk back to find the opening that contains the cursor.
     let mut depth: i32 = 0;
@@ -314,7 +314,7 @@ pub fn cursor_to_paragraph_end(reader: &Reader) -> Option<(String, usize, usize)
     // Slice the cursor's line at cursor_x; subsequent lines verbatim.
     let mut out = String::new();
     if let Some(vl) = reader.visual_lines.get(cur) {
-        let cut = reader.cursor_x.min(vl.text.len());
+        let cut = reader.cursor_x().min(vl.text.len());
         out.push_str(&vl.text[cut..]);
     }
     for i in (cur + 1)..=end {
@@ -354,7 +354,7 @@ pub fn sentence(reader: &Reader, around: bool) -> Option<String> {
         return None;
     }
     let cur_line = reader.current_line();
-    let cur_col = reader.cursor_x;
+    let cur_col = reader.cursor_x();
 
     // Find sentence start: walk back from cursor looking for a terminator
     // followed by whitespace.  The first non-whitespace byte after that
@@ -535,42 +535,42 @@ mod tests {
     #[test]
     fn iw_on_word_yields_word() {
         let mut r = reader_with(&["hello world"]);
-        r.cursor_x = 2; // inside "hello"
+        r.cursor_set_for_test(0, 2); // inside "hello"
         assert_eq!(word(&r, false, false).as_deref(), Some("hello"));
     }
 
     #[test]
     fn iw_on_whitespace_yields_next_word() {
         let mut r = reader_with(&["hello world"]);
-        r.cursor_x = 5; // the space
+        r.cursor_set_for_test(0, 5); // the space
         assert_eq!(word(&r, false, false).as_deref(), Some("world"));
     }
 
     #[test]
     fn aw_includes_trailing_whitespace() {
         let mut r = reader_with(&["hello world"]);
-        r.cursor_x = 0;
+        r.cursor_set_for_test(0, 0);
         assert_eq!(word(&r, false, true).as_deref(), Some("hello "));
     }
 
     #[test]
     fn aw_falls_back_to_leading_when_no_trailing() {
         let mut r = reader_with(&["hello world"]);
-        r.cursor_x = 7; // inside "world"
+        r.cursor_set_for_test(0, 7); // inside "world"
         assert_eq!(word(&r, false, true).as_deref(), Some(" world"));
     }
 
     #[test]
     fn iw_punct_separation() {
         let mut r = reader_with(&["foo,bar"]);
-        r.cursor_x = 1; // inside "foo"
+        r.cursor_set_for_test(0, 1); // inside "foo"
         assert_eq!(word(&r, false, false).as_deref(), Some("foo"));
     }
 
     #[test]
     fn iw_big_treats_punct_as_word() {
         let mut r = reader_with(&["foo,bar baz"]);
-        r.cursor_x = 1;
+        r.cursor_set_for_test(0, 1);
         // BIG word stops at whitespace only.
         assert_eq!(word(&r, true, false).as_deref(), Some("foo,bar"));
     }
@@ -580,28 +580,28 @@ mod tests {
     #[test]
     fn iq_inside_quotes() {
         let mut r = reader_with(&[r#"the "quick" brown fox"#]);
-        r.cursor_x = 6; // inside "quick"
+        r.cursor_set_for_test(0, 6); // inside "quick"
         assert_eq!(quote(&r, '"', false).as_deref(), Some("quick"));
     }
 
     #[test]
     fn aq_includes_quote_chars() {
         let mut r = reader_with(&[r#"the "quick" brown fox"#]);
-        r.cursor_x = 6;
+        r.cursor_set_for_test(0, 6);
         assert_eq!(quote(&r, '"', true).as_deref(), Some(r#""quick""#));
     }
 
     #[test]
     fn quote_outside_returns_none() {
         let mut r = reader_with(&["no quotes here"]);
-        r.cursor_x = 5;
+        r.cursor_set_for_test(0, 5);
         assert!(quote(&r, '"', false).is_none());
     }
 
     #[test]
     fn quote_skips_escaped() {
         let mut r = reader_with(&[r#"a \"escaped\" "real" b"#]);
-        r.cursor_x = 16; // inside "real" (the unescaped pair)
+        r.cursor_set_for_test(0, 16); // inside "real" (the unescaped pair)
         assert_eq!(quote(&r, '"', false).as_deref(), Some("real"));
     }
 
@@ -610,35 +610,35 @@ mod tests {
     #[test]
     fn pair_inner() {
         let mut r = reader_with(&["foo (bar baz) qux"]);
-        r.cursor_x = 6; // inside the parens
+        r.cursor_set_for_test(0, 6); // inside the parens
         assert_eq!(pair(&r, '(', ')', false).as_deref(), Some("bar baz"));
     }
 
     #[test]
     fn pair_around() {
         let mut r = reader_with(&["foo (bar baz) qux"]);
-        r.cursor_x = 6;
+        r.cursor_set_for_test(0, 6);
         assert_eq!(pair(&r, '(', ')', true).as_deref(), Some("(bar baz)"));
     }
 
     #[test]
     fn pair_nested_inner() {
         let mut r = reader_with(&["(a (b) c)"]);
-        r.cursor_x = 4; // inside the inner (b)
+        r.cursor_set_for_test(0, 4); // inside the inner (b)
         assert_eq!(pair(&r, '(', ')', false).as_deref(), Some("b"));
     }
 
     #[test]
     fn pair_nested_outer_from_outside_inner() {
         let mut r = reader_with(&["(a (b) c)"]);
-        r.cursor_x = 1; // on 'a', between outer parens but outside inner
+        r.cursor_set_for_test(0, 1); // on 'a', between outer parens but outside inner
         assert_eq!(pair(&r, '(', ')', false).as_deref(), Some("a (b) c"));
     }
 
     #[test]
     fn pair_outside_returns_none() {
         let mut r = reader_with(&["no parens here"]);
-        r.cursor_x = 5;
+        r.cursor_set_for_test(0, 5);
         assert!(pair(&r, '(', ')', false).is_none());
     }
 
@@ -647,8 +647,7 @@ mod tests {
     #[test]
     fn ip_yields_current_block() {
         let mut r = reader_with(&["line one", "line two", "line three", "", "next para"]);
-        r.cursor_x = 0;
-        r.cursor_y = 1; // on "line two"
+        r.cursor_set_for_test(1, 0); // on "line two"
         assert_eq!(
             paragraph(&r, false).as_deref(),
             Some("line one\nline two\nline three")
@@ -658,8 +657,7 @@ mod tests {
     #[test]
     fn ap_includes_trailing_blank() {
         let mut r = reader_with(&["aaa", "bbb", "", "next"]);
-        r.cursor_x = 0;
-        r.cursor_y = 0;
+        r.cursor_set_for_test(0, 0); 
         assert_eq!(paragraph(&r, true).as_deref(), Some("aaa\nbbb\n"));
     }
 
@@ -668,8 +666,7 @@ mod tests {
     #[test]
     fn paragraph_with_range_yields_indices() {
         let mut r = reader_with(&["line one", "line two", "", "next para"]);
-        r.cursor_x = 0;
-        r.cursor_y = 1; // on "line two"
+        r.cursor_set_for_test(1, 0); // on "line two"
         let (text, start, end) = paragraph_with_range(&r, false).expect("paragraph_with_range");
         assert_eq!(text, "line one\nline two");
         assert_eq!(start, 0);
@@ -679,8 +676,7 @@ mod tests {
     #[test]
     fn paragraph_with_range_at_eof() {
         let mut r = reader_with(&["only paragraph"]);
-        r.cursor_x = 0;
-        r.cursor_y = 0;
+        r.cursor_set_for_test(0, 0); 
         let (text, start, end) = paragraph_with_range(&r, false).expect("paragraph_with_range");
         assert_eq!(text, "only paragraph");
         assert_eq!(start, 0);
@@ -693,8 +689,7 @@ mod tests {
         // string output of `paragraph()`, but for voice we want only the
         // prose range so the dim-overlay matches what's being read.
         let mut r = reader_with(&["aaa", "bbb", "", "next"]);
-        r.cursor_x = 0;
-        r.cursor_y = 0;
+        r.cursor_set_for_test(0, 0); 
         let (text, start, end) = paragraph_with_range(&r, true).expect("paragraph_with_range");
         assert_eq!(text, "aaa\nbbb");
         assert_eq!((start, end), (0, 1));
@@ -705,8 +700,7 @@ mod tests {
     #[test]
     fn cursor_to_paragraph_end_starts_at_cursor() {
         let mut r = reader_with(&["aaa bbb ccc", "ddd eee", "", "next"]);
-        r.cursor_x = 4; // start of "bbb"
-        r.cursor_y = 0;
+        r.cursor_set_for_test(0, 4); // start of "bbb"
         let (text, start, end) = cursor_to_paragraph_end(&r).expect("cursor_to_paragraph_end");
         assert_eq!(text, "bbb ccc\nddd eee");
         assert_eq!((start, end), (0, 1));
@@ -717,7 +711,7 @@ mod tests {
     #[test]
     fn is_yields_current_sentence() {
         let mut r = reader_with(&["First sentence. Second sentence here. Third."]);
-        r.cursor_x = 20; // somewhere in "Second sentence here"
+        r.cursor_set_for_test(0, 20); // somewhere in "Second sentence here"
         let out = sentence(&r, false).expect("sentence");
         assert!(out.contains("Second sentence here"));
     }

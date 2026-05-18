@@ -9,7 +9,9 @@ use ratatui::layout::Rect;
 use crate::PaperData;
 use crate::highlights::HighlightSet;
 
+mod cursor;
 mod mode;
+mod nav;
 
 pub const TOC_WIDTH: usize = 28;
 const PREVIEW_TEXT_PERCENT: usize = 60;
@@ -337,8 +339,12 @@ pub struct Reader {
     pub help_visible: bool,
     pub help_query: String,
     pub help_selected: usize,
-    pub offset: usize,
-    pub cursor_y: usize,
+    /// Viewport top in absolute-line indices.  Private so every
+    /// scroll/jump lands in `cursor.rs`.  Read via `Reader::offset()`.
+    offset: usize,
+    /// Cursor row within the viewport (0 = topmost visible line).
+    /// Private; read via `Reader::cursor_y()`.
+    cursor_y: usize,
     pub width: usize,
     pub height: usize,
     pub search_query: String,
@@ -373,12 +379,14 @@ pub struct Reader {
     source_bibitems: HashMap<String, String>,
     /// Effective byte column of the cursor on the current line.  Always
     /// represents the rendered position — horizontal motions write here.
-    pub cursor_x: usize,
+    /// Private; read via `Reader::cursor_x()`.
+    cursor_x: usize,
     /// "Desired" column carried across `j`/`k` line changes so that
     /// returning to a long line restores the original column.  Matches
     /// vim's `curswant`.  Set by horizontal motions; consulted by vertical
-    /// motions via `clamp_cursor_after_line_change`.
-    pub desired_column: usize,
+    /// motions via `clamp_cursor_after_line_change`.  Private; read via
+    /// `Reader::desired_column()`.
+    desired_column: usize,
     /// Absolute line index where visual selection started.
     pub visual_anchor: usize,
     /// Column index where visual selection started.
@@ -1874,5 +1882,63 @@ mod tests {
         reader.enter_visual_mode(true);
         assert_eq!(*reader.mode(), Mode::Visual { line_mode: true });
         assert_eq!(reader.visual_anchor_x, 0);
+    }
+
+    // ── Cursor/scroll invariants (ADR-0004 Seam 2) ─────────────────────
+    //
+    // Pin the documented invariants for the new cursor-seam methods so
+    // a future refactor that splits or unifies them can't silently
+    // drop the cursor_x / desired_column reset (the historical cause of
+    // "`j` after a jump goes to the wrong column" bugs).
+
+    #[test]
+    fn jump_to_line_resets_cursor_x_and_desired_column() {
+        let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+        reader.cursor_x = 5;
+        reader.desired_column = 5;
+        reader.jump_to_line(0);
+        assert_eq!(reader.cursor_x(), 0);
+        assert_eq!(reader.desired_column(), 0);
+    }
+
+    #[test]
+    fn center_on_line_preserves_cursor_x() {
+        // Build a doc with enough lines that the viewport actually moves.
+        let blocks: Vec<Block> = (0..30)
+            .map(|i| Block::Line(format!("line {i:02}")))
+            .collect();
+        let mut reader = Reader::new(blocks, 80, 24);
+        reader.cursor_x = 4;
+        reader.desired_column = 4;
+        // Pick a line past the half-screen mark so offset has to advance.
+        let target = 20;
+        reader.center_on_line(target);
+        assert_eq!(reader.cursor_x(), 4, "voice auto-follow must not reset column");
+        assert_eq!(reader.desired_column(), 4);
+        assert_eq!(
+            reader.offset() + reader.cursor_y(),
+            target,
+            "cursor must land on the target line",
+        );
+    }
+
+    #[test]
+    fn jump_to_line_with_context_above_lands_target_at_bottom() {
+        // 60 lines × small terminal so the target sits comfortably
+        // below the initial viewport — forces the scroll branch.
+        let blocks: Vec<Block> = (0..60)
+            .map(|i| Block::Line(format!("line {i:02}")))
+            .collect();
+        let mut reader = Reader::new(blocks, 80, 24);
+        let ch = reader.content_height();
+        let target = ch + 10; // safely below initial viewport
+        reader.jump_to_line_with_context_above(target);
+        assert_eq!(
+            reader.cursor_y(),
+            ch - 1,
+            "target should sit at viewport bottom so context is above",
+        );
+        assert_eq!(reader.offset() + reader.cursor_y(), target);
+        assert_eq!(reader.cursor_x(), 0);
     }
 }

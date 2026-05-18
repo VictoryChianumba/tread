@@ -158,14 +158,7 @@ fn goto_line(reader: &mut Reader, n_one_indexed: usize) -> ReaderAction {
   }
   let target = n_one_indexed.saturating_sub(1).min(total - 1);
   reader.push_nav_mark();
-  let ch = reader.content_height();
-  if target < reader.offset || target >= reader.offset + ch {
-    let max_offset = total.saturating_sub(ch);
-    reader.offset = (target + 1).saturating_sub(ch).min(max_offset);
-  }
-  reader.cursor_y = target.saturating_sub(reader.offset);
-  reader.cursor_x = 0;
-  reader.desired_column = 0;
+  reader.jump_to_line_with_context_above(target);
   ReaderAction::Continue
 }
 
@@ -187,7 +180,7 @@ fn cmd_goto(reader: &mut Reader, args: &[&str]) -> ReaderAction {
   match target {
     Some(line) => {
       reader.push_nav_mark();
-      jump_to_line(reader, line);
+      reader.jump_to_line(line);
       ReaderAction::Continue
     }
     None => ReaderAction::Error(format!("no section matching: {arg}")),
@@ -217,26 +210,11 @@ fn jump_to_section_named(reader: &mut Reader, candidates: &[&str]) -> ReaderActi
   match target {
     Some(line) => {
       reader.push_nav_mark();
-      jump_to_line(reader, line);
+      reader.jump_to_line(line);
       ReaderAction::Continue
     }
     None => ReaderAction::Error(format!("no section: {}", candidates.join(" / "))),
   }
-}
-
-fn jump_to_line(reader: &mut Reader, line: usize) {
-  let total = reader.total_lines();
-  if total == 0 { return; }
-  let line = line.min(total - 1);
-  let ch = reader.content_height();
-  if line >= reader.offset && line < reader.offset + ch {
-    reader.cursor_y = line - reader.offset;
-  } else {
-    reader.offset = line;
-    reader.cursor_y = 0;
-  }
-  reader.cursor_x = 0;
-  reader.desired_column = 0;
 }
 
 // ── :set ─────────────────────────────────────────────────────────────────────
