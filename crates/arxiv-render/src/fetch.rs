@@ -262,11 +262,11 @@ fn extract_tex_files(bytes: &[u8], asset_dir: &Path) -> Result<Vec<(String, Stri
     return Ok(vec![("main.tex".to_string(), content)]);
   }
 
-  // Some submissions are uncompressed .tex.
-  if let Ok(content) = std::str::from_utf8(bytes) {
-    if content.contains("\\documentclass") || content.contains("\\begin{document}") {
-      return Ok(vec![("main.tex".to_string(), content.to_string())]);
-    }
+  // Some submissions are uncompressed .tex.  Lossy-convert to handle
+  // ISO-8859 / Latin-1 sources alongside the more common UTF-8 ones.
+  let content = String::from_utf8_lossy(bytes);
+  if content.contains("\\documentclass") || content.contains("\\begin{document}") {
+    return Ok(vec![("main.tex".to_string(), content.into_owned())]);
   }
 
   Err("no .tex files found in source package".to_string())
@@ -361,9 +361,15 @@ fn write_asset(
 
 fn try_plain_gz(bytes: &[u8]) -> Result<String, String> {
   let mut gz = GzDecoder::new(bytes);
-  let mut content = String::new();
-  gz.read_to_string(&mut content)
+  // read_to_string rejects non-UTF-8 input — older arXiv submissions
+  // (1707.09763 is one) ship ISO-8859 / Latin-1 LaTeX files and would
+  // be rejected as "no .tex files found".  Read raw bytes and lossy-
+  // convert: non-UTF-8 octets become U+FFFD, which is harmless for the
+  // mostly-ASCII LaTeX command stream and the parsers downstream.
+  let mut buf = Vec::new();
+  gz.read_to_end(&mut buf)
     .map_err(|e| format!("gz decode error: {e}"))?;
+  let content = String::from_utf8_lossy(&buf).into_owned();
   if content.contains("\\documentclass") || content.contains("\\begin{document}") {
     Ok(content)
   } else {
