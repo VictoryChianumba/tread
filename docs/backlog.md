@@ -26,20 +26,15 @@ Last revalidation: **2026-05-18**.
 | **#1** Reader public surface — Seam 2 (cursor/scroll) | `state/cursor.rs` owns jumps/centering; `offset`/`cursor_y`/`cursor_x`/`desired_column` private | `984b86c` |
 | **#1** Reader public surface — Seam 3 (voice) | `voice_control.rs` moved into `state/`; 10 voice fields private | `db741fe` |
 | **#1** Reader public surface — Seam 4 (bookmarks) | `state/bookmarks.rs` owns marks; storage moved to block-byte addressing; reflow-survival regression test | `945eb3b` |
-| **D1** Persistence files silently reset on parse error | New `persist::load_json` helper renames corrupt files to `<name>.corrupt-<unix-ts>` before returning Default; eprintln warning. Applied to progress / bookmarks / highlights / config. | _this commit_ |
+| **D1** Persistence files silently reset on parse error | New `persist::load_json` helper renames corrupt files to `<name>.corrupt-<unix-ts>` before returning Default; eprintln warning. Applied to progress / bookmarks / highlights / config. | `1e7f690` |
+| **C1** Text slicing on non-UTF-8 char boundary | `clamp_to_char_boundary` snaps highlight / search range endpoints before slicing; pre-fix the affected segment was silently dropped. Three regression tests cover multi-byte cases. | _this commit_ |
+| **C5** `fetch_any` had no timeout / redirect cap / body cap | Built a `reqwest::blocking::Client` with 30s timeout, 10-redirect limit; capped body at 64 MB via `Read::take`. | _this commit_ |
+| **C6** Render array indexing race | `&reader.visual_lines[vl_idx]` switched to `.get(vl_idx)` with a blank-line fallback — defends against future refactors of `total_lines` decoupling from `visual_lines.len()`. | _this commit_ |
+| **C7** Lock poisoning recovery didn't clear poison | New `MutexExt::lock_clearing_poison` calls `Mutex::clear_poison()` after recovering the guard; bulk-migrated 21 sites in `voice/playback.rs`. | _this commit_ |
 
-## Open — resilience (Tier 2 latent crashes)
-
-| # | Item | Location |
-|---|---|---|
-| **C1** | Text slicing on non-UTF-8 char boundary | `tread/src/render.rs` highlight rendering |
-| **C5** | `fetch_any` has no status check, redirect limit, content-length cap, or timeout | `tread/src/lib.rs` (or wherever fetch_any moved) |
-| **C6** | Render array indexing race — bounds checked with `total_lines()` but indexes `visual_lines` directly | `tread/src/render.rs` |
-| **C7** | Lock poisoning recovers wrong value — `unwrap_or_else(\|e\| e.into_inner())` doesn't clear poison | `tread/src/voice/playback.rs` |
-
-D1 was the most user-impacting of the resilience cluster (a
-truncated write silently lost state); the remaining Cs are
-reachable but rare.
+The resilience cluster is closed.  Remaining open items are
+parser/rendering (B*) and trench integration (A*); those need
+papers / a separate repo audit respectively.
 
 ## Open — parser / rendering
 

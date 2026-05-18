@@ -643,9 +643,30 @@ pub fn fetch_any(url: &str) -> Result<PaperData, String> {
     .and_then(|e| e.to_str())
     .map(|e| e.to_ascii_lowercase());
 
-  // 3. Fetch the body.  reqwest's send() doesn't error on non-2xx
-  // (unlike ureq's call), so we surface that explicitly.
-  let resp = reqwest::blocking::get(url).map_err(|e| format!("fetch {url}: {e}"))?;
+  // 3. Fetch the body.  Defenses against pathological servers (C5):
+  // - 30s timeout matches arxiv-render's fetch — long enough for slow
+  //   academic mirrors, short enough to avoid hanging the TUI when a
+  //   server stalls mid-transfer.
+  // - Redirect cap matches reqwest's default (10) but stated
+  //   explicitly so future reqwest version bumps can't surprise us.
+  // - Body cap: take (MAX + 1) bytes via the Read implementation, then
+  //   reject if we got more than MAX — distinguishes "body exactly
+  //   equals MAX" (allowed) from "server streaming more than we'll
+  //   accept" (rejected before OOM).  Doesn't help against a server
+  //   that streams forever AT a reasonable rate within the timeout;
+  //   for that we rely on the timeout to fire.
+  const FETCH_ANY_TIMEOUT_SECS: u64 = 30;
+  const FETCH_ANY_MAX_REDIRECTS: usize = 10;
+  const FETCH_ANY_MAX_BYTES: usize = 64 * 1024 * 1024; // 64 MB
+  let client = reqwest::blocking::Client::builder()
+    .timeout(std::time::Duration::from_secs(FETCH_ANY_TIMEOUT_SECS))
+    .redirect(reqwest::redirect::Policy::limited(FETCH_ANY_MAX_REDIRECTS))
+    .build()
+    .map_err(|e| format!("build HTTP client for {url}: {e}"))?;
+  let resp = client
+    .get(url)
+    .send()
+    .map_err(|e| format!("fetch {url}: {e}"))?;
   if !resp.status().is_success() {
     return Err(format!("fetch {url}: HTTP {}", resp.status()));
   }
@@ -656,10 +677,17 @@ pub fn fetch_any(url: &str) -> Result<PaperData, String> {
     .unwrap_or("")
     .to_ascii_lowercase();
 
-  let bytes = resp
-    .bytes()
-    .map_err(|e| format!("read body of {url}: {e}"))?
-    .to_vec();
+  use std::io::Read;
+  let mut bytes = Vec::new();
+  resp
+    .take((FETCH_ANY_MAX_BYTES + 1) as u64)
+    .read_to_end(&mut bytes)
+    .map_err(|e| format!("read body of {url}: {e}"))?;
+  if bytes.len() > FETCH_ANY_MAX_BYTES {
+    return Err(format!(
+      "{url}: response exceeds {FETCH_ANY_MAX_BYTES} bytes; refusing to load"
+    ));
+  }
 
   // 4. Pick a parser based on extension first, then Content-Type,
   // then fall through to HTML.

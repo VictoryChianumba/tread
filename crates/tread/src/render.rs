@@ -281,7 +281,16 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
             if vl_idx >= total {
                 return Line::raw("");
             }
-            let vl = &reader.visual_lines[vl_idx];
+            // Defensive `.get()` (C6): `vl_idx < total` is equivalent to
+            // `vl_idx < visual_lines.len()` today because `total_lines`
+            // returns the length directly, but a future refactor that
+            // changes that semantics (e.g. excluding image rows from
+            // the count) would turn this loop into a silent panic.
+            // The `.get()` form returns a blank line on out-of-bounds,
+            // which is the visually correct degraded behaviour.
+            let Some(vl) = reader.visual_lines.get(vl_idx) else {
+                return Line::raw("");
+            };
             let is_cursor = row == reader.cursor_y();
             let is_bookmarked = reader.is_line_bookmarked(vl_idx);
             let is_selected = visual_range.map_or(false, |(lo, hi)| vl_idx >= lo && vl_idx <= hi);
@@ -594,12 +603,16 @@ fn overlay_highlights(
     }
 
     // Build sorted list of cut points: 0, every range start/end, total length.
+    // Each range endpoint is snapped down to a valid UTF-8 char boundary
+    // so a highlight that straddles a multi-byte char still emits — and
+    // emits the full underlying text — even if the highlight bounds
+    // themselves are off by a byte or two.
     let mut cuts: Vec<usize> = Vec::with_capacity(ranges.len() * 2 + 2);
     cuts.push(0);
     cuts.push(bytes);
     for &(s, e) in ranges {
-        cuts.push(s.min(bytes));
-        cuts.push(e.min(bytes));
+        cuts.push(clamp_to_char_boundary(text, s));
+        cuts.push(clamp_to_char_boundary(text, e));
     }
     cuts.sort();
     cuts.dedup();
@@ -607,7 +620,7 @@ fn overlay_highlights(
     let mut out: Vec<Span<'static>> = Vec::with_capacity(cuts.len());
     for w in cuts.windows(2) {
         let (s, e) = (w[0], w[1]);
-        if s >= e || !text.is_char_boundary(s) || !text.is_char_boundary(e) {
+        if s >= e {
             continue;
         }
         let segment = text[s..e].to_string();
@@ -673,11 +686,17 @@ fn overlay_highlights_styled(
         }
 
         // Cut points within this span (in absolute vl-byte coords).
+        // Each range endpoint is snapped down to a valid char boundary
+        // in this span's local coordinates — see C1 in the persistent-
+        // highlight overlay path.  Same rationale: a highlight that
+        // straddles a multi-byte char still emits the underlying text.
         let mut cuts: Vec<usize> = vec![span_start, span_end];
         for &(rs, re) in ranges {
             if rs < span_end && re > span_start {
-                cuts.push(rs.max(span_start));
-                cuts.push(re.min(span_end));
+                let local_s = rs.max(span_start) - span_start;
+                let local_e = re.min(span_end) - span_start;
+                cuts.push(span_start + clamp_to_char_boundary(&ispan.text, local_s));
+                cuts.push(span_start + clamp_to_char_boundary(&ispan.text, local_e));
             }
         }
         cuts.sort();
@@ -690,9 +709,6 @@ fn overlay_highlights_styled(
             }
             let local_s = s - span_start;
             let local_e = e - span_start;
-            if !ispan.text.is_char_boundary(local_s) || !ispan.text.is_char_boundary(local_e) {
-                continue;
-            }
             let segment = ispan.text[local_s..local_e].to_string();
             let in_range = ranges.iter().any(|&(rs, re)| s >= rs && e <= re);
             let seg_style = if in_range { style.bg(hl_bg) } else { style };
@@ -751,6 +767,21 @@ fn snap_to_char_boundary(text: &str, byte_col: usize) -> usize {
     }
     let max = text.len() - 1;
     let mut i = byte_col.min(max);
+    while i > 0 && !text.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Clamp `idx` to a valid UTF-8 char boundary at or below it, capped
+/// at `text.len()` (the end-of-text boundary, always valid).  Used
+/// before slicing highlight / search ranges so a range that straddles
+/// a multi-byte character snaps to a safe boundary instead of being
+/// silently dropped (or worse, panicking).  Pre-C1 fix, the overlay
+/// helpers `continue`d on misaligned boundaries — visually the
+/// highlighted segment plus its trailing context just vanished.
+fn clamp_to_char_boundary(text: &str, idx: usize) -> usize {
+    let mut i = idx.min(text.len());
     while i > 0 && !text.is_char_boundary(i) {
         i -= 1;
     }
@@ -891,17 +922,30 @@ fn highlight_query(text: &str, query: &str, bg: Color, t: &Theme) -> Line<'stati
 
     while let Some(start) = lower[pos..].find(query) {
         let abs = pos + start;
-        if abs > pos {
+        // `lower` can have a different byte structure from `text` when
+        // case folding changes encoded width (e.g. İ → i̇).  Snap both
+        // endpoints back to valid `text` boundaries so a near-miss
+        // highlights an approximate match rather than panicking on a
+        // mid-char slice.
+        let snap_abs = clamp_to_char_boundary(text, abs);
+        let snap_end = clamp_to_char_boundary(text, abs + ql);
+        if snap_end <= snap_abs {
+            // Match collapsed to nothing after snapping — skip it and
+            // advance pos so the loop terminates.
+            pos = abs + ql.max(1);
+            continue;
+        }
+        if snap_abs > pos {
             spans.push(Span::styled(
-                text[pos..abs].to_string(),
+                text[pos..snap_abs].to_string(),
                 Style::default().bg(bg),
             ));
         }
         spans.push(Span::styled(
-            text[abs..abs + ql].to_string(),
+            text[snap_abs..snap_end].to_string(),
             Style::default().bg(t.search_match_bg).fg(t.search_match_fg),
         ));
-        pos = abs + ql;
+        pos = snap_end;
     }
     if pos < text.len() {
         spans.push(Span::styled(
@@ -951,14 +995,21 @@ fn highlight_spans(
 
         while let Some(start) = lower[pos..].find(query) {
             let abs = pos + start;
-            if abs > pos {
-                ratatui_spans.push(Span::styled(s.text[pos..abs].to_string(), style));
+            // Same char-boundary defense as `highlight_query` — see C1.
+            let snap_abs = clamp_to_char_boundary(&s.text, abs);
+            let snap_end = clamp_to_char_boundary(&s.text, abs + ql);
+            if snap_end <= snap_abs {
+                pos = abs + ql.max(1);
+                continue;
+            }
+            if snap_abs > pos {
+                ratatui_spans.push(Span::styled(s.text[pos..snap_abs].to_string(), style));
             }
             ratatui_spans.push(Span::styled(
-                s.text[abs..abs + ql].to_string(),
+                s.text[snap_abs..snap_end].to_string(),
                 Style::default().bg(t.search_match_bg).fg(t.search_match_fg),
             ));
-            pos = abs + ql;
+            pos = snap_end;
         }
         if pos < s.text.len() {
             ratatui_spans.push(Span::styled(s.text[pos..].to_string(), style));
@@ -1481,5 +1532,52 @@ mod tests {
         let area = preview_image_area(Rect::new(60, 2, 40, 20));
 
         assert_eq!(area, Rect::new(61, 3, 38, 18));
+    }
+
+    // ── C1 regression: highlight ranges that straddle a multi-byte
+    //    char used to silently drop the affected segment (and the
+    //    surrounding text in the same cut window).  Now they snap to
+    //    a safe boundary so the underlying text always emits.
+    fn rendered_text(line: &Line<'static>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn overlay_highlights_renders_full_text_when_range_straddles_multibyte_char() {
+        // "café" → 'c' 'a' 'f' [é=2 bytes].  Total 5 bytes.
+        // A highlight range of (3, 4) starts before 'é' (ok) and ends
+        // INSIDE its UTF-8 sequence (byte 4 is not a char boundary).
+        // Pre-fix: the segment 3..4 was skipped, and the trailing 'é'
+        // disappeared from the rendered line.  Post-fix: the range
+        // snaps down to a boundary and the whole text emits.
+        let text = "café";
+        let line = overlay_highlights(text, Style::default(), &[(3, 4)], Color::Yellow);
+        assert_eq!(
+            rendered_text(&line),
+            "café",
+            "every char of the input must still render after a misaligned highlight",
+        );
+    }
+
+    #[test]
+    fn overlay_highlights_does_not_panic_on_misaligned_range() {
+        // Multiple multi-byte chars, range endpoints mid-character.
+        let text = "αβγδε"; // each Greek letter is 2 bytes
+        let line = overlay_highlights(text, Style::default(), &[(1, 5)], Color::Yellow);
+        assert_eq!(rendered_text(&line), "αβγδε");
+    }
+
+    #[test]
+    fn highlight_query_handles_multibyte_text() {
+        // Query is ASCII; text has a multi-byte char before the match.
+        // The match itself remains valid; the surrounding bytes need
+        // the boundary defense to slice safely.
+        let line = highlight_query(
+            "café — foo bar",
+            "foo",
+            Color::Reset,
+            &crate::config::resolve_theme(),
+        );
+        assert_eq!(rendered_text(&line), "café — foo bar");
     }
 }

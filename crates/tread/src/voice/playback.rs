@@ -1,10 +1,41 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{VoicePlayingInfo, chunk_paragraphs, provider::TtsProvider};
+
+/// Lock acquisition that recovers from poisoning AND clears the
+/// poison flag.  The pre-C7 pattern (`lock().unwrap_or_else(|e|
+/// e.into_inner())`) recovers the guard but leaves the poison set,
+/// so every subsequent `lock()` returns `Err(PoisonError)` again
+/// and every call site has to repeat the dance.  Worse, the poison
+/// signal — designed to surface "your data may be inconsistent
+/// because a panic happened mid-write" — never propagates anywhere.
+///
+/// `clear_poison()` (stable since Rust 1.74) tells the Mutex the
+/// caller has acknowledged the panic and is choosing to continue
+/// with whatever value is in there.  For the voice subsystem that's
+/// the right call: each field (status, playing_info, error,
+/// session) is a small POD or `Option`, and the worst that can
+/// happen is the next read sees a torn write that gets corrected
+/// on the next sync_voice_status tick.
+trait MutexExt<T> {
+    fn lock_clearing_poison(&self) -> MutexGuard<'_, T>;
+}
+
+impl<T> MutexExt<T> for Mutex<T> {
+    fn lock_clearing_poison(&self) -> MutexGuard<'_, T> {
+        match self.lock() {
+            Ok(guard) => guard,
+            Err(poison) => {
+                self.clear_poison();
+                poison.into_inner()
+            }
+        }
+    }
+}
 
 pub enum PlaybackCommand {
     Start {
@@ -90,7 +121,7 @@ impl PlaybackController {
     /// observes the new id without any race.
     pub fn start(&self, text: String, doc_start_line: usize, doc_end_line: usize) -> u64 {
         let id = self.session_counter.fetch_add(1, Ordering::SeqCst) + 1;
-        *self.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(id);
+        *self.session.lock_clearing_poison() = Some(id);
         let _ = self.cmd_tx.send(PlaybackCommand::Start {
             text,
             doc_start_line,
@@ -106,7 +137,7 @@ impl PlaybackController {
     /// you were preempted by another caller and should exit reading mode
     /// quietly.
     pub fn session_id(&self) -> Option<u64> {
-        *self.session.lock().unwrap_or_else(|e| e.into_inner())
+        *self.session.lock_clearing_poison()
     }
 
     pub fn pause(&self) {
@@ -122,18 +153,12 @@ impl PlaybackController {
     }
 
     pub fn status(&self) -> PlaybackStatus {
-        self.status
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.status.lock_clearing_poison().clone()
     }
 
     /// Take the pending error message (clears it after reading).
     pub fn take_error(&self) -> Option<String> {
-        self.voice_error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
+        self.voice_error.lock_clearing_poison().take()
     }
 }
 
@@ -184,7 +209,7 @@ fn playback_loop(
                     match rodio::OutputStream::try_default() {
                         Ok(r) => output = Some(r),
                         Err(e) => {
-                            *error.lock().unwrap_or_else(|e| e.into_inner()) =
+                            *error.lock_clearing_poison() =
                                 Some(format!("Audio init failed: {e}"));
                             continue;
                         }
@@ -194,7 +219,7 @@ fn playback_loop(
                 let sink = match rodio::Sink::try_new(handle) {
                     Ok(s) => s,
                     Err(e) => {
-                        *error.lock().unwrap_or_else(|e| e.into_inner()) =
+                        *error.lock_clearing_poison() =
                             Some(format!("Audio sink error: {e}"));
                         continue;
                     }
@@ -212,12 +237,12 @@ fn playback_loop(
                             }
                             PlaybackCommand::Pause => {
                                 sink.pause();
-                                *status.lock().unwrap_or_else(|e| e.into_inner()) =
+                                *status.lock_clearing_poison() =
                                     PlaybackStatus::Paused;
                             }
                             PlaybackCommand::Resume => {
                                 sink.play();
-                                *status.lock().unwrap_or_else(|e| e.into_inner()) =
+                                *status.lock_clearing_poison() =
                                     PlaybackStatus::Playing;
                             }
                             PlaybackCommand::Start { .. } => {
@@ -229,7 +254,7 @@ fn playback_loop(
 
                     let buf = match provider.stream(&chunk_text) {
                         Err(msg) => {
-                            *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg);
+                            *error.lock_clearing_poison() = Some(msg);
                             was_stopped = true;
                             break 'chunks;
                         }
@@ -254,19 +279,19 @@ fn playback_loop(
                     let chunk_len = chunk_text.len();
                     match rodio::Decoder::new(buf) {
                         Ok(source) => {
-                            *playing_info.lock().unwrap_or_else(|e| e.into_inner()) =
+                            *playing_info.lock_clearing_poison() =
                                 Some(VoicePlayingInfo {
                                     doc_start_line,
                                     doc_end_line,
                                     started_at: Instant::now(),
                                     chars_before_chunk: chars_before,
                                 });
-                            *status.lock().unwrap_or_else(|e| e.into_inner()) =
+                            *status.lock_clearing_poison() =
                                 PlaybackStatus::Playing;
                             sink.append(source);
                         }
                         Err(e) => {
-                            *error.lock().unwrap_or_else(|e| e.into_inner()) =
+                            *error.lock_clearing_poison() =
                                 Some(format!("Audio decode error: {e}"));
                             was_stopped = true;
                             break 'chunks;
@@ -284,13 +309,13 @@ fn playback_loop(
                                 }
                                 PlaybackCommand::Pause => {
                                     sink.pause();
-                                    *status.lock().unwrap_or_else(|e| e.into_inner()) =
+                                    *status.lock_clearing_poison() =
                                         PlaybackStatus::Paused;
                                     'paused: for pcmd in cmd_rx.iter() {
                                         match pcmd {
                                             PlaybackCommand::Resume => {
                                                 sink.play();
-                                                *status.lock().unwrap_or_else(|e| e.into_inner()) =
+                                                *status.lock_clearing_poison() =
                                                     PlaybackStatus::Playing;
                                                 break 'paused;
                                             }
@@ -323,14 +348,14 @@ fn playback_loop(
                 }
 
                 let _ = was_stopped;
-                *playing_info.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Idle;
+                *playing_info.lock_clearing_poison() = None;
+                *status.lock_clearing_poison() = PlaybackStatus::Idle;
                 // Clear our session id only if we still own it.  If a follow-up
                 // `start()` arrived and bumped the session counter while we were
                 // mid-chunk (we received a Start interrupt and broke out), the
                 // `session` field already holds the new id — leaving it alone
                 // means the new caller's `session_id()` query reflects reality.
-                let mut s = session.lock().unwrap_or_else(|e| e.into_inner());
+                let mut s = session.lock_clearing_poison();
                 if *s == Some(my_session) {
                     *s = None;
                 }
@@ -338,9 +363,9 @@ fn playback_loop(
 
             // ------------------------------------------------------------------ //
             PlaybackCommand::Stop => {
-                *playing_info.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Idle;
-                *session.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                *playing_info.lock_clearing_poison() = None;
+                *status.lock_clearing_poison() = PlaybackStatus::Idle;
+                *session.lock_clearing_poison() = None;
             }
             PlaybackCommand::Pause | PlaybackCommand::Resume => {}
         }
@@ -362,7 +387,7 @@ fn playback_loop(
 ) {
   for cmd in cmd_rx.iter() {
     if matches!(cmd, PlaybackCommand::Start { .. }) {
-      *error.lock().unwrap_or_else(|e| e.into_inner()) =
+      *error.lock_clearing_poison() =
         Some("voice not compiled in (build with --features voice)".to_string());
     }
   }
