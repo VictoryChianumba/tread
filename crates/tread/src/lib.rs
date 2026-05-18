@@ -294,13 +294,21 @@ fn fetch_paper_inner(
 ) -> Result<PaperData, String> {
   use arxiv_render::{fetch, parse, pdf_anchors, placement};
 
-  // The source tarball and the rendered PDF are independent HTTPS GETs
-  // against arxiv.org — only `lift_tables` (the final step) needs both
-  // results.  Spawn the PDF fetch on its own thread so its ~3-4s of
-  // network latency overlaps the source download, parse, and image-path
-  // absolutisation rather than running after them.  Total network phase
-  // drops from sum to max.  arXiv tolerates the two-concurrent-request
-  // pattern; trench's openreview audit hit the same shape.
+  // Two pairs of independent work overlap in this scope:
+  //
+  //   1. Source tarball and PDF are independent HTTPS GETs against
+  //      arxiv.org; total network phase = max(both) instead of sum.
+  //   2. parse_to_blocks (Pandoc subprocess on the source bytes) and
+  //      extract_anchors (pdftotext subprocess on the PDF bytes) are
+  //      also independent — they consume different inputs and meet
+  //      only at lift_tables.  Running them in parallel saves
+  //      ~min(parse, anchors) ≈ 500–600ms off the warm-cache wall.
+  //
+  // The anchor thread starts as soon as fetch_pdf completes (it
+  // joins pdf_handle from inside) and runs alongside whatever the
+  // main thread is doing — fetch_source, parse, absolutize.  arXiv
+  // tolerates the two-concurrent-request pattern; trench's openreview
+  // audit hit the same shape.
   std::thread::scope(|s| {
     let pdf_handle = s.spawn(|| {
       bench::time("fetch_pdf", || {
@@ -311,6 +319,23 @@ fn fetch_paper_inner(
         }
       })
     });
+    // Anchor extraction joins fetch_pdf itself, then shells to
+    // pdftotext.  Spawned alongside parse_to_blocks so its ~600ms
+    // overlaps the Pandoc run instead of stacking after it.  Both
+    // threads' subprocesses (pdftotext + pandoc) run truly in parallel
+    // on a multi-core box.  Best-effort: a panic or HTTP failure
+    // yields an empty anchor list and placement falls back to source
+    // order.
+    let anchor_handle = s.spawn(move || {
+      let pdf_result = pdf_handle
+        .join()
+        .unwrap_or_else(|_| Err("pdf fetch thread panicked".to_string()));
+      match pdf_result {
+        Ok(pdf) => bench::time("extract_anchors", || pdf_anchors::extract_anchors(&pdf)),
+        Err(_) => Vec::new(),
+      }
+    });
+
     let fetched = bench::time("fetch_source", || {
       if force_refresh {
         fetch::fetch_source_refresh(id)
@@ -331,15 +356,9 @@ fn fetch_paper_inner(
     } else {
       arxiv_render::degrade_images_to_captions(&mut blocks);
     }
-    // Best-effort PDF anchor extraction; thread panic or HTTP failure
-    // leaves blocks in source order.
-    let pdf_result = pdf_handle
+    let anchors = anchor_handle
       .join()
-      .unwrap_or_else(|_| Err("pdf fetch thread panicked".to_string()));
-    let anchors = match pdf_result {
-      Ok(pdf) => bench::time("extract_anchors", || pdf_anchors::extract_anchors(&pdf)),
-      Err(_) => Vec::new(),
-    };
+      .unwrap_or_else(|_| Vec::new());
     let blocks = bench::time("lift_tables", || placement::lift_tables(blocks, &anchors));
     bench::emit_fields(
       "fetch_paper_done",
