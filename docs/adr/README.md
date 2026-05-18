@@ -15,6 +15,7 @@ Companions: [`CONTEXT.md`](../../CONTEXT.md) (domain vocabulary) and
 | [0001](0001-figure-model.md) | Figure model | Accepted |
 | [0002](0002-preview-pane-model.md) | Preview pane model | Accepted |
 | [0003](0003-terminal-image-strategy.md) | Terminal image strategy | Accepted |
+| [0004](0004-reader-public-surface.md) | Reader public surface | Proposed |
 
 ## Format
 
