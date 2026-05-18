@@ -697,6 +697,41 @@ impl Reader {
         self.label_lines = self.layout_cache.label_lines.clone();
         self.bib_entries = self.layout_cache.bib_entries.clone();
         self.bib_entry_lines = self.layout_cache.bib_entry_lines.clone();
+        self.remap_search_matches_after_layout();
+    }
+
+    /// Re-derive `search_matches` against the new `visual_lines` and
+    /// re-anchor `search_idx` so a subsequent `n`/`N` continues from
+    /// roughly where the user was.  Without this, a `/foo` followed by
+    /// a resize leaves `search_matches` holding stale visual-line
+    /// indices that may point past the new `visual_lines.len()` —
+    /// the audit's C2 path.  Bookmarks and nav_history have the same
+    /// shape of problem; they're mitigated separately
+    /// (`jump_to_mark` no-ops on out-of-range targets, `clamp_position`
+    /// catches stale offsets on the next motion).
+    fn remap_search_matches_after_layout(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_matches.clear();
+            self.search_idx = 0;
+            return;
+        }
+        // Anchor: the visual line the user was looking at before the
+        // rebuild — either the current match or the cursor line.  The
+        // re-anchor picks the first new match at or after this point so
+        // pressing `n` continues forward, matching user intuition.
+        let prior_anchor = self
+            .search_matches
+            .get(self.search_idx)
+            .copied()
+            .unwrap_or(self.offset + self.cursor_y);
+        self.update_search_matches();
+        if !self.search_matches.is_empty() {
+            self.search_idx = self
+                .search_matches
+                .iter()
+                .position(|&m| m >= prior_anchor)
+                .unwrap_or(0);
+        }
     }
 
     fn rebuild_figure_index(&mut self) {
@@ -1670,5 +1705,107 @@ mod tests {
 
         reader.set_preview_geometry(None);
         assert!(reader.figure_preview_state().last_geometry().is_none());
+    }
+
+    // Audit C2 regression: search → resize → `n` previously left
+    // `search_matches` holding visual-line indices from the pre-resize
+    // layout.  The new layout's `visual_lines` is shorter or shifted,
+    // so the stale indices either pointed past the end (unsafe offset)
+    // or to unrelated lines (wrong "next match" target).  rebuild_layout
+    // now owns invalidation; this test exercises the full lifecycle.
+    #[test]
+    fn search_matches_remap_after_resize() {
+        // A wide line that wraps differently at 80 vs 20 cols.  The
+        // wrapping shift is what makes search_match indices stale.
+        let long = "alpha beta gamma delta epsilon zeta eta theta iota foo kappa lambda mu nu xi";
+        let blocks = vec![
+            Block::Line(long.to_string()),
+            Block::Line("middle".to_string()),
+            Block::Line("end with foo too".to_string()),
+        ];
+        let mut reader = Reader::new(blocks, 80, 24);
+        reader.search_query = "foo".into();
+        reader.update_search_matches();
+        assert_eq!(reader.search_matches.len(), 2);
+
+        // Resize narrower — the long line now wraps onto more visual
+        // rows, shifting the index of every later match.
+        reader.resize(20, 24);
+
+        // After rebuild, every stored match must still be in range.
+        let total = reader.visual_lines.len();
+        for &m in &reader.search_matches {
+            assert!(
+                m < total,
+                "stale search_match index {m} past visual_lines.len() {total}",
+            );
+        }
+        // Match count is content-driven (we have 2 "foo" occurrences),
+        // not layout-driven — the count must survive reflow.
+        assert_eq!(reader.search_matches.len(), 2);
+
+        // `n` and `N` are the user-visible crash trigger from the audit.
+        // Both must complete without panicking after the resize.
+        reader.search_next();
+        reader.search_next();
+        reader.search_prev();
+
+        // And the resulting offset must be a valid visual-line index.
+        assert!(reader.offset < total);
+    }
+
+    // Edge: search → resize when the query is empty (e.g. user cleared
+    // it).  The rebuild path must not preserve a stale match set.
+    #[test]
+    fn empty_query_clears_search_matches_after_resize() {
+        let blocks = vec![
+            Block::Line("only line with foo".to_string()),
+            Block::Line("nothing else".to_string()),
+        ];
+        let mut reader = Reader::new(blocks, 80, 24);
+        reader.search_query = "foo".into();
+        reader.update_search_matches();
+        assert_eq!(reader.search_matches.len(), 1);
+
+        // User cancels search but keeps current matches around (the
+        // event loop's cancel path clears search_query but rebuild
+        // could still run on resize).
+        reader.search_query.clear();
+        reader.resize(30, 24);
+
+        assert!(reader.search_matches.is_empty());
+        assert_eq!(reader.search_idx, 0);
+    }
+
+    // Re-anchor contract: after rebuild, `search_idx` should point at
+    // the first match at or after the user's prior anchor, so pressing
+    // `n` continues forward instead of jumping back to match 0.
+    #[test]
+    fn search_idx_reanchors_to_current_position_on_rebuild() {
+        let blocks = vec![
+            Block::Line("foo one".to_string()),
+            Block::Line("foo two".to_string()),
+            Block::Line("foo three".to_string()),
+            Block::Line("foo four".to_string()),
+        ];
+        let mut reader = Reader::new(blocks, 80, 24);
+        reader.search_query = "foo".into();
+        reader.update_search_matches();
+        assert_eq!(reader.search_matches.len(), 4);
+
+        // Walk to match 2 (the "foo three" line).
+        reader.search_next();
+        reader.search_next();
+        assert_eq!(reader.search_idx, 2);
+        let prior_match_line = reader.search_matches[reader.search_idx];
+
+        // Resize.  rebuild_layout runs; search_idx must re-anchor to
+        // the same line so the user keeps their place.
+        reader.resize(40, 24);
+        let new_match_line = reader.search_matches[reader.search_idx];
+        assert_eq!(
+            new_match_line, prior_match_line,
+            "search_idx should re-anchor to the user's prior match line",
+        );
     }
 }
