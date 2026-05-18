@@ -13,7 +13,6 @@ mod render;
 mod state;
 mod text_objects;
 mod voice;
-mod voice_control;
 
 use crossterm::{
   event::{
@@ -923,24 +922,24 @@ impl Reader {
   /// its own dirty flag and redraw on the next frame.  Returns
   /// `false` on a fully idle tick — hosts can skip redrawing.
   pub fn tick(&mut self) -> bool {
-    if self.voice_controller.is_none() {
+    if self.voice_controller().is_none() {
       return false;
     }
-    let prev_status = self.voice_status.clone();
-    let prev_started_at = self.voice_started_at;
-    let prev_chars_before = self.voice_chars_before;
-    voice_control::sync_voice_status(self);
-    let mut changed = self.voice_status != prev_status
-      || self.voice_started_at != prev_started_at
-      || self.voice_chars_before != prev_chars_before;
-    if self.continuous_reading
+    let prev_status = self.voice_status().clone();
+    let prev_started_at = self.voice_started_at();
+    let prev_chars_before = self.voice_chars_before();
+    crate::state::voice_control::sync_voice_status(self);
+    let mut changed = *self.voice_status() != prev_status
+      || self.voice_started_at() != prev_started_at
+      || self.voice_chars_before() != prev_chars_before;
+    if self.continuous_reading()
       && matches!(prev_status, voice::PlaybackStatus::Playing)
-      && matches!(self.voice_status, voice::PlaybackStatus::Idle)
+      && matches!(self.voice_status(), voice::PlaybackStatus::Idle)
     {
       // Chunk just ended → roll forward to the next paragraph.
-      let advanced = voice_control::advance_to_next_paragraph_for_continuous_reading(self);
+      let advanced = crate::state::voice_control::advance_to_next_paragraph_for_continuous_reading(self);
       if !advanced {
-        self.continuous_reading = false;
+        self.stop_continuous_reading();
       }
       changed = true;
     }
@@ -948,7 +947,7 @@ impl Reader {
     // moves continuously based on wall-clock time, so every tick
     // changes visible state even if no field flipped.
     if matches!(
-      self.voice_status,
+      self.voice_status(),
       voice::PlaybackStatus::Playing | voice::PlaybackStatus::Loading
     ) {
       changed = true;
@@ -1234,7 +1233,7 @@ impl ReaderRuntime {
     } else if images::has_pending_jobs(&self.img_state) {
       ACTIVE_POLL
     } else if matches!(
-      self.reader.voice_status,
+      self.reader.voice_status(),
       voice::PlaybackStatus::Playing | voice::PlaybackStatus::Loading
     ) {
       Duration::from_millis(33)
@@ -1504,13 +1503,13 @@ mod acceptance_tests {
     );
 
     reader.handle_event(char_key('r'));
-    assert!(reader.reading_mode);
+    assert!(reader.reading_mode());
     assert!(!reader.tick(), "no controller means idle ticks are invisible");
     reader.handle_event(ctrl('p'));
-    assert!(reader.continuous_reading);
+    assert!(reader.continuous_reading());
     reader.handle_event(key(KeyCode::Esc));
-    assert!(!reader.reading_mode);
-    assert!(!reader.continuous_reading);
+    assert!(!reader.reading_mode());
+    assert!(!reader.continuous_reading());
   }
 }
 
@@ -1537,7 +1536,7 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
   // `Esc`-quits match means reading-mode Esc stops audio without
   // also quitting the reader.
   let key_event = crossterm::event::KeyEvent::new(code, mods);
-  if voice_control::handle_voice_keys(reader, key_event) {
+  if crate::state::voice_control::handle_voice_keys(reader, key_event) {
     reader.count_buf.clear();
     return false;
   }

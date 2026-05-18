@@ -10,11 +10,84 @@
 //! replaced with visual-line indices throughout.  The empirical 13
 //! chars/sec speech rate is unchanged.
 
+use std::sync::Arc;
+use std::time::Instant;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::state::Reader;
+use super::Reader;
 use crate::text_objects::{cursor_to_paragraph_end, paragraph_with_range};
-use crate::voice::PlaybackStatus;
+use crate::voice::{PlaybackController, PlaybackStatus};
+
+// ── Seam surface (ADR-0004 Seam 3) ─────────────────────────────────────
+//
+// Voice state lives in ten fields on `Reader` that move in lockstep.
+// External callers (`lib.rs::tick`, `render.rs`) reach in through the
+// getters below; the only write outside `state/` is the `tick()`
+// continuous-reading shutoff, routed through `stop_continuous_reading`.
+// Multi-field writes (start a chunk, exit a session, sync from the
+// controller) stay as free functions inside this module because they're
+// only ever called from this module — pushing them through the impl
+// surface would force a borrow-split through methods just to satisfy
+// the seam.
+impl Reader {
+    /// Whether voice is currently rendering effects (line dimming,
+    /// active-word highlight).  Polled by the host event loop's idle-
+    /// tick scheduler to decide whether to redraw on a wall-clock tick.
+    pub fn voice_status(&self) -> &PlaybackStatus {
+        &self.voice_status
+    }
+
+    /// Shared playback controller.  `None` when audio init failed at
+    /// startup or the host disabled voice entirely.  Returned as an
+    /// `Arc` clone so callers can hold a reference across `&mut self`
+    /// operations on the Reader without fighting the borrow checker.
+    pub fn voice_controller(&self) -> Option<Arc<PlaybackController>> {
+        self.voice_controller.clone()
+    }
+
+    /// Wall-clock instant when the current audio chunk started, or
+    /// `None` when nothing is playing.  Drives the moving "active word"
+    /// highlight by combining with a fixed chars-per-second rate.
+    pub fn voice_started_at(&self) -> Option<Instant> {
+        self.voice_started_at
+    }
+
+    /// Cumulative character count from chunks that completed BEFORE the
+    /// current one.  Word-position math adds this to elapsed time × 13
+    /// chars/sec to estimate the active word.
+    pub fn voice_chars_before(&self) -> usize {
+        self.voice_chars_before
+    }
+
+    /// First / last visual-line index of the paragraph currently being
+    /// read.  Used for paragraph dimming and word-position bookkeeping.
+    pub fn voice_para_range(&self) -> (usize, usize) {
+        (self.voice_para_start, self.voice_para_end)
+    }
+
+    /// True while the user is in voice mode (`r` / `R` / `Ctrl+P`
+    /// started a playback session).  Gates `Space`/`c`/`Esc` voice key
+    /// handling so navigation keeps working alongside playback.
+    pub fn reading_mode(&self) -> bool {
+        self.reading_mode
+    }
+
+    /// True iff continuous reading is active — on chunk-end, the
+    /// reader auto-advances to the next paragraph and starts playing.
+    pub fn continuous_reading(&self) -> bool {
+        self.continuous_reading
+    }
+
+    /// Stop continuous auto-advance, leaving the current chunk's
+    /// playback state alone.  Used when `advance_to_next_paragraph_for_continuous_reading`
+    /// runs out of document — we want to keep reading_mode on so the
+    /// status line keeps showing "READING" until the final chunk
+    /// finishes, but no further paragraphs should auto-start.
+    pub fn stop_continuous_reading(&mut self) {
+        self.continuous_reading = false;
+    }
+}
 
 /// Voice key handler.  Called BEFORE other key handlers in normal
 /// mode so reading-mode `Esc` takes precedence over reader-quit.

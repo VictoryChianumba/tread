@@ -272,8 +272,8 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     };
 
     // Voice playback effects, computed once per draw and reused per row.
-    let voice_word = crate::voice_control::active_voice_word(reader);
-    let voice_active = crate::voice_control::voice_rendering_active(reader);
+    let voice_word = crate::state::voice_control::active_voice_word(reader);
+    let voice_active = crate::state::voice_control::voice_rendering_active(reader);
 
     let lines: Vec<Line> = (0..ch)
         .map(|row| {
@@ -330,7 +330,7 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
             );
             // Dim non-paragraph lines during voice playback so the active
             // paragraph reads as the focused region.
-            if voice_active && crate::voice_control::voice_line_dimmed(reader, vl_idx) {
+            if voice_active && crate::state::voice_control::voice_line_dimmed(reader, vl_idx) {
                 line = line.style(Style::default().fg(t.text_dim));
             }
             line
@@ -1068,7 +1068,7 @@ fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     if !reader.count_buf.is_empty() {
         details.push(format!("count {}_", reader.count_buf));
     }
-    if let Some(voice) = crate::voice_control::voice_status_label(reader) {
+    if let Some(voice) = crate::state::voice_control::voice_status_label(reader) {
         details.push(voice);
     }
 

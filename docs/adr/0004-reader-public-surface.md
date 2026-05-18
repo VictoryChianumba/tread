@@ -1,7 +1,7 @@
 # ADR-0004 — Reader public surface
 
-- **Status:** Accepted (2026-05-18) — Seams 1 (mode) and 2 (cursor/scroll)
-  landed; Seams 3–4 still queued
+- **Status:** Accepted (2026-05-18) — Seams 1 (mode), 2 (cursor/scroll),
+  and 3 (voice) landed; Seam 4 still queued
 - **Crate:** `tread` (`state/` and every other file in the crate)
 - **Relates to:** [ADR-0002 — Preview pane model](0002-preview-pane-model.md)
 
@@ -221,13 +221,66 @@ calls to the new method.  `commands.rs::goto_line` previously
 inlined the bottom-aligned scroll-and-cursor dance for `:N`; that's
 now a single `jump_to_line_with_context_above` call.
 
+## Seam 3 — Voice — landed 2026-05-18
+
+The ten voice fields (`voice_controller`, `voice_started_session`,
+`voice_status`, `voice_error`, `voice_para_start`, `voice_para_end`,
+`voice_started_at`, `voice_chars_before`, `reading_mode`,
+`continuous_reading`) are now private to `state/`.
+
+The orchestration file `voice_control.rs` was moved to
+`state/voice_control.rs` so its free functions retain direct field
+access — they were always the only writers, just sitting outside
+the module that defined the fields they wrote to. Now that's no
+longer a violation of the module boundary; it's the boundary's
+intended shape.
+
+Landed shape (in `state/voice_control.rs`):
+
+```rust
+impl Reader {
+    pub fn voice_status(&self) -> &PlaybackStatus;
+    pub fn voice_controller(&self) -> Option<Arc<PlaybackController>>;
+    pub fn voice_started_at(&self) -> Option<Instant>;
+    pub fn voice_chars_before(&self) -> usize;
+    pub fn voice_para_range(&self) -> (usize, usize);
+    pub fn reading_mode(&self) -> bool;
+    pub fn continuous_reading(&self) -> bool;
+    pub fn stop_continuous_reading(&mut self);
+}
+```
+
+The single external write — `tick()`'s `self.continuous_reading =
+false` when continuous-reading runs out of document — routes through
+`stop_continuous_reading()`. The method deliberately preserves
+`reading_mode` and `voice_status` so the current chunk plays through
+to natural end and the status line keeps saying "READING" while the
+final paragraph finishes.
+
+Multi-field writes (start a chunk, sync from the controller, exit a
+session on preemption / Esc) stay as free functions in
+`state/voice_control.rs` because they're only called from within
+that module — adding methods just to satisfy the seam would be
+ceremony without value.
+
+#### Migration metrics (2026-05-18 audit → post-Seam-3)
+
+| Metric | Before | After |
+|---|---|---|
+| Public voice fields | 10 | 0 |
+| Bare voice writes outside `state/` | 1 (`tick`) | 0 |
+| Crate-wide tests | 143 | 144 |
+
+One new transition-invariant test pins the documented
+`stop_continuous_reading` contract:
+
+- `stop_continuous_reading_clears_only_the_continuous_flag`
+
 ## Open follow-up
 
-After seams 1 and 2, the remaining seams in this ADR's priority order:
+After seams 1, 2, and 3, the remaining seam in this ADR's priority
+order:
 
-- **Seam 3 — Voice.** 8 fields collapse behind a `voice::*` module
-  surface. Likely-touched files: `voice_control.rs`, `voice/playback.rs`,
-  `lib.rs`.
 - **Seam 4 — Bookmarks.** Change storage from
   `HashMap<char, usize>` (visual-line index) to block-byte addressing
   like highlights, behind `BookmarkSet`. Survives reflow as a side

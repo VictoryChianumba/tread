@@ -12,6 +12,7 @@ use crate::highlights::HighlightSet;
 mod cursor;
 mod mode;
 mod nav;
+pub mod voice_control;
 
 pub const TOC_WIDTH: usize = 28;
 const PREVIEW_TEXT_PERCENT: usize = 60;
@@ -850,38 +851,43 @@ pub struct Reader {
     // each Reader.  Standalone tread wraps its single controller in an Arc
     // too so the contract is uniform.
     /// Background TTS playback controller (shared via Arc), or `None` when
-    /// audio init failed or voice was disabled by the host.
-    pub voice_controller: Option<Arc<crate::voice::PlaybackController>>,
+    /// audio init failed or voice was disabled by the host.  Private; read
+    /// via `Reader::voice_controller()`.
+    voice_controller: Option<Arc<crate::voice::PlaybackController>>,
     /// Session id stamped by `voice_controller.start(...)` when this
     /// Reader requested playback.  Compared against the controller's
     /// current session each tick: a mismatch means another Reader (in
     /// another tab) preempted us, so we silently exit `reading_mode`.
-    pub voice_started_session: Option<u64>,
+    voice_started_session: Option<u64>,
     /// Last-synced playback status; refreshed each tick from the
-    /// controller's shared `Arc<Mutex>`.
-    pub voice_status: crate::voice::PlaybackStatus,
+    /// controller's shared `Arc<Mutex>`.  Read via `Reader::voice_status()`.
+    voice_status: crate::voice::PlaybackStatus,
     /// Pending error from the playback thread (e.g. ElevenLabs auth
     /// failure, audio device missing).  Cleared after display in the
     /// status bar.
-    pub voice_error: Option<String>,
+    voice_error: Option<String>,
     /// First / last visual-line index of the paragraph currently being
     /// read.  Used for line dimming and word-position bookkeeping.
-    pub voice_para_start: usize,
-    pub voice_para_end: usize,
+    /// Read via `Reader::voice_para_range()`.
+    voice_para_start: usize,
+    voice_para_end: usize,
     /// Wall-clock instant when the current chunk's audio started playing.
     /// `None` when nothing is playing.  Combined with a fixed chars-per-
     /// second rate, this drives the "active word" highlight.
-    pub voice_started_at: Option<std::time::Instant>,
+    voice_started_at: Option<std::time::Instant>,
     /// Cumulative character count from chunks that completed BEFORE the
     /// current one, so word-position math knows what offset to start at.
-    pub voice_chars_before: usize,
+    voice_chars_before: usize,
     /// True while the user is in voice mode (`r`/`R`/`Ctrl+P` started a
     /// playback session).  Allows navigation to keep working while audio
-    /// plays, and gates `Space`/`c`/`Esc` voice handlers.
-    pub reading_mode: bool,
+    /// plays, and gates `Space`/`c`/`Esc` voice handlers.  Read via
+    /// `Reader::reading_mode()`.
+    reading_mode: bool,
     /// True when continuous reading is active — on chunk-end, advance to
-    /// the next paragraph and start playing it.
-    pub continuous_reading: bool,
+    /// the next paragraph and start playing it.  Read via
+    /// `Reader::continuous_reading()`; toggle off via
+    /// `Reader::stop_continuous_reading()`.
+    continuous_reading: bool,
 }
 
 impl Reader {
@@ -2360,5 +2366,28 @@ mod tests {
         );
         assert_eq!(reader.offset() + reader.cursor_y(), target);
         assert_eq!(reader.cursor_x(), 0);
+    }
+
+    // ── Voice invariants (ADR-0004 Seam 3) ─────────────────────────────
+
+    #[test]
+    fn stop_continuous_reading_clears_only_the_continuous_flag() {
+        let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+        reader.reading_mode = true;
+        reader.continuous_reading = true;
+        reader.voice_status = crate::voice::PlaybackStatus::Playing;
+
+        reader.stop_continuous_reading();
+
+        assert!(!reader.continuous_reading());
+        // reading_mode and voice_status are intentionally PRESERVED — the
+        // current chunk should keep playing through to its natural end
+        // (and the status line should keep saying "READING") even after
+        // continuous auto-advance is turned off.
+        assert!(reader.reading_mode());
+        assert!(matches!(
+            reader.voice_status(),
+            crate::voice::PlaybackStatus::Playing
+        ));
     }
 }
