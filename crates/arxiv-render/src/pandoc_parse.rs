@@ -19,6 +19,13 @@ thread_local! {
         = std::cell::RefCell::new(std::collections::HashMap::new());
     static BIBITEMS_ORDERED: std::cell::RefCell<Vec<(String, String)>>
         = std::cell::RefCell::new(Vec::new());
+    /// Set by the `thebibliography` Div arm when we hand off rendering
+    /// to `synthesize_bibliography`.  Consulted at the end of
+    /// `try_pandoc` to decide whether to auto-append a synthesized
+    /// References section for papers (like 2605.04035) where Pandoc
+    /// emitted no bibliography Div because the source uses
+    /// `\bibliography{external}` instead of inline `thebibliography`.
+    static BIBLIOGRAPHY_EMITTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 struct CiteScopeGuard;
@@ -26,6 +33,7 @@ impl Drop for CiteScopeGuard {
     fn drop(&mut self) {
         CITE_NUMBERS.with(|c| c.borrow_mut().clear());
         BIBITEMS_ORDERED.with(|b| b.borrow_mut().clear());
+        BIBLIOGRAPHY_EMITTED.with(|f| f.set(false));
     }
 }
 
@@ -106,6 +114,21 @@ pub fn try_pandoc(sources: &[(String, String)]) -> Result<Vec<Block>, String> {
     let mut counters = SectionCounters::new();
     if let Some(arr) = ast["blocks"].as_array() {
         blocks.extend(walk_blocks(arr, 0, &mut tabular_specs, &mut counters));
+    }
+
+    // Auto-append a References section when we have bibitems but Pandoc
+    // emitted no `thebibliography` Div.  Affects papers that use
+    // `\bibliography{external}` (BibLaTeX / bibtex without --citeproc)
+    // — 2605.04035 is one — where the citations have numbers but the
+    // document body would otherwise just end.
+    let bibliography_emitted = BIBLIOGRAPHY_EMITTED.with(|f| f.get());
+    let has_bibitems = BIBITEMS_ORDERED.with(|b| !b.borrow().is_empty());
+    if !bibliography_emitted && has_bibitems {
+        blocks.push(Block::Header {
+            level: 1,
+            text: "References".to_string(),
+        });
+        blocks.extend(synthesize_bibliography());
     }
 
     if blocks.iter().all(|b| matches!(b, Block::Blank)) {
@@ -465,6 +488,7 @@ fn walk_blocks(
                     // is lost but the entries are at least visible.
                     let has_bibitems = BIBITEMS_ORDERED.with(|b| !b.borrow().is_empty());
                     if has_bibitems {
+                        BIBLIOGRAPHY_EMITTED.with(|f| f.set(true));
                         out.extend(synthesize_bibliography());
                         continue;
                     }
