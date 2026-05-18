@@ -8,6 +8,8 @@
 use doc_model::{Block, InlineSpan, LinkTarget};
 use serde_json::Value;
 
+mod figure;
+
 // ── Cross-cutting state for Cite / bibliography rendering ────────────────────
 
 // `walk_inlines_spans` is called from many sites and threading two
@@ -500,129 +502,8 @@ fn walk_blocks(
             }
 
             "Figure" => {
-                // c = [attr, caption, [blocks]]
-                // Pandoc's Figure node carries the LaTeX `\label{}` at
-                // attr.id (c[0][0]).  Emit an Anchor before the caption
-                // so `\ref{fig:X}` resolves at runtime.
-                if let Some(id) = c[0][0].as_str() {
-                    if !id.is_empty() {
-                        out.push(Block::Anchor(id.to_string()));
-                    }
-                }
-                let cap = extract_caption_text(&c[1]);
-                let n = counters.bump_figure();
-                let alt = if cap.is_empty() {
-                    format!("Figure {n}")
-                } else {
-                    format!("Figure {n}: {cap}")
-                };
-                // Detect stacked vs side-by-side by walking c[2] (the
-                // figure's content blocks).  Empirically, Pandoc emits:
-                //   - `\\` between images → one Para block with inline
-                //     LineBreaks separating the Images → STACKED.
-                //   - Minipages / subfigures → multiple Div blocks each
-                //     with one Image inside → SIDE-BY-SIDE.
-                //
-                // The result is a vec of vecs: outer = stack rows,
-                // inner = side-by-side siblings within a row.
-                let blocks_in_figure: Vec<Value> = c[2].as_array().cloned().unwrap_or_default();
-                // Layout-detection precedence:
-                //   1. Multiple top-level blocks → side-by-side
-                //      (minipage/subfigure pattern).
-                //   2. Single block with explicit `\\` (LineBreak inline)
-                //      between images → stacked.
-                //   3. Single block where any image has `width=\textwidth`
-                //      / `\linewidth` (or scalar ≥ 0.85) → stacked.
-                //   4. Otherwise → side-by-side.
-                let groups: Vec<Vec<String>> = if blocks_in_figure.len() == 1 {
-                    let block = &blocks_in_figure[0];
-                    let t = block["t"].as_str();
-                    if matches!(t, Some("Para") | Some("Plain")) {
-                        let inlines = block["c"].as_array().cloned().unwrap_or_default();
-                        // (2) Explicit `\\` separator wins.
-                        let by_linebreak = split_inlines_by_linebreak(&inlines);
-                        if by_linebreak.len() > 1 {
-                            by_linebreak
-                        } else {
-                            // (3) Width-attribute inference.
-                            let with_widths = collect_images_with_width(&inlines);
-                            if with_widths.iter().any(|(_, fw)| *fw) {
-                                with_widths.into_iter().map(|(s, _)| vec![s]).collect()
-                            } else {
-                                // (4) Default side-by-side row.
-                                let srcs: Vec<String> =
-                                    with_widths.into_iter().map(|(s, _)| s).collect();
-                                if srcs.is_empty() {
-                                    Vec::new()
-                                } else {
-                                    vec![srcs]
-                                }
-                            }
-                        }
-                    } else if t == Some("Table") {
-                        // Pandoc emits N-row tabulars as a Table node — one
-                        // row per source `\\`-separated line.  Walk row by
-                        // row and emit one image-row per Table row so the
-                        // grid's vertical structure survives (recovered by
-                        // the `\resizebox` strip; otherwise flattens into
-                        // one super-wide ImageRow with N×M slivers).
-                        walk_table_rows_for_images(block)
-                    } else {
-                        // Div or other wrapper: treat as one row of images.
-                        let mut imgs = Vec::new();
-                        walk_for_images(std::slice::from_ref(block), &mut imgs);
-                        if imgs.is_empty() {
-                            Vec::new()
-                        } else {
-                            vec![imgs]
-                        }
-                    }
-                } else {
-                    // (1) Multiple top-level blocks (minipage / subfigure):
-                    // combine all images into one side-by-side row.
-                    let mut all_imgs = Vec::new();
-                    for block in &blocks_in_figure {
-                        walk_for_images(std::slice::from_ref(block), &mut all_imgs);
-                    }
-                    if all_imgs.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![all_imgs]
-                    }
-                };
-
-                if groups.is_empty() {
-                    if !cap.is_empty() {
-                        out.push(Block::Line(format!("[Figure {n}: {cap}]")));
-                    } else {
-                        out.push(Block::Line(format!("[Figure {n}]")));
-                    }
-                } else {
-                    // One Pandoc Figure node → one Block::Figure.  The
-                    // 2D `rows` grid mirrors the source's stacked-vs-
-                    // side-by-side structure exactly, so downstream
-                    // consumers (FigureIndex, build_visual_lines, the
-                    // preview tiler) don't have to reconstruct it.
-                    let rows: Vec<Vec<doc_model::ImageItem>> = groups
-                        .into_iter()
-                        .map(|group| {
-                            group
-                                .into_iter()
-                                .map(|src| doc_model::ImageItem {
-                                    path: std::path::PathBuf::from(src),
-                                    kitty_id: counters.next_kitty_id(),
-                                    dims: None, // populated post-parse by absolutize_image_paths
-                                })
-                                .collect()
-                        })
-                        .collect();
-                    out.push(Block::Figure {
-                        rows,
-                        alt,
-                        figure_id: n,
-                    });
-                }
-                out.push(Block::Blank);
+                // c = [attr, caption, [blocks]] — see `figure::extract_figure`.
+                out.extend(figure::extract_figure(c, counters, specs));
             }
 
             "LineBlock" => {
@@ -973,6 +854,7 @@ fn take_matching_spec(specs: &mut Vec<TableSpec>, table_cols: usize) -> TableSpe
         col_count: table_cols,
         vertical_rules: Vec::new(),
         horizontal_rules: Vec::new(),
+        column_gaps_after: Vec::new(),
     }
 }
 
@@ -1110,186 +992,9 @@ fn extract_caption_text(cap: &Value) -> String {
 
 // ── Inline walkers ────────────────────────────────────────────────────────────
 
-/// Recursively walk a Pandoc AST node array collecting every Image
-/// inline's `src` string in document order.  The Figure arm walks
-/// `c[2]` block-by-block to preserve LaTeX layout intent (same block
-/// = side-by-side, separate blocks = stacked); within each block this
-/// helper finds all images regardless of further nesting (Plain →
-/// Image, Plain → Subfigure → Image, etc.).
-/// Walk inlines collecting `(src, is_full_width)` per Image.  The
-/// width flag is read from the LaTeX `width=` attribute that Pandoc
-/// preserves verbatim on the Image's attr triple — `\textwidth` or
-/// `\linewidth` (with no scalar prefix or scalar ≥ 0.85) means the
-/// image will dominate its row and so should stack rather than share.
-///
-/// Walks recursively into Spans and other inline wrappers so the
-/// `{Span(Image)}` pattern Pandoc uses for `{\includegraphics{}}` is
-/// handled correctly.
-fn collect_images_with_width(inlines: &[Value]) -> Vec<(String, bool)> {
-    let mut out = Vec::new();
-    walk_for_images_with_width(inlines, &mut out);
-    out
-}
-
-fn walk_for_images_with_width(nodes: &[Value], out: &mut Vec<(String, bool)>) {
-    for node in nodes {
-        if node["t"].as_str() == Some("Image") {
-            let c = &node["c"];
-            // c = [attr, alt_inlines, [src, title]]
-            // attr = [id, classes, key-value pairs]
-            if let Some(src) = c[2][0].as_str() {
-                if !src.is_empty() {
-                    let full = c[0][2]
-                        .as_array()
-                        .map(|kvs| {
-                            kvs.iter().any(|kv| {
-                                kv[0].as_str() == Some("width")
-                                    && kv[1].as_str().is_some_and(is_full_width)
-                            })
-                        })
-                        .unwrap_or(false);
-                    out.push((src.to_string(), full));
-                    continue;
-                }
-            }
-        }
-        if let Some(arr) = node["c"].as_array() {
-            walk_for_images_with_width(arr, out);
-        }
-        if let Some(arr) = node.as_array() {
-            walk_for_images_with_width(arr, out);
-        }
-    }
-}
-
-/// Decide whether a LaTeX width spec (preserved verbatim by Pandoc)
-/// indicates the image is meant to fill the available row.  Treats
-/// `\textwidth` and `\linewidth` as the markers; an absent scalar
-/// prefix means 1.0 (full), a present scalar ≥ 0.85 still counts as
-/// effectively full (e.g. `0.95\textwidth`), anything smaller is
-/// fractional.
-fn is_full_width(s: &str) -> bool {
-    let trimmed = s.trim();
-    let marker_idx = trimmed
-        .find("\\textwidth")
-        .or_else(|| trimmed.find("\\linewidth"))
-        .or_else(|| trimmed.find("\\columnwidth"));
-    let Some(idx) = marker_idx else { return false };
-    let prefix = trimmed[..idx].trim();
-    if prefix.is_empty() {
-        return true;
-    }
-    prefix.parse::<f32>().map(|v| v >= 0.85).unwrap_or(false)
-}
-
-/// Walk a list of Pandoc inlines and split into groups separated by
-/// `LineBreak` inlines.  Each returned inner Vec is the images on one
-/// "row" — i.e. siblings that should render side-by-side.  Used for
-/// the `\includegraphics{}\\\includegraphics{}` pattern, which Pandoc
-/// emits as a single Para containing `[Image, LineBreak, Image]`.
-fn split_inlines_by_linebreak(inlines: &[Value]) -> Vec<Vec<String>> {
-    let mut groups: Vec<Vec<String>> = Vec::new();
-    let mut cur: Vec<String> = Vec::new();
-    for node in inlines {
-        if node["t"].as_str() == Some("LineBreak") {
-            if !cur.is_empty() {
-                groups.push(std::mem::take(&mut cur));
-            }
-            continue;
-        }
-        // Anything else: walk for nested images and add to current row.
-        walk_for_images(std::slice::from_ref(node), &mut cur);
-    }
-    if !cur.is_empty() {
-        groups.push(cur);
-    }
-    groups
-}
-
-/// Walk a Pandoc `Table` node and return one image-source list per
-/// source row (skipping rows with no images, like header labels).
-///
-/// Pandoc Table layout (AST: `Table Attr Caption [ColSpec] TableHead [TableBody] TableFoot`):
-/// - `c[0]` attr · `c[1]` caption · `c[2]` colspecs
-/// - `c[3]` head = `[attr, [row]]`
-/// - `c[4]` bodies = `[[attr, row_head_cols, [intermediate_head_row], [body_row]], ...]`
-/// - `c[5]` foot = `[attr, [row]]`
-///
-/// A row is `[attr, [cell]]`; a cell carries `[Block]` content where the
-/// `\includegraphics` lives.  We hand each row to `walk_for_images` so
-/// nested Plain/Span/Image wrappers are picked up just like outside a
-/// table.  Header-only rows (no Image inlines) are silently dropped so
-/// label rows like `Input | Avat3r | Ours` don't become empty groups.
-fn walk_table_rows_for_images(table: &Value) -> Vec<Vec<String>> {
-    let mut groups: Vec<Vec<String>> = Vec::new();
-    let push_row = |row: &Value, out: &mut Vec<Vec<String>>| {
-        let cells = match row
-            .as_array()
-            .and_then(|r| r.get(1))
-            .and_then(Value::as_array)
-        {
-            Some(c) => c,
-            None => return,
-        };
-        let mut imgs: Vec<String> = Vec::new();
-        walk_for_images(cells, &mut imgs);
-        if !imgs.is_empty() {
-            out.push(imgs);
-        }
-    };
-    // Head rows.
-    if let Some(head_rows) = table["c"][3][1].as_array() {
-        for row in head_rows {
-            push_row(row, &mut groups);
-        }
-    }
-    // Bodies (intermediate-head-rows then body-rows for each body).
-    if let Some(bodies) = table["c"][4].as_array() {
-        for body in bodies {
-            if let Some(rows) = body.get(2).and_then(Value::as_array) {
-                for row in rows {
-                    push_row(row, &mut groups);
-                }
-            }
-            if let Some(rows) = body.get(3).and_then(Value::as_array) {
-                for row in rows {
-                    push_row(row, &mut groups);
-                }
-            }
-        }
-    }
-    // Foot rows.
-    if let Some(foot_rows) = table["c"][5][1].as_array() {
-        for row in foot_rows {
-            push_row(row, &mut groups);
-        }
-    }
-    groups
-}
-
-fn walk_for_images(nodes: &[Value], out: &mut Vec<String>) {
-    for node in nodes {
-        if node["t"].as_str() == Some("Image") {
-            // c = [attr, alt_inlines, [src, title]]
-            if let Some(src) = node["c"][2][0].as_str() {
-                if !src.is_empty() {
-                    out.push(src.to_string());
-                    // Don't recurse into the matched Image's own children.
-                    continue;
-                }
-            }
-        }
-        // Recurse into child arrays — Pandoc nests Image inside Plain,
-        // Para, Div, etc.  The child structure varies per node type so
-        // we walk every array-valued field.
-        if let Some(arr) = node["c"].as_array() {
-            walk_for_images(arr, out);
-        }
-        if let Some(arr) = node.as_array() {
-            walk_for_images(arr, out);
-        }
-    }
-}
+// Figure-exclusive walkers (collect_images_with_width, split_inlines_by_linebreak,
+// walk_table_rows_for_images, walk_for_images, is_full_width) moved to
+// the `figure` submodule.
 
 /// Build the rendered bibliography block sequence from the
 /// pre-extracted source-order bibitems.  Replaces Pandoc's
@@ -1975,6 +1680,12 @@ pub(crate) struct TableSpec {
     /// against the renderer's auto-emitted top/bottom rules; positions in
     /// between split the body into groups.
     pub horizontal_rules: Vec<usize>,
+    /// Column indices AFTER which a non-empty `@{...}` separator (e.g.
+    /// `\hspace{1mm}`) appears in the source spec.  Figure-rendering uses
+    /// this to insert a 1-cell horizontal gap between column groups so
+    /// the visual structure of a `ccc@{\hspace{1mm}}ccc` table survives
+    /// from the source into the preview pane.
+    pub column_gaps_after: Vec<usize>,
 }
 
 /// Walk a LaTeX source string and pull out the column spec and horizontal
@@ -2049,14 +1760,15 @@ pub(crate) fn extract_tabular_specs(src: &str) -> Vec<TableSpec> {
             // p+1 is past `{` (ASCII), close is the position of `}` (ASCII)
             // — both are guaranteed char boundaries, so this slice is safe.
             let spec_str = &src[p + 1..close];
-            if let Some((col_count, vertical_rules)) = parse_column_spec(spec_str) {
+            if let Some(parsed) = parse_column_spec_full(spec_str) {
                 let content_start = close + 1;
                 let (horizontal_rules, content_end) =
                     scan_table_horizontal_rules(bytes, content_start);
                 out.push(TableSpec {
-                    col_count,
-                    vertical_rules,
+                    col_count: parsed.col_count,
+                    vertical_rules: parsed.vertical_rules,
                     horizontal_rules,
+                    column_gaps_after: parsed.column_gaps_after,
                 });
                 i = content_end;
                 continue;
@@ -2186,24 +1898,47 @@ fn preceded_by_odd_backslashes(bytes: &[u8], pos: usize) -> bool {
     count % 2 == 1
 }
 
-/// Parse a LaTeX `tabular` column spec into its column count and the column
-/// indices BEFORE which a `|` vertical rule appears.
+/// Parsed column spec: col_count, vertical-rule positions, and
+/// column-group break positions.
+///
+/// `column_gaps_after` lists column indices AFTER which a non-trivial
+/// `@{...}` separator (e.g. `\hspace{1mm}`) appears in the spec — these
+/// are the visible inter-column gaps that LaTeX renders to break a wide
+/// table into logical groups (typical for figure tabulars that arrange
+/// several N-column "panels" with a small space between them).
+///
+/// Empty `@{}` separators are ignored (they only suppress the default
+/// `\tabcolsep` between columns, not add visible gaps).
+pub(crate) struct ParsedColumnSpec {
+    pub col_count: usize,
+    pub vertical_rules: Vec<usize>,
+    pub column_gaps_after: Vec<usize>,
+}
+
+/// Parse a LaTeX `tabular` column spec.
 ///
 /// Recognised primitives:
 /// - `c`, `l`, `r`             — a column (count += 1)
 /// - `p{...}`, `m{...}`, `b{...}` — a column with width arg (count += 1, skip arg)
 /// - `|`                       — vertical rule before next column
-/// - `>{...}`, `<{...}`,
-///   `!{...}`, `@{...}`        — column-modifier macros (skip brace group)
+/// - `>{...}`, `<{...}`, `!{...}` — column-modifier macros (skip brace group)
+/// - `@{...}`                  — column separator; non-empty content
+///                                between two columns marks a group break
 /// - whitespace                — ignored
 ///
 /// Returns `None` if the spec uses unsupported syntax (e.g. `*{N}{spec}` or
 /// any character we don't recognise) — graceful degradation: the table will
-/// render with no vertical rules.
+/// render with no vertical rules and no column-group gaps.
+#[allow(dead_code)]
 pub(crate) fn parse_column_spec(spec: &str) -> Option<(usize, Vec<usize>)> {
+    parse_column_spec_full(spec).map(|p| (p.col_count, p.vertical_rules))
+}
+
+pub(crate) fn parse_column_spec_full(spec: &str) -> Option<ParsedColumnSpec> {
     let bytes = spec.as_bytes();
     let mut col_count: usize = 0;
     let mut rules: Vec<usize> = Vec::new();
+    let mut gaps: Vec<usize> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
@@ -2231,8 +1966,7 @@ pub(crate) fn parse_column_spec(spec: &str) -> Option<(usize, Vec<usize>)> {
                     return None;
                 }
             }
-            b'>' | b'<' | b'!' | b'@' => {
-                // Modifier macro — skip the following `{...}` group.
+            b'>' | b'<' | b'!' => {
                 let mut p = i + 1;
                 p = skip_ascii_ws(bytes, p);
                 if p < bytes.len() && bytes[p] == b'{' {
@@ -2242,13 +1976,43 @@ pub(crate) fn parse_column_spec(spec: &str) -> Option<(usize, Vec<usize>)> {
                     return None;
                 }
             }
+            b'@' => {
+                // Column separator.  Non-empty content between columns
+                // (after at least one column letter and before the next)
+                // signals a visible group break — record it.  The
+                // edge-of-spec `@{}` (before col 0 or after the last
+                // col) is just a margin suppressor, not a group break.
+                let mut p = i + 1;
+                p = skip_ascii_ws(bytes, p);
+                if p < bytes.len() && bytes[p] == b'{' {
+                    let close = match_brace(bytes, p)?;
+                    let body = &bytes[p + 1..close];
+                    let has_content = body.iter().any(|c| !c.is_ascii_whitespace());
+                    if has_content && col_count > 0 {
+                        // Only record if there's at least one more column
+                        // after this separator — otherwise it's the trailing
+                        // edge marker (`@{}` at end of spec).
+                        gaps.push(col_count);
+                    }
+                    i = close + 1;
+                } else {
+                    return None;
+                }
+            }
             _ => {
-                // Unknown character (`*`, custom column types, etc.) — bail out.
                 return None;
             }
         }
     }
-    Some((col_count, rules))
+    // Filter out gaps that turned out to be trailing (no column after
+    // them).  Easy check: gap position == col_count means it lands past
+    // the last column.
+    gaps.retain(|g| *g < col_count);
+    Some(ParsedColumnSpec {
+        col_count,
+        vertical_rules: rules,
+        column_gaps_after: gaps,
+    })
 }
 
 #[cfg(test)]
@@ -2516,6 +2280,28 @@ mod spec_parser_tests {
         );
     }
 
+    #[test]
+    fn column_group_gaps_recovered() {
+        // The Fig 3 tabular: `@{}` margin-killers at the ends, plus
+        // `@{\hspace{1mm}}` between groups → gaps after cols 3, 6, 8.
+        // The trailing `@{}` should NOT be recorded (no column follows).
+        let p = super::parse_column_spec_full(
+            "@{}ccc@{\\hspace{1mm}}ccc@{\\hspace{1mm}}cc@{\\hspace{1mm}}c@{}",
+        )
+        .unwrap();
+        assert_eq!(p.col_count, 9);
+        assert_eq!(p.column_gaps_after, vec![3, 6, 8]);
+    }
+
+    #[test]
+    fn empty_at_separators_make_no_gap() {
+        // `@{}` (empty) between cols is just \tabcolsep suppression,
+        // not a visible gap — must not be recorded.
+        let p = super::parse_column_spec_full("c@{}c@{}c").unwrap();
+        assert_eq!(p.col_count, 3);
+        assert!(p.column_gaps_after.is_empty());
+    }
+
     /// Regression: extract_tabular_specs must not panic on sources containing
     /// multi-byte UTF-8 characters (e.g. "ä" in `\documentclass` comments).
     /// The previous byte-only `i += 1` advance landed mid-codepoint and the
@@ -2639,85 +2425,3 @@ mod spec_parser_tests {
     }
 }
 
-#[cfg(test)]
-mod table_image_walk_tests {
-    use serde_json::json;
-
-    /// Hand-build a minimal Pandoc Table value with the given rows.  Each
-    /// row is a list of cells; each cell is either Some("path") for an
-    /// `\includegraphics`-bearing cell or None for a text label cell.
-    /// Only the fields `walk_table_rows_for_images` actually reads are
-    /// populated — everything else uses empty defaults.
-    fn make_table(rows: &[&[Option<&str>]]) -> serde_json::Value {
-        let mk_cell = |src: Option<&str>| -> serde_json::Value {
-            // Cell = [attr, align, rowspan, colspan, [blocks]].
-            let blocks = match src {
-                Some(p) => json!([
-                    {
-                        "t": "Plain",
-                        "c": [
-                            {"t": "Image", "c": [["", [], []], [], [p, ""]]}
-                        ]
-                    }
-                ]),
-                None => json!([{"t": "Plain", "c": [{"t": "Str", "c": "label"}]}]),
-            };
-            json!([["", [], []], {"t": "AlignDefault"}, 1, 1, blocks])
-        };
-        let mk_row = |cells: &[Option<&str>]| -> serde_json::Value {
-            let cells_json: Vec<_> = cells.iter().map(|c| mk_cell(*c)).collect();
-            // Row = [attr, [cells]]
-            json!([["", [], []], cells_json])
-        };
-        let body_rows: Vec<_> = rows.iter().map(|r| mk_row(r)).collect();
-        json!({
-            "t": "Table",
-            "c": [
-                ["", [], []],                         // attr
-                [serde_json::Value::Null, []],        // caption (short, [blocks])
-                [],                                   // colspecs
-                [["", [], []], []],                   // head: (attr, [row])
-                [                                     // bodies: one body
-                    [["", [], []], 0, [], body_rows], // (attr, row_head_cols, intermediate, body_rows)
-                ],
-                [["", [], []], []],                   // foot
-            ]
-        })
-    }
-
-    #[test]
-    fn flat_three_row_grid_preserves_rows() {
-        // 3 rows × 3 image cells — the figure-3 shape.
-        let t = make_table(&[
-            &[Some("a/0"), Some("a/1"), Some("a/2")],
-            &[Some("b/0"), Some("b/1"), Some("b/2")],
-            &[Some("c/0"), Some("c/1"), Some("c/2")],
-        ]);
-        let groups = super::walk_table_rows_for_images(&t);
-        assert_eq!(groups.len(), 3, "want 3 groups, got {groups:?}");
-        assert_eq!(groups[0], vec!["a/0", "a/1", "a/2"]);
-        assert_eq!(groups[1], vec!["b/0", "b/1", "b/2"]);
-        assert_eq!(groups[2], vec!["c/0", "c/1", "c/2"]);
-    }
-
-    #[test]
-    fn label_rows_are_dropped() {
-        // First two rows are text labels (figure 3 has `$N=4$` etc.
-        // header rows above the image grid).  Only image rows survive.
-        let t = make_table(&[
-            &[None, None, None],
-            &[None, None, None],
-            &[Some("img/0"), Some("img/1"), Some("img/2")],
-        ]);
-        let groups = super::walk_table_rows_for_images(&t);
-        assert_eq!(groups.len(), 1, "want 1 image-bearing row, got {groups:?}");
-        assert_eq!(groups[0], vec!["img/0", "img/1", "img/2"]);
-    }
-
-    #[test]
-    fn empty_table_returns_empty() {
-        let t = make_table(&[]);
-        let groups = super::walk_table_rows_for_images(&t);
-        assert!(groups.is_empty());
-    }
-}
