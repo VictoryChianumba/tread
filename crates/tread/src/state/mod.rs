@@ -9,6 +9,7 @@ use ratatui::layout::Rect;
 use crate::PaperData;
 use crate::highlights::HighlightSet;
 
+mod bookmarks;
 mod cursor;
 mod mode;
 mod nav;
@@ -750,8 +751,11 @@ pub struct Reader {
     /// Optional paper metadata shown in the header bar.
     pub meta: Option<PaperMeta>,
     /// Letter-keyed bookmarks (vim-style marks).  `m<letter>` sets,
-    /// `'<letter>` jumps.  Persisted per arXiv ID.
-    pub bookmarks: HashMap<char, usize>,
+    /// `'<letter>` jumps.  Persisted per arXiv ID.  Block-byte addressed
+    /// (see `bookmarks::Bookmark`) so marks survive terminal resize.
+    /// Private; read via the seam methods on `Reader` defined in
+    /// `state/bookmarks.rs`.
+    bookmarks: HashMap<char, bookmarks::Bookmark>,
     /// Persistent character-range highlights.  Stored at block-byte
     /// granularity so they survive resize.  Loaded on entry, saved on exit.
     pub highlights: HighlightSet,
@@ -1035,7 +1039,7 @@ impl Reader {
                 // the actual pane is wider or narrower.
                 reader.pending_progress_offset = Some(p.offset);
             }
-            reader.bookmarks = crate::bookmarks::load(key).named;
+            reader.load_bookmarks_from_disk(key);
             reader.highlights = crate::highlights::load(key);
         }
 
@@ -1082,13 +1086,7 @@ impl Reader {
             },
         );
         crate::progress::save(&map);
-        crate::bookmarks::save(
-            key,
-            &crate::bookmarks::BookmarkSet {
-                marks: Vec::new(),
-                named: self.bookmarks.clone(),
-            },
-        );
+        self.save_bookmarks_to_disk(key);
         crate::highlights::save(key, &self.highlights);
     }
 
@@ -1435,37 +1433,6 @@ impl Reader {
         } else {
             self.help_selected = self.help_selected.min(total.saturating_sub(1));
         }
-    }
-
-    /// Set mark `letter` at the current line, replacing any prior value.
-    /// Only ASCII letters (a–z, A–Z) are valid; other chars are silently
-    /// rejected so the user gets no surprise mark on a stray punctuation key.
-    pub fn set_mark(&mut self, letter: char) {
-        if !letter.is_ascii_alphabetic() {
-            return;
-        }
-        let line = self.offset + self.cursor_y;
-        self.bookmarks.insert(letter, line);
-    }
-
-    /// Jump to mark `letter`.  No-op if the mark is unset or the letter
-    /// is invalid.  Pushes the current position onto the back-nav stack
-    /// so `Ctrl+O` returns here.
-    pub fn jump_to_mark(&mut self, letter: char) {
-        if !letter.is_ascii_alphabetic() {
-            return;
-        }
-        let Some(&target) = self.bookmarks.get(&letter) else {
-            return;
-        };
-        let total = self.total_lines();
-        if target >= total {
-            return;
-        }
-        self.push_nav_mark();
-        self.offset = target;
-        self.cursor_y = 0;
-        self.clamp_cursor_after_line_change();
     }
 
     /// Index into `sections` of the last section header at or above the current line.
@@ -2369,6 +2336,54 @@ mod tests {
     }
 
     // ── Voice invariants (ADR-0004 Seam 3) ─────────────────────────────
+
+    // ── Bookmark invariants (ADR-0004 Seam 4) ──────────────────────────
+
+    #[test]
+    fn mark_survives_terminal_resize_reflow() {
+        // A long paragraph that will wrap at 30 cols into multiple visual
+        // lines, then collapse into fewer when widened to 200 cols.  The
+        // bookmark must land in the same paragraph at the same byte
+        // offset either way — pre-Seam-4 this would have lost track,
+        // because the stored visual-line index meant a different VL
+        // after the wrap rebuild.
+        let long = "alpha beta gamma delta epsilon zeta eta theta iota kappa \
+                    lambda mu nu xi omicron pi rho sigma tau upsilon"
+            .to_string();
+        let blocks = vec![Block::Line(long.clone())];
+        let mut reader = Reader::new(blocks, 30, 24);
+
+        // Position the cursor on the word "lambda" (byte ~56 in the
+        // source string).  Find its visual line, set a mark there.
+        let target_byte = long.find("lambda").expect("word present");
+        let (target_vl, col) = reader
+            .visual_lines
+            .iter()
+            .enumerate()
+            .find(|(_, vl)| {
+                target_byte >= vl.block_byte_start && target_byte < vl.block_byte_end
+            })
+            .map(|(idx, vl)| (idx, target_byte - vl.block_byte_start))
+            .expect("byte resolves to a VL pre-resize");
+        reader.jump_to_line(target_vl);
+        reader.set_cursor_x(col);
+        reader.set_mark('a');
+
+        // Now widen the terminal so the paragraph wraps differently
+        // (likely into a single VL at 200 cols).  Pre-resize VL
+        // indices are now stale.
+        reader.resize(200, 24);
+
+        // Jump to mark 'a' — should land in the (still single) block
+        // at the same source-byte position.
+        reader.jump_to_mark('a');
+        let landed_vl = reader.current_line();
+        let landed_byte = reader.visual_lines[landed_vl].block_byte_start + reader.cursor_x();
+        assert_eq!(
+            landed_byte, target_byte,
+            "mark should resolve to the same source byte after reflow",
+        );
+    }
 
     #[test]
     fn stop_continuous_reading_clears_only_the_continuous_flag() {

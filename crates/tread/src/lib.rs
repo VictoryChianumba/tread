@@ -1,5 +1,4 @@
 pub mod bench;
-mod bookmarks;
 mod commands;
 mod config;
 mod epub;

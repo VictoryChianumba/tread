@@ -262,8 +262,7 @@ fn set_theme(value: &str) -> ReaderAction {
 // ── Marks / highlights / metadata popups ─────────────────────────────────────
 
 fn cmd_marks(reader: &mut Reader, _: &[&str]) -> ReaderAction {
-  let mut entries: Vec<(char, usize)> = reader.bookmarks.iter().map(|(&c, &l)| (c, l)).collect();
-  entries.sort_by_key(|e| e.0);
+  let entries: Vec<(char, usize)> = reader.marks_iter().collect();
   let lines: Vec<String> = if entries.is_empty() {
     vec!["(no marks set — use m{a} to set one)".to_string()]
   } else {
@@ -286,7 +285,7 @@ fn cmd_delmarks(reader: &mut Reader, args: &[&str]) -> ReaderAction {
   let mut removed = 0;
   for token in args {
     for ch in token.chars() {
-      if ch.is_ascii_alphabetic() && reader.bookmarks.remove(&ch).is_some() {
+      if ch.is_ascii_alphabetic() && reader.remove_mark(ch) {
         removed += 1;
       }
     }

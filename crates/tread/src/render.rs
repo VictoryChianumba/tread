@@ -283,7 +283,7 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
             }
             let vl = &reader.visual_lines[vl_idx];
             let is_cursor = row == reader.cursor_y();
-            let is_bookmarked = reader.bookmarks.values().any(|&l| l == vl_idx);
+            let is_bookmarked = reader.is_line_bookmarked(vl_idx);
             let is_selected = visual_range.map_or(false, |(lo, hi)| vl_idx >= lo && vl_idx <= hi);
             let cursor_col = if is_cursor {
                 Some(reader.cursor_x())

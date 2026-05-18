@@ -1,7 +1,7 @@
 # ADR-0004 — Reader public surface
 
-- **Status:** Accepted (2026-05-18) — Seams 1 (mode), 2 (cursor/scroll),
-  and 3 (voice) landed; Seam 4 still queued
+- **Status:** Accepted (2026-05-18) — all four seams landed (mode,
+  cursor/scroll, voice, bookmarks)
 - **Crate:** `tread` (`state/` and every other file in the crate)
 - **Relates to:** [ADR-0002 — Preview pane model](0002-preview-pane-model.md)
 
@@ -276,15 +276,78 @@ One new transition-invariant test pins the documented
 
 - `stop_continuous_reading_clears_only_the_continuous_flag`
 
-## Open follow-up
+## Seam 4 — Bookmarks — landed 2026-05-18
 
-After seams 1, 2, and 3, the remaining seam in this ADR's priority
-order:
+`Reader.bookmarks` storage moved from `HashMap<char, usize>`
+(visual-line index — brittle across resize) to
+`HashMap<char, Bookmark>` where `Bookmark` is `(block_idx,
+byte_in_block)`.  Same addressing scheme as `Highlight`; the seam
+methods on `Reader` resolve a bookmark to a VL index by walking
+`visual_lines` and matching the byte range.
 
-- **Seam 4 — Bookmarks.** Change storage from
-  `HashMap<char, usize>` (visual-line index) to block-byte addressing
-  like highlights, behind `BookmarkSet`. Survives reflow as a side
-  benefit.
+The bookmark file moved from `crates/tread/src/bookmarks.rs` to
+`crates/tread/src/state/bookmarks.rs` so the impl-Reader methods
+have private-field access.  The persistence helpers (`load`/`save`)
+stay as free functions in the same file — only the in-memory
+write path crosses the seam.
+
+Landed shape — `state/bookmarks.rs`:
+
+```rust
+impl Reader {
+    pub fn set_mark(&mut self, letter: char);
+    pub fn jump_to_mark(&mut self, letter: char);
+    pub fn remove_mark(&mut self, letter: char) -> bool;
+    pub fn marks_iter(&self) -> impl Iterator<Item = (char, usize)> + '_;
+    pub fn is_line_bookmarked(&self, vl_idx: usize) -> bool;
+}
+```
+
+The behavioural payoff is the regression test
+`mark_survives_terminal_resize_reflow`: a mark set on a wrapped
+paragraph still resolves to the same source byte after the
+terminal is widened (or narrowed) and `visual_lines` rebuilds.
+Pre-Seam-4 the stored visual-line index meant a different paragraph
+after the rebuild — silently broken.
+
+#### On-disk back-compat
+
+Legacy files store integer values (the old visual-line index).
+A `#[serde(untagged)]` enum `BookmarkValue { Block(Bookmark) |
+LegacyLineIdx(usize) }` accepts either form on load.
+`load_bookmarks_from_disk` translates `LegacyLineIdx` entries
+against the current layout; `save_bookmarks_to_disk` always emits
+the new `Block` form, so the migration is one-shot per paper.
+Legacy entries that no longer resolve (e.g. the document shrank)
+are silently dropped rather than corrupting the in-memory map.
+
+#### Migration metrics (2026-05-18 audit → post-Seam-4)
+
+| Metric | Before | After |
+|---|---|---|
+| Public bookmark field | 1 (`pub bookmarks: HashMap<char, usize>`) | 0 |
+| Bare bookmark reads/writes outside `state/` | 3 (render, `:marks`, `:delmarks`) | 0 |
+| Behavioural improvement | marks lost on resize | marks survive resize |
+| Crate-wide tests | 144 | 144 (-3 migrate tests removed, +2 JSON round-trip, +1 reflow regression) |
+
+## Final state
+
+All four seams landed:
+
+- **Seam 1 — Mode state machine** (commit 5f6312c)
+- **Seam 2 — Cursor / scroll** (commit 984b86c)
+- **Seam 3 — Voice** (commit db741fe)
+- **Seam 4 — Bookmarks** (this commit)
+
+`Reader`'s public mutable field surface is now empty for these four
+concerns.  Remaining `pub` fields on `Reader` are read-mostly
+collections (`visual_lines`, `sections`, `nav_history`, `meta`,
+`highlights`, `label_lines`, `bib_entries`, `bib_entry_lines`,
+`image_paths`, `popup`) plus simple toggle flags
+(`toc_visible`, `help_visible`, `figure_preview_active`,
+`text_only`, `kitty_supported`, `current_figure`, `arxiv_id`).
+None of those have the multi-field invariant problem the original
+audit flagged.
 
 When future work starts, re-grep `reader\.<field>\s*=` to see whether
 the field count and external-mutation count have moved; the ADR is
