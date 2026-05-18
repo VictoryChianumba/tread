@@ -143,11 +143,34 @@ pub enum Block {
     /// `figure_id` is the parser's per-document figure counter (1, 2, …).
     /// Carried so consumers that need a stable per-figure identifier can
     /// use it without rebuilding from block positions.
+    ///
+    /// `column_gaps_after` lists column indices (in the flat item space
+    /// of each row) AFTER which a small horizontal gap should be drawn —
+    /// recovered from the source tabular's `@{\hspace{...}}` separators.
+    /// Empty when the source doesn't use column-group spacing.  Shared
+    /// across all rows because tabular column groupings are uniform.
+    ///
+    /// `header_rows` carries column labels recovered from the figure's
+    /// tabular header (e.g. "N=4", "Input", "Avat3r"…).  Each entry is
+    /// a row of cells with text + col_span — the preview tiles them
+    /// above the image grid, aligned to the columns they describe.
+    /// Empty for figures without textual headers.
     Figure {
         rows: Vec<Vec<ImageItem>>,
         alt: String,
         figure_id: u32,
+        column_gaps_after: Vec<usize>,
+        header_rows: Vec<Vec<HeaderCell>>,
     },
+}
+
+/// One cell from a figure tabular's header row.  `text` is the flat
+/// inline text (no formatting); `col_span` is how many image columns
+/// the cell visually spans (1 for normal cells, N for `\multicolumn{N}`).
+#[derive(Debug, Clone)]
+pub struct HeaderCell {
+    pub text: String,
+    pub col_span: u16,
 }
 
 /// One sub-image inside a `Block::Figure` row.  Each carries its own

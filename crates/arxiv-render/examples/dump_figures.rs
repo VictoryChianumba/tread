@@ -29,15 +29,26 @@ fn main() {
             rows,
             alt,
             figure_id,
+            column_gaps_after,
+            header_rows,
         } = b
         {
             idx += 1;
             let total_imgs: usize = rows.iter().map(|r| r.len()).sum();
             let alt_trim: String = alt.chars().take(70).collect();
             eprintln!(
-                "[{idx}] fig#{figure_id} rows={} parts={total_imgs} alt={alt_trim:?}",
+                "[{idx}] fig#{figure_id} rows={} parts={total_imgs} gaps_after={column_gaps_after:?} headers={} alt={alt_trim:?}",
                 rows.len(),
+                header_rows.len(),
             );
+            for (hi, hrow) in header_rows.iter().enumerate() {
+                let summary: String = hrow
+                    .iter()
+                    .map(|c| format!("{:?}×{}", c.text, c.col_span))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                eprintln!("   header[{hi}]: {summary}");
+            }
             for (ri, row) in rows.iter().enumerate() {
                 let summary: String = row
                     .iter()

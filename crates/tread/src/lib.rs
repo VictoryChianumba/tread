@@ -1390,6 +1390,8 @@ mod acceptance_tests {
         }]],
         alt: "first figure".to_string(),
         figure_id: 1,
+        column_gaps_after: Vec::new(),
+        header_rows: Vec::new(),
       },
       Block::Figure {
         rows: vec![vec![
@@ -1406,6 +1408,8 @@ mod acceptance_tests {
         ]],
         alt: "row figure".to_string(),
         figure_id: 2,
+        column_gaps_after: Vec::new(),
+        header_rows: Vec::new(),
       },
       Block::Anchor("ref-smith".to_string()),
       Block::Line("Smith 2024. A useful reference.".to_string()),
