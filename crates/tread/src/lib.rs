@@ -1359,15 +1359,17 @@ mod acceptance_tests {
         InlineSpan::citation("[smith]", "smith"),
         InlineSpan::plain("."),
       ]),
-      Block::Image {
-        path: "figure-a.png".into(),
+      Block::Figure {
+        rows: vec![vec![ImageItem {
+          path: "figure-a.png".into(),
+          kitty_id: 1,
+          dims: Some((640, 360)),
+        }]],
         alt: "first figure".to_string(),
-        kitty_id: 1,
-        dims: Some((640, 360)),
-        stack_total: 1,
+        figure_id: 1,
       },
-      Block::ImageRow {
-        items: vec![
+      Block::Figure {
+        rows: vec![vec![
           ImageItem {
             path: "figure-b.png".into(),
             kitty_id: 2,
@@ -1378,8 +1380,9 @@ mod acceptance_tests {
             kitty_id: 3,
             dims: Some((320, 240)),
           },
-        ],
+        ]],
         alt: "row figure".to_string(),
+        figure_id: 2,
       },
       Block::Anchor("ref-smith".to_string()),
       Block::Line("Smith 2024. A useful reference.".to_string()),

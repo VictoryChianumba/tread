@@ -32,8 +32,8 @@ pub mod transmit;
 /// Whether the host terminal supports the Kitty graphics protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
-  Supported,
-  Unsupported,
+    Supported,
+    Unsupported,
 }
 
 /// Detect Kitty graphics support via environment-variable sniffing.
@@ -52,50 +52,50 @@ pub enum Capability {
 /// Override: setting `TREAD_DISABLE_KITTY_GRAPHICS=1` forces
 /// `Unsupported` regardless of detection.
 pub fn detect() -> Capability {
-  if std::env::var("TREAD_DISABLE_KITTY_GRAPHICS").is_ok() {
-    return Capability::Unsupported;
-  }
-  // Manual force-enable.  Useful inside tmux when the host terminal
-  // supports Kitty graphics but no env-var hint survives the multiplexer.
-  if std::env::var("TREAD_FORCE_KITTY_GRAPHICS").is_ok() {
-    return Capability::Supported;
-  }
-  if std::env::var("KITTY_WINDOW_ID").is_ok() {
-    return Capability::Supported;
-  }
-  if std::env::var("WEZTERM_PANE").is_ok() || std::env::var("WEZTERM_EXECUTABLE").is_ok() {
-    return Capability::Supported;
-  }
-  if std::env::var("GHOSTTY_RESOURCES_DIR").is_ok() {
-    return Capability::Supported;
-  }
-  if let Ok(term) = std::env::var("LC_TERMINAL")
-    && term.eq_ignore_ascii_case("iTerm2")
-    && iterm2_at_least_3_5()
-  {
-    return Capability::Supported;
-  }
-  // `TERM_PROGRAM` survives tmux on most setups (it's set by the host
-  // terminal, not by the shell), so we use it as the tmux fallback —
-  // when iTerm2 launches tmux, `TERM_PROGRAM=iTerm.app` propagates into
-  // pane shells even though `KITTY_WINDOW_ID` / `LC_TERMINAL` typically
-  // don't.  The version check is best-effort: missing/unparseable means
-  // we trust the user (over-enable on iTerm2 ≥ 3.5).
-  if let Ok(prog) = std::env::var("TERM_PROGRAM") {
-    let p = prog.to_ascii_lowercase();
-    if p.contains("iterm") && iterm2_term_program_at_least_3_5() {
-      return Capability::Supported;
+    if std::env::var("TREAD_DISABLE_KITTY_GRAPHICS").is_ok() {
+        return Capability::Unsupported;
     }
-    if p.contains("kitty") || p.contains("ghostty") || p.contains("wezterm") {
-      return Capability::Supported;
+    // Manual force-enable.  Useful inside tmux when the host terminal
+    // supports Kitty graphics but no env-var hint survives the multiplexer.
+    if std::env::var("TREAD_FORCE_KITTY_GRAPHICS").is_ok() {
+        return Capability::Supported;
     }
-  }
-  if let Ok(term) = std::env::var("TERM")
-    && (term.contains("kitty") || term.contains("ghostty"))
-  {
-    return Capability::Supported;
-  }
-  Capability::Unsupported
+    if std::env::var("KITTY_WINDOW_ID").is_ok() {
+        return Capability::Supported;
+    }
+    if std::env::var("WEZTERM_PANE").is_ok() || std::env::var("WEZTERM_EXECUTABLE").is_ok() {
+        return Capability::Supported;
+    }
+    if std::env::var("GHOSTTY_RESOURCES_DIR").is_ok() {
+        return Capability::Supported;
+    }
+    if let Ok(term) = std::env::var("LC_TERMINAL")
+        && term.eq_ignore_ascii_case("iTerm2")
+        && iterm2_at_least_3_5()
+    {
+        return Capability::Supported;
+    }
+    // `TERM_PROGRAM` survives tmux on most setups (it's set by the host
+    // terminal, not by the shell), so we use it as the tmux fallback —
+    // when iTerm2 launches tmux, `TERM_PROGRAM=iTerm.app` propagates into
+    // pane shells even though `KITTY_WINDOW_ID` / `LC_TERMINAL` typically
+    // don't.  The version check is best-effort: missing/unparseable means
+    // we trust the user (over-enable on iTerm2 ≥ 3.5).
+    if let Ok(prog) = std::env::var("TERM_PROGRAM") {
+        let p = prog.to_ascii_lowercase();
+        if p.contains("iterm") && iterm2_term_program_at_least_3_5() {
+            return Capability::Supported;
+        }
+        if p.contains("kitty") || p.contains("ghostty") || p.contains("wezterm") {
+            return Capability::Supported;
+        }
+    }
+    if let Ok(term) = std::env::var("TERM")
+        && (term.contains("kitty") || term.contains("ghostty"))
+    {
+        return Capability::Supported;
+    }
+    Capability::Unsupported
 }
 
 /// True when running inside tmux.  `transmit` knows how to wrap
@@ -103,7 +103,7 @@ pub fn detect() -> Capability {
 /// must additionally have `set -g allow-passthrough on` in their tmux
 /// config — otherwise tmux silently drops the wrapped sequence.
 pub fn in_tmux() -> bool {
-  std::env::var_os("TMUX").is_some()
+    std::env::var_os("TMUX").is_some()
 }
 
 /// Probe the active tmux server for the `allow-passthrough` setting.
@@ -123,17 +123,17 @@ pub fn in_tmux() -> bool {
 /// Cost: one `fork`/`exec` of the `tmux` binary at the call site.
 /// Cheap relative to the rest of startup, so safe to call from `main`.
 pub fn tmux_passthrough_enabled() -> Option<bool> {
-  if !in_tmux() {
-    return None;
-  }
-  let out = std::process::Command::new("tmux")
-    .args(["show", "-gv", "allow-passthrough"])
-    .output()
-    .ok()?;
-  if !out.status.success() {
-    return None;
-  }
-  parse_tmux_passthrough_output(&out.stdout)
+    if !in_tmux() {
+        return None;
+    }
+    let out = std::process::Command::new("tmux")
+        .args(["show", "-gv", "allow-passthrough"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_tmux_passthrough_output(&out.stdout)
 }
 
 /// Split out for unit-testing without spawning processes.  `tmux show
@@ -142,12 +142,12 @@ pub fn tmux_passthrough_enabled() -> Option<bool> {
 /// versions.  We treat anything other than the literal `on`/`off`
 /// tokens as `None` (unknown) so the caller can choose its messaging.
 fn parse_tmux_passthrough_output(stdout: &[u8]) -> Option<bool> {
-  let s = std::str::from_utf8(stdout).ok()?.trim();
-  match s {
-    "on" => Some(true),
-    "off" => Some(false),
-    _ => None,
-  }
+    let s = std::str::from_utf8(stdout).ok()?.trim();
+    match s {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
 }
 
 /// True when running inside Zellij.  Unlike tmux, Zellij has no
@@ -159,8 +159,7 @@ fn parse_tmux_passthrough_output(stdout: &[u8]) -> Option<bool> {
 /// `is_iterm2` to print an actionable startup warning so the user
 /// knows the broken-figures pane isn't a tread bug.
 pub fn in_zellij() -> bool {
-  std::env::var_os("ZELLIJ").is_some()
-    || std::env::var_os("ZELLIJ_SESSION_NAME").is_some()
+    std::env::var_os("ZELLIJ").is_some() || std::env::var_os("ZELLIJ_SESSION_NAME").is_some()
 }
 
 /// True when the host terminal program is iTerm2 (regardless of
@@ -171,17 +170,17 @@ pub fn in_zellij() -> bool {
 /// exists specifically to scope the Zellij-over-iTerm2 warning, not
 /// to gate graphics emission generally.
 pub fn is_iterm2() -> bool {
-  if let Ok(term) = std::env::var("LC_TERMINAL")
-    && term.eq_ignore_ascii_case("iTerm2")
-  {
-    return true;
-  }
-  if let Ok(prog) = std::env::var("TERM_PROGRAM")
-    && prog.to_ascii_lowercase().contains("iterm")
-  {
-    return true;
-  }
-  false
+    if let Ok(term) = std::env::var("LC_TERMINAL")
+        && term.eq_ignore_ascii_case("iTerm2")
+    {
+        return true;
+    }
+    if let Ok(prog) = std::env::var("TERM_PROGRAM")
+        && prog.to_ascii_lowercase().contains("iterm")
+    {
+        return true;
+    }
+    false
 }
 
 /// True when the host terminal persists transmitted image data across
@@ -202,20 +201,20 @@ pub fn is_iterm2() -> bool {
 /// neither has been validated against the cached path yet, and a wrong
 /// answer manifests as silently-missing figures.
 pub fn has_persistent_image_cache() -> bool {
-  if std::env::var_os("KITTY_WINDOW_ID").is_some() {
-    return true;
-  }
-  if let Ok(prog) = std::env::var("TERM_PROGRAM")
-    && prog.to_ascii_lowercase().contains("kitty")
-  {
-    return true;
-  }
-  if let Ok(term) = std::env::var("TERM")
-    && term.contains("kitty")
-  {
-    return true;
-  }
-  false
+    if std::env::var_os("KITTY_WINDOW_ID").is_some() {
+        return true;
+    }
+    if let Ok(prog) = std::env::var("TERM_PROGRAM")
+        && prog.to_ascii_lowercase().contains("kitty")
+    {
+        return true;
+    }
+    if let Ok(term) = std::env::var("TERM")
+        && term.contains("kitty")
+    {
+        return true;
+    }
+    false
 }
 
 /// Maximum *raw PNG* bytes we'll feed into a single `transmit_and_place`
@@ -238,15 +237,15 @@ pub fn has_persistent_image_cache() -> bool {
 /// own — if the larger cap ever misbehaves on a specific Kitty build,
 /// the user can drop into tmux to fall back to the conservative cap.
 pub fn transmit_byte_cap() -> usize {
-  const DEFAULT_CAP: usize = 300_000;
-  const NATIVE_KITTY_CAP: usize = 1_000_000;
-  if in_tmux() {
-    return DEFAULT_CAP;
-  }
-  if std::env::var_os("KITTY_WINDOW_ID").is_some() {
-    return NATIVE_KITTY_CAP;
-  }
-  DEFAULT_CAP
+    const DEFAULT_CAP: usize = 300_000;
+    const NATIVE_KITTY_CAP: usize = 1_000_000;
+    if in_tmux() {
+        return DEFAULT_CAP;
+    }
+    if std::env::var_os("KITTY_WINDOW_ID").is_some() {
+        return NATIVE_KITTY_CAP;
+    }
+    DEFAULT_CAP
 }
 
 /// Like `iterm2_at_least_3_5` but reads `TERM_PROGRAM_VERSION` instead
@@ -254,11 +253,13 @@ pub fn transmit_byte_cap() -> usize {
 /// propagate through tmux while `TERM_PROGRAM*` does (tmux's
 /// `update-environment` includes it on most distros).
 fn iterm2_term_program_at_least_3_5() -> bool {
-  let Ok(v) = std::env::var("TERM_PROGRAM_VERSION") else { return true };
-  let mut parts = v.split('.');
-  let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-  let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-  major > 3 || (major == 3 && minor >= 5)
+    let Ok(v) = std::env::var("TERM_PROGRAM_VERSION") else {
+        return true;
+    };
+    let mut parts = v.split('.');
+    let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    major > 3 || (major == 3 && minor >= 5)
 }
 
 /// Parse `LC_TERMINAL_VERSION` (typically `"3.5.0"` or similar) and
@@ -267,240 +268,271 @@ fn iterm2_term_program_at_least_3_5() -> bool {
 /// than to under-enable, since `TREAD_DISABLE_KITTY_GRAPHICS=1` is
 /// always available as the manual escape hatch.
 fn iterm2_at_least_3_5() -> bool {
-  let Ok(v) = std::env::var("LC_TERMINAL_VERSION") else { return true };
-  let mut parts = v.split('.');
-  let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-  let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-  major > 3 || (major == 3 && minor >= 5)
+    let Ok(v) = std::env::var("LC_TERMINAL_VERSION") else {
+        return true;
+    };
+    let mut parts = v.split('.');
+    let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    major > 3 || (major == 3 && minor >= 5)
 }
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+    use super::*;
 
-  /// Helper that snapshots and restores env vars across tests so they
-  /// don't leak state.  Holds a process-wide mutex for the duration of
-  /// its lifetime so concurrent tests can't stomp on each other's env
-  /// vars — `std::env` is a shared, process-global table.
-  use std::sync::{Mutex, MutexGuard};
-  static ENV_MUTEX: Mutex<()> = Mutex::new(());
+    /// Helper that snapshots and restores env vars across tests so they
+    /// don't leak state.  Holds a process-wide mutex for the duration of
+    /// its lifetime so concurrent tests can't stomp on each other's env
+    /// vars — `std::env` is a shared, process-global table.
+    use std::sync::{Mutex, MutexGuard};
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
-  struct EnvLock {
-    snapshot: Vec<(&'static str, Option<String>)>,
-    _guard: MutexGuard<'static, ()>,
-  }
-  impl EnvLock {
-    fn new(keys: &[&'static str]) -> Self {
-      let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-      let snapshot = keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
-      for k in keys { unsafe { std::env::remove_var(k); } }
-      Self { snapshot, _guard: guard }
+    struct EnvLock {
+        snapshot: Vec<(&'static str, Option<String>)>,
+        _guard: MutexGuard<'static, ()>,
     }
-  }
-  impl Drop for EnvLock {
-    fn drop(&mut self) {
-      for (k, v) in &self.snapshot {
-        unsafe {
-          match v {
-            Some(val) => std::env::set_var(k, val),
-            None => std::env::remove_var(k),
-          }
+    impl EnvLock {
+        fn new(keys: &[&'static str]) -> Self {
+            let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+            let snapshot = keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+            for k in keys {
+                unsafe {
+                    std::env::remove_var(k);
+                }
+            }
+            Self {
+                snapshot,
+                _guard: guard,
+            }
         }
-      }
     }
-  }
-
-  const ENV_KEYS: &[&str] = &[
-    "TREAD_DISABLE_KITTY_GRAPHICS",
-    "KITTY_WINDOW_ID",
-    "WEZTERM_PANE",
-    "WEZTERM_EXECUTABLE",
-    "GHOSTTY_RESOURCES_DIR",
-    "LC_TERMINAL",
-    "LC_TERMINAL_VERSION",
-    "TERM",
-    "TERM_PROGRAM",
-    "TMUX",
-    "ZELLIJ",
-    "ZELLIJ_SESSION_NAME",
-  ];
-
-  #[test]
-  fn no_env_vars_means_unsupported() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    assert_eq!(detect(), Capability::Unsupported);
-  }
-
-  #[test]
-  fn kitty_window_id_means_supported() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe { std::env::set_var("KITTY_WINDOW_ID", "1"); }
-    assert_eq!(detect(), Capability::Supported);
-  }
-
-  #[test]
-  fn override_forces_unsupported() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe {
-      std::env::set_var("KITTY_WINDOW_ID", "1");
-      std::env::set_var("TREAD_DISABLE_KITTY_GRAPHICS", "1");
+    impl Drop for EnvLock {
+        fn drop(&mut self) {
+            for (k, v) in &self.snapshot {
+                unsafe {
+                    match v {
+                        Some(val) => std::env::set_var(k, val),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
     }
-    assert_eq!(detect(), Capability::Unsupported);
-  }
 
-  #[test]
-  fn iterm2_old_version_unsupported() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe {
-      std::env::set_var("LC_TERMINAL", "iTerm2");
-      std::env::set_var("LC_TERMINAL_VERSION", "3.4.16");
+    const ENV_KEYS: &[&str] = &[
+        "TREAD_DISABLE_KITTY_GRAPHICS",
+        "KITTY_WINDOW_ID",
+        "WEZTERM_PANE",
+        "WEZTERM_EXECUTABLE",
+        "GHOSTTY_RESOURCES_DIR",
+        "LC_TERMINAL",
+        "LC_TERMINAL_VERSION",
+        "TERM",
+        "TERM_PROGRAM",
+        "TMUX",
+        "ZELLIJ",
+        "ZELLIJ_SESSION_NAME",
+    ];
+
+    #[test]
+    fn no_env_vars_means_unsupported() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        assert_eq!(detect(), Capability::Unsupported);
     }
-    assert_eq!(detect(), Capability::Unsupported);
-  }
 
-  #[test]
-  fn iterm2_new_version_supported() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe {
-      std::env::set_var("LC_TERMINAL", "iTerm2");
-      std::env::set_var("LC_TERMINAL_VERSION", "3.5.0");
+    #[test]
+    fn kitty_window_id_means_supported() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("KITTY_WINDOW_ID", "1");
+        }
+        assert_eq!(detect(), Capability::Supported);
     }
-    assert_eq!(detect(), Capability::Supported);
-  }
 
-  #[test]
-  fn term_kitty_supported() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe { std::env::set_var("TERM", "xterm-kitty"); }
-    assert_eq!(detect(), Capability::Supported);
-  }
-
-  #[test]
-  fn term_xterm_unsupported() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe { std::env::set_var("TERM", "xterm-256color"); }
-    assert_eq!(detect(), Capability::Unsupported);
-  }
-
-  #[test]
-  fn transmit_cap_native_kitty_no_tmux_is_large() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe { std::env::set_var("KITTY_WINDOW_ID", "1"); }
-    assert_eq!(transmit_byte_cap(), 1_000_000);
-  }
-
-  #[test]
-  fn transmit_cap_kitty_inside_tmux_falls_back() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe {
-      std::env::set_var("KITTY_WINDOW_ID", "1");
-      std::env::set_var("TMUX", "/tmp/tmux-1000/default,1,0");
+    #[test]
+    fn override_forces_unsupported() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("KITTY_WINDOW_ID", "1");
+            std::env::set_var("TREAD_DISABLE_KITTY_GRAPHICS", "1");
+        }
+        assert_eq!(detect(), Capability::Unsupported);
     }
-    assert_eq!(transmit_byte_cap(), 300_000);
-  }
 
-  #[test]
-  fn transmit_cap_other_terminal_is_default() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe { std::env::set_var("LC_TERMINAL", "iTerm2"); }
-    assert_eq!(transmit_byte_cap(), 300_000);
-  }
-
-  #[test]
-  fn persistent_cache_kitty_window_id() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe { std::env::set_var("KITTY_WINDOW_ID", "1"); }
-    assert!(has_persistent_image_cache());
-  }
-
-  #[test]
-  fn persistent_cache_iterm2_is_false() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe {
-      std::env::set_var("LC_TERMINAL", "iTerm2");
-      std::env::set_var("LC_TERMINAL_VERSION", "3.5.0");
+    #[test]
+    fn iterm2_old_version_unsupported() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("LC_TERMINAL", "iTerm2");
+            std::env::set_var("LC_TERMINAL_VERSION", "3.4.16");
+        }
+        assert_eq!(detect(), Capability::Unsupported);
     }
-    assert!(!has_persistent_image_cache());
-  }
 
-  #[test]
-  fn persistent_cache_no_env_is_false() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    assert!(!has_persistent_image_cache());
-  }
+    #[test]
+    fn iterm2_new_version_supported() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("LC_TERMINAL", "iTerm2");
+            std::env::set_var("LC_TERMINAL_VERSION", "3.5.0");
+        }
+        assert_eq!(detect(), Capability::Supported);
+    }
 
-  #[test]
-  fn in_zellij_detects_session_name_var() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    assert!(!in_zellij());
-    unsafe { std::env::set_var("ZELLIJ_SESSION_NAME", "default"); }
-    assert!(in_zellij());
-  }
+    #[test]
+    fn term_kitty_supported() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("TERM", "xterm-kitty");
+        }
+        assert_eq!(detect(), Capability::Supported);
+    }
 
-  #[test]
-  fn in_zellij_detects_zellij_var() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe { std::env::set_var("ZELLIJ", "0"); }
-    assert!(in_zellij());
-  }
+    #[test]
+    fn term_xterm_unsupported() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("TERM", "xterm-256color");
+        }
+        assert_eq!(detect(), Capability::Unsupported);
+    }
 
-  #[test]
-  fn is_iterm2_via_lc_terminal() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    assert!(!is_iterm2());
-    unsafe { std::env::set_var("LC_TERMINAL", "iTerm2"); }
-    assert!(is_iterm2());
-  }
+    #[test]
+    fn transmit_cap_native_kitty_no_tmux_is_large() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("KITTY_WINDOW_ID", "1");
+        }
+        assert_eq!(transmit_byte_cap(), 1_000_000);
+    }
 
-  #[test]
-  fn is_iterm2_via_term_program() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe { std::env::set_var("TERM_PROGRAM", "iTerm.app"); }
-    assert!(is_iterm2());
-  }
+    #[test]
+    fn transmit_cap_kitty_inside_tmux_falls_back() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("KITTY_WINDOW_ID", "1");
+            std::env::set_var("TMUX", "/tmp/tmux-1000/default,1,0");
+        }
+        assert_eq!(transmit_byte_cap(), 300_000);
+    }
 
-  #[test]
-  fn is_iterm2_false_for_ghostty() {
-    let _lock = EnvLock::new(ENV_KEYS);
-    unsafe { std::env::set_var("TERM_PROGRAM", "ghostty"); }
-    assert!(!is_iterm2());
-  }
+    #[test]
+    fn transmit_cap_other_terminal_is_default() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("LC_TERMINAL", "iTerm2");
+        }
+        assert_eq!(transmit_byte_cap(), 300_000);
+    }
 
-  // Parser-only coverage.  The full `tmux_passthrough_enabled()` would
-  // require an actual tmux server to probe; the parsing logic is what
-  // we own, so that's what we lock down.  The mapping here is the
-  // public contract: only the literal `on`/`off` tokens count, anything
-  // else (empty, garbage, non-utf8) collapses to `None`.
+    #[test]
+    fn persistent_cache_kitty_window_id() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("KITTY_WINDOW_ID", "1");
+        }
+        assert!(has_persistent_image_cache());
+    }
 
-  #[test]
-  fn parse_tmux_passthrough_on_token() {
-    assert_eq!(parse_tmux_passthrough_output(b"on\n"), Some(true));
-    assert_eq!(parse_tmux_passthrough_output(b"on"), Some(true));
-  }
+    #[test]
+    fn persistent_cache_iterm2_is_false() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("LC_TERMINAL", "iTerm2");
+            std::env::set_var("LC_TERMINAL_VERSION", "3.5.0");
+        }
+        assert!(!has_persistent_image_cache());
+    }
 
-  #[test]
-  fn parse_tmux_passthrough_off_token() {
-    assert_eq!(parse_tmux_passthrough_output(b"off\n"), Some(false));
-    assert_eq!(parse_tmux_passthrough_output(b"off"), Some(false));
-  }
+    #[test]
+    fn persistent_cache_no_env_is_false() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        assert!(!has_persistent_image_cache());
+    }
 
-  #[test]
-  fn parse_tmux_passthrough_empty_is_unknown() {
-    assert_eq!(parse_tmux_passthrough_output(b""), None);
-    assert_eq!(parse_tmux_passthrough_output(b"\n"), None);
-  }
+    #[test]
+    fn in_zellij_detects_session_name_var() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        assert!(!in_zellij());
+        unsafe {
+            std::env::set_var("ZELLIJ_SESSION_NAME", "default");
+        }
+        assert!(in_zellij());
+    }
 
-  #[test]
-  fn parse_tmux_passthrough_unrecognized_is_unknown() {
-    // Future-proofing: if tmux ever adds a third state (e.g. "all"
-    // already exists on some versions), we treat it as unknown rather
-    // than guessing.
-    assert_eq!(parse_tmux_passthrough_output(b"all\n"), None);
-    assert_eq!(parse_tmux_passthrough_output(b"yes\n"), None);
-  }
+    #[test]
+    fn in_zellij_detects_zellij_var() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("ZELLIJ", "0");
+        }
+        assert!(in_zellij());
+    }
 
-  #[test]
-  fn parse_tmux_passthrough_non_utf8_is_unknown() {
-    assert_eq!(parse_tmux_passthrough_output(&[0xff, 0xfe, 0xfd]), None);
-  }
+    #[test]
+    fn is_iterm2_via_lc_terminal() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        assert!(!is_iterm2());
+        unsafe {
+            std::env::set_var("LC_TERMINAL", "iTerm2");
+        }
+        assert!(is_iterm2());
+    }
+
+    #[test]
+    fn is_iterm2_via_term_program() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("TERM_PROGRAM", "iTerm.app");
+        }
+        assert!(is_iterm2());
+    }
+
+    #[test]
+    fn is_iterm2_false_for_ghostty() {
+        let _lock = EnvLock::new(ENV_KEYS);
+        unsafe {
+            std::env::set_var("TERM_PROGRAM", "ghostty");
+        }
+        assert!(!is_iterm2());
+    }
+
+    // Parser-only coverage.  The full `tmux_passthrough_enabled()` would
+    // require an actual tmux server to probe; the parsing logic is what
+    // we own, so that's what we lock down.  The mapping here is the
+    // public contract: only the literal `on`/`off` tokens count, anything
+    // else (empty, garbage, non-utf8) collapses to `None`.
+
+    #[test]
+    fn parse_tmux_passthrough_on_token() {
+        assert_eq!(parse_tmux_passthrough_output(b"on\n"), Some(true));
+        assert_eq!(parse_tmux_passthrough_output(b"on"), Some(true));
+    }
+
+    #[test]
+    fn parse_tmux_passthrough_off_token() {
+        assert_eq!(parse_tmux_passthrough_output(b"off\n"), Some(false));
+        assert_eq!(parse_tmux_passthrough_output(b"off"), Some(false));
+    }
+
+    #[test]
+    fn parse_tmux_passthrough_empty_is_unknown() {
+        assert_eq!(parse_tmux_passthrough_output(b""), None);
+        assert_eq!(parse_tmux_passthrough_output(b"\n"), None);
+    }
+
+    #[test]
+    fn parse_tmux_passthrough_unrecognized_is_unknown() {
+        // Future-proofing: if tmux ever adds a third state (e.g. "all"
+        // already exists on some versions), we treat it as unknown rather
+        // than guessing.
+        assert_eq!(parse_tmux_passthrough_output(b"all\n"), None);
+        assert_eq!(parse_tmux_passthrough_output(b"yes\n"), None);
+    }
+
+    #[test]
+    fn parse_tmux_passthrough_non_utf8_is_unknown() {
+        assert_eq!(parse_tmux_passthrough_output(&[0xff, 0xfe, 0xfd]), None);
+    }
 }

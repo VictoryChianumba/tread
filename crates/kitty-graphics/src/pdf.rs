@@ -34,38 +34,43 @@ const RENDER_DPI: u32 = 150;
 /// `pdftoppm`.  Errors if Poppler isn't installed, the input isn't a
 /// readable PDF, or the rasteriser doesn't produce the expected file.
 pub fn pdf_to_png(input: &Path, cache_dir: &Path) -> io::Result<PathBuf> {
-  std::fs::create_dir_all(cache_dir)?;
-  let key = cache_key(input);
-  let target = cache_dir.join(format!("{key}-1.png"));
-  if target.exists() {
-    return Ok(target);
-  }
-  // pdftoppm takes an output *prefix* (no extension) and appends
-  // "-<page>.png" itself.  So we pass `<cache>/<key>` and read back
-  // `<cache>/<key>-1.png`.
-  let prefix = cache_dir.join(&key);
-  let status = Command::new("pdftoppm")
-    .arg("-png")
-    .arg("-r").arg(RENDER_DPI.to_string())
-    .arg("-f").arg("1")
-    .arg("-l").arg("1")
-    .arg(input)
-    .arg(&prefix)
-    .status()
-    .map_err(|e| io::Error::new(
-      e.kind(),
-      format!("failed to spawn pdftoppm (is poppler installed?): {e}"),
-    ))?;
-  if !status.success() {
-    return Err(io::Error::other(format!("pdftoppm exited with {status}")));
-  }
-  if !target.exists() {
-    return Err(io::Error::other(format!(
-      "pdftoppm completed but expected output missing: {}",
-      target.display()
-    )));
-  }
-  Ok(target)
+    std::fs::create_dir_all(cache_dir)?;
+    let key = cache_key(input);
+    let target = cache_dir.join(format!("{key}-1.png"));
+    if target.exists() {
+        return Ok(target);
+    }
+    // pdftoppm takes an output *prefix* (no extension) and appends
+    // "-<page>.png" itself.  So we pass `<cache>/<key>` and read back
+    // `<cache>/<key>-1.png`.
+    let prefix = cache_dir.join(&key);
+    let status = Command::new("pdftoppm")
+        .arg("-png")
+        .arg("-r")
+        .arg(RENDER_DPI.to_string())
+        .arg("-f")
+        .arg("1")
+        .arg("-l")
+        .arg("1")
+        .arg(input)
+        .arg(&prefix)
+        .status()
+        .map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("failed to spawn pdftoppm (is poppler installed?): {e}"),
+            )
+        })?;
+    if !status.success() {
+        return Err(io::Error::other(format!("pdftoppm exited with {status}")));
+    }
+    if !target.exists() {
+        return Err(io::Error::other(format!(
+            "pdftoppm completed but expected output missing: {}",
+            target.display()
+        )));
+    }
+    Ok(target)
 }
 
 /// FNV-1a 64-bit hash of the canonicalised input path mixed with the
@@ -77,10 +82,13 @@ pub fn pdf_to_png(input: &Path, cache_dir: &Path) -> io::Result<PathBuf> {
 /// path-only if `metadata` fails, so the function never panics and
 /// existing synthetic-path tests still produce deterministic keys.
 fn cache_key(input: &Path) -> String {
-  let canonical = std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf());
-  let path_bytes = canonical.as_os_str().to_string_lossy();
-  let freshness = freshness_token(&canonical);
-  format!("{:016x}", fnv1a_64(format!("{path_bytes}|{freshness}").as_bytes()))
+    let canonical = std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf());
+    let path_bytes = canonical.as_os_str().to_string_lossy();
+    let freshness = freshness_token(&canonical);
+    format!(
+        "{:016x}",
+        fnv1a_64(format!("{path_bytes}|{freshness}").as_bytes())
+    )
 }
 
 /// `len|mtime_secs|mtime_subsec_nanos` for cache-key freshness mixing.
@@ -88,94 +96,101 @@ fn cache_key(input: &Path) -> String {
 /// infallible — a stat failure just collapses the key to path-only,
 /// which matches prior behaviour.
 fn freshness_token(path: &Path) -> String {
-  let Ok(meta) = std::fs::metadata(path) else {
-    return String::new();
-  };
-  let modified = meta
-    .modified()
-    .ok()
-    .and_then(|ts| ts.duration_since(UNIX_EPOCH).ok())
-    .unwrap_or_default();
-  format!(
-    "{}|{}|{}",
-    meta.len(),
-    modified.as_secs(),
-    modified.subsec_nanos(),
-  )
+    let Ok(meta) = std::fs::metadata(path) else {
+        return String::new();
+    };
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|ts| ts.duration_since(UNIX_EPOCH).ok())
+        .unwrap_or_default();
+    format!(
+        "{}|{}|{}",
+        meta.len(),
+        modified.as_secs(),
+        modified.subsec_nanos(),
+    )
 }
 
 fn fnv1a_64(bytes: &[u8]) -> u64 {
-  let mut h: u64 = 0xcbf29ce484222325;
-  for &b in bytes {
-    h ^= b as u64;
-    h = h.wrapping_mul(0x100000001b3);
-  }
-  h
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+    use super::*;
 
-  #[test]
-  fn fnv1a_known_values() {
-    // FNV-1a 64 reference vectors.
-    assert_eq!(fnv1a_64(b""), 0xcbf29ce484222325);
-    assert_eq!(fnv1a_64(b"a"), 0xaf63dc4c8601ec8c);
-    assert_eq!(fnv1a_64(b"foobar"), 0x85944171f73967e8);
-  }
+    #[test]
+    fn fnv1a_known_values() {
+        // FNV-1a 64 reference vectors.
+        assert_eq!(fnv1a_64(b""), 0xcbf29ce484222325);
+        assert_eq!(fnv1a_64(b"a"), 0xaf63dc4c8601ec8c);
+        assert_eq!(fnv1a_64(b"foobar"), 0x85944171f73967e8);
+    }
 
-  #[test]
-  fn cache_key_is_deterministic() {
-    let p = Path::new("/tmp/some/path.pdf");
-    assert_eq!(cache_key(p), cache_key(p));
-  }
+    #[test]
+    fn cache_key_is_deterministic() {
+        let p = Path::new("/tmp/some/path.pdf");
+        assert_eq!(cache_key(p), cache_key(p));
+    }
 
-  #[test]
-  fn cache_key_distinguishes_paths() {
-    assert_ne!(
-      cache_key(Path::new("/tmp/a.pdf")),
-      cache_key(Path::new("/tmp/b.pdf")),
-    );
-  }
+    #[test]
+    fn cache_key_distinguishes_paths() {
+        assert_ne!(
+            cache_key(Path::new("/tmp/a.pdf")),
+            cache_key(Path::new("/tmp/b.pdf")),
+        );
+    }
 
-  #[test]
-  fn cache_key_changes_when_source_metadata_changes() {
-    use std::time::SystemTime;
-    let temp = std::env::temp_dir().join(format!(
-      "tread-pdf-cache-key-{}-{}.pdf",
-      std::process::id(),
-      SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-    ));
-    std::fs::write(&temp, b"one").unwrap();
-    let first = cache_key(&temp);
-    std::fs::write(&temp, b"two two two").unwrap();
-    let second = cache_key(&temp);
-    let _ = std::fs::remove_file(&temp);
-    assert_ne!(first, second);
-  }
+    #[test]
+    fn cache_key_changes_when_source_metadata_changes() {
+        use std::time::SystemTime;
+        let temp = std::env::temp_dir().join(format!(
+            "tread-pdf-cache-key-{}-{}.pdf",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::write(&temp, b"one").unwrap();
+        let first = cache_key(&temp);
+        std::fs::write(&temp, b"two two two").unwrap();
+        let second = cache_key(&temp);
+        let _ = std::fs::remove_file(&temp);
+        assert_ne!(first, second);
+    }
 
-  /// Real-PDF smoke test.  Skipped by default — run with
-  /// `TREAD_PDF_SMOKE=/abs/path/to/some.pdf cargo test -p kitty-graphics
-  /// -- --ignored real_pdf_smoke --nocapture` to verify the full
-  /// pdftoppm pipeline against a real file on disk.
-  #[test]
-  #[ignore]
-  fn real_pdf_smoke() {
-    let Ok(input) = std::env::var("TREAD_PDF_SMOKE") else {
-      panic!("set TREAD_PDF_SMOKE=/path/to/some.pdf");
-    };
-    let cache = std::env::temp_dir().join("tread-pdf-smoke-test");
-    let _ = std::fs::remove_dir_all(&cache);
-    let png = pdf_to_png(Path::new(&input), &cache).expect("conversion");
-    assert!(png.exists(), "PNG should exist at {}", png.display());
-    assert!(png.metadata().unwrap().len() > 100, "PNG should not be empty");
-    eprintln!("OK: {} bytes at {}", png.metadata().unwrap().len(), png.display());
-    // Second call should hit the cache without re-running pdftoppm.
-    let png2 = pdf_to_png(Path::new(&input), &cache).expect("cached conversion");
-    assert_eq!(png, png2);
-  }
+    /// Real-PDF smoke test.  Skipped by default — run with
+    /// `TREAD_PDF_SMOKE=/abs/path/to/some.pdf cargo test -p kitty-graphics
+    /// -- --ignored real_pdf_smoke --nocapture` to verify the full
+    /// pdftoppm pipeline against a real file on disk.
+    #[test]
+    #[ignore]
+    fn real_pdf_smoke() {
+        let Ok(input) = std::env::var("TREAD_PDF_SMOKE") else {
+            panic!("set TREAD_PDF_SMOKE=/path/to/some.pdf");
+        };
+        let cache = std::env::temp_dir().join("tread-pdf-smoke-test");
+        let _ = std::fs::remove_dir_all(&cache);
+        let png = pdf_to_png(Path::new(&input), &cache).expect("conversion");
+        assert!(png.exists(), "PNG should exist at {}", png.display());
+        assert!(
+            png.metadata().unwrap().len() > 100,
+            "PNG should not be empty"
+        );
+        eprintln!(
+            "OK: {} bytes at {}",
+            png.metadata().unwrap().len(),
+            png.display()
+        );
+        // Second call should hit the cache without re-running pdftoppm.
+        let png2 = pdf_to_png(Path::new(&input), &cache).expect("cached conversion");
+        assert_eq!(png, png2);
+    }
 }

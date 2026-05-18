@@ -2,6 +2,24 @@
 
 Compiled 2026-05-07 from three parallel codebase audits (integration verification / latent crash audit / rendering issues investigation). 27 distinct items across four categories. Tier 1 (six user-visible items) is the active fix plan in `~/.claude/plans/humming-cuddling-wadler.md`. Tier 2 and Tier 3 below are deferred backlog — pick from these when something specific bites.
 
+2026-05-16 revalidation note: this audit is now historical context, not the
+current source of truth. The standalone reader architecture has since gained a
+preview pane, `ReaderRuntime`, `LayoutCache`, `FigureIndex`, first-class
+`FigurePreviewState`, and split inline/preview image invalidation. Re-audit
+before using the table below as an implementation queue.
+
+Current spot-checks:
+
+- B1 mixed display math appears resolved for the Pandoc path.
+- Inline `thebibliography` extraction is partially handled; external
+  `\bibliography{file.bib}` still appears unresolved.
+- B8 should be reclassified rather than treated as globally open; image
+  rendering changed substantially with the preview pane and tmux/iTerm2 work.
+- D1 silent reset on corrupted persistence still appears open.
+- C2 stale search matches after reflow/resize still appears open.
+- C5 fetch timeout/body-size protection still appears open.
+- A-series trench integration findings were not revalidated from this repo.
+
 Severities:
 - **CRASH** — panic / abort under reachable input
 - **DEGRADED** — feature visibly broken or absent

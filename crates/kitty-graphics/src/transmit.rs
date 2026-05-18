@@ -21,7 +21,7 @@ use std::io::{self, Write};
 /// is constant-time on every modern libc) so a re-attach mid-session
 /// (which sets/unsets `$TMUX`) doesn't need a process restart.
 fn in_tmux() -> bool {
-  std::env::var_os("TMUX").is_some()
+    std::env::var_os("TMUX").is_some()
 }
 
 /// Wrap `payload` (an APC graphics escape including its `\x1b\\`
@@ -37,16 +37,16 @@ fn in_tmux() -> bool {
 /// lead-in would cause tmux to treat it as an early ST terminator and
 /// drop the wrapped sequence.
 fn tmux_wrap(payload: &[u8]) -> Vec<u8> {
-  let mut out = Vec::with_capacity(payload.len() * 2 + 8);
-  out.extend_from_slice(b"\x1bPtmux;");
-  for &b in payload {
-    if b == 0x1b {
-      out.push(0x1b);
+    let mut out = Vec::with_capacity(payload.len() * 2 + 8);
+    out.extend_from_slice(b"\x1bPtmux;");
+    for &b in payload {
+        if b == 0x1b {
+            out.push(0x1b);
+        }
+        out.push(b);
     }
-    out.push(b);
-  }
-  out.extend_from_slice(b"\x1b\\");
-  out
+    out.extend_from_slice(b"\x1b\\");
+    out
 }
 
 /// Buffered emitter for one frame's worth of Kitty graphics commands.
@@ -64,83 +64,77 @@ fn tmux_wrap(payload: &[u8]) -> Vec<u8> {
 /// frame.
 #[derive(Default)]
 pub struct BatchEmitter {
-  payload: Vec<u8>,
+    payload: Vec<u8>,
 }
 
 impl BatchEmitter {
-  pub fn new() -> Self {
-    Self::default()
-  }
-
-  pub fn is_empty(&self) -> bool {
-    self.payload.is_empty()
-  }
-
-  pub fn flush(self) -> io::Result<()> {
-    if self.payload.is_empty() {
-      return Ok(());
+    pub fn new() -> Self {
+        Self::default()
     }
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
-    handle.write_all(&self.payload)?;
-    handle.flush()
-  }
 
-  pub fn transmit_and_place(
-    &mut self,
-    id: u32,
-    png_bytes: &[u8],
-    cols: u16,
-    rows: u16,
-    abs_row: u16,
-    abs_col: u16,
-  ) -> io::Result<()> {
-    let b64 = base64_encode(png_bytes);
-    let mut apc: Vec<u8> = Vec::with_capacity(96 + b64.len() + 16);
-    // Cursor positioning first — bundled into the same payload so tmux
-    // passthrough forwards it to iTerm2 in lockstep with the APC.
-    write!(apc, "\x1b[{abs_row};{abs_col}H")?;
-    write!(
-      apc,
-      "\x1b_Ga=T,t=d,f=100,i={id},c={cols},r={rows},C=1,q=2;"
-    )?;
-    apc.extend_from_slice(b64.as_bytes());
-    apc.extend_from_slice(b"\x1b\\");
-    self.append_apc(&apc)
-  }
-
-  pub fn place_by_id(
-    &mut self,
-    id: u32,
-    cols: u16,
-    rows: u16,
-    abs_row: u16,
-    abs_col: u16,
-  ) -> io::Result<()> {
-    let mut apc: Vec<u8> = Vec::with_capacity(64);
-    write!(apc, "\x1b[{abs_row};{abs_col}H")?;
-    write!(
-      apc,
-      "\x1b_Ga=p,i={id},c={cols},r={rows},C=1,q=2\x1b\\"
-    )?;
-    self.append_apc(&apc)
-  }
-
-  pub fn delete_placement(&mut self, id: u32) -> io::Result<()> {
-    // a=d (delete), d=i (by id, free=keep), q=2 (silent).
-    let mut apc = Vec::with_capacity(32);
-    write!(apc, "\x1b_Ga=d,d=i,i={id},q=2\x1b\\")?;
-    self.append_apc(&apc)
-  }
-
-  fn append_apc(&mut self, payload: &[u8]) -> io::Result<()> {
-    if in_tmux() {
-      self.payload.extend_from_slice(&tmux_wrap(payload));
-    } else {
-      self.payload.extend_from_slice(payload);
+    pub fn is_empty(&self) -> bool {
+        self.payload.is_empty()
     }
-    Ok(())
-  }
+
+    pub fn flush(self) -> io::Result<()> {
+        if self.payload.is_empty() {
+            return Ok(());
+        }
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        handle.write_all(&self.payload)?;
+        handle.flush()
+    }
+
+    pub fn transmit_and_place(
+        &mut self,
+        id: u32,
+        png_bytes: &[u8],
+        cols: u16,
+        rows: u16,
+        abs_row: u16,
+        abs_col: u16,
+    ) -> io::Result<()> {
+        let b64 = base64_encode(png_bytes);
+        let mut apc: Vec<u8> = Vec::with_capacity(96 + b64.len() + 16);
+        // Cursor positioning first — bundled into the same payload so tmux
+        // passthrough forwards it to iTerm2 in lockstep with the APC.
+        write!(apc, "\x1b[{abs_row};{abs_col}H")?;
+        write!(apc, "\x1b_Ga=T,t=d,f=100,i={id},c={cols},r={rows},C=1,q=2;")?;
+        apc.extend_from_slice(b64.as_bytes());
+        apc.extend_from_slice(b"\x1b\\");
+        self.append_apc(&apc)
+    }
+
+    pub fn place_by_id(
+        &mut self,
+        id: u32,
+        cols: u16,
+        rows: u16,
+        abs_row: u16,
+        abs_col: u16,
+    ) -> io::Result<()> {
+        let mut apc: Vec<u8> = Vec::with_capacity(64);
+        write!(apc, "\x1b[{abs_row};{abs_col}H")?;
+        write!(apc, "\x1b_Ga=p,i={id},c={cols},r={rows},C=1,q=2\x1b\\")?;
+        self.append_apc(&apc)
+    }
+
+    pub fn delete_placement(&mut self, id: u32) -> io::Result<()> {
+        // a=d (delete), d=i (by id, free=keep), q=2 (silent).
+        let mut apc = Vec::with_capacity(32);
+        write!(apc, "\x1b_Ga=d,d=i,i={id},q=2\x1b\\")?;
+        self.append_apc(&apc)
+    }
+
+    fn append_apc(&mut self, payload: &[u8]) -> io::Result<()> {
+        if in_tmux() {
+            self.payload.extend_from_slice(&tmux_wrap(payload));
+        } else {
+            self.payload.extend_from_slice(payload);
+        }
+        Ok(())
+    }
 }
 
 /// Transmit the PNG bytes AND display them at `(abs_row, abs_col)` in
@@ -172,16 +166,16 @@ impl BatchEmitter {
 /// asks the terminal not to move the cursor after rendering, so the
 /// next ratatui frame starts from a sane position.
 pub fn transmit_and_place(
-  id: u32,
-  png_bytes: &[u8],
-  cols: u16,
-  rows: u16,
-  abs_row: u16,
-  abs_col: u16,
+    id: u32,
+    png_bytes: &[u8],
+    cols: u16,
+    rows: u16,
+    abs_row: u16,
+    abs_col: u16,
 ) -> io::Result<()> {
-  let mut batch = BatchEmitter::new();
-  batch.transmit_and_place(id, png_bytes, cols, rows, abs_row, abs_col)?;
-  batch.flush()
+    let mut batch = BatchEmitter::new();
+    batch.transmit_and_place(id, png_bytes, cols, rows, abs_row, abs_col)?;
+    batch.flush()
 }
 
 /// Re-place an already-transmitted image at a new screen position
@@ -201,85 +195,79 @@ pub fn transmit_and_place(
 /// you'd get ghost images stacking up on each scroll line.  The bundled
 /// cursor move + APC follows the same passthrough-envelope rationale as
 /// `transmit_and_place` (see that function for the tmux DCS details).
-pub fn place_by_id(
-  id: u32,
-  cols: u16,
-  rows: u16,
-  abs_row: u16,
-  abs_col: u16,
-) -> io::Result<()> {
-  let mut batch = BatchEmitter::new();
-  batch.place_by_id(id, cols, rows, abs_row, abs_col)?;
-  batch.flush()
+pub fn place_by_id(id: u32, cols: u16, rows: u16, abs_row: u16, abs_col: u16) -> io::Result<()> {
+    let mut batch = BatchEmitter::new();
+    batch.place_by_id(id, cols, rows, abs_row, abs_col)?;
+    batch.flush()
 }
 
 /// Delete a placement of an image (by id) without removing the cached
 /// image data — i.e. clear the visible image but keep the bytes so we
 /// can re-place quickly when scrolled back into view.
 pub fn delete_placement(id: u32) -> io::Result<()> {
-  let mut batch = BatchEmitter::new();
-  batch.delete_placement(id)?;
-  batch.flush()
+    let mut batch = BatchEmitter::new();
+    batch.delete_placement(id)?;
+    batch.flush()
 }
 
 /// Position the terminal cursor at (row, col) — both 1-indexed,
 /// matching the ANSI CUP convention.
 pub fn move_cursor(row: u16, col: u16) -> io::Result<()> {
-  let stdout = io::stdout();
-  let mut handle = stdout.lock();
-  write!(handle, "\x1b[{row};{col}H")?;
-  handle.flush()
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    write!(handle, "\x1b[{row};{col}H")?;
+    handle.flush()
 }
 
 /// Standard base64 encoder.  Hand-rolled to avoid pulling in the
 /// `base64` crate just for this — the OSC 52 yank in tread uses
 /// the same trick.
 fn base64_encode(data: &[u8]) -> String {
-  const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-  for chunk in data.chunks(3) {
-    let b0 = chunk[0] as usize;
-    let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
-    let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
-    out.push(T[b0 >> 2] as char);
-    out.push(T[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
-    if chunk.len() > 1 {
-      out.push(T[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
-    } else {
-      out.push('=');
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
+        out.push(T[b0 >> 2] as char);
+        out.push(T[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
+        if chunk.len() > 1 {
+            out.push(T[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(T[b2 & 0x3f] as char);
+        } else {
+            out.push('=');
+        }
     }
-    if chunk.len() > 2 {
-      out.push(T[b2 & 0x3f] as char);
-    } else {
-      out.push('=');
-    }
-  }
-  out
+    out
 }
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+    use super::*;
 
-  #[test]
-  fn base64_roundtrip_known_values() {
-    // Known answers from RFC 4648.
-    assert_eq!(base64_encode(b""), "");
-    assert_eq!(base64_encode(b"f"), "Zg==");
-    assert_eq!(base64_encode(b"fo"), "Zm8=");
-    assert_eq!(base64_encode(b"foo"), "Zm9v");
-    assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
-    assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
-    assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
-  }
+    #[test]
+    fn base64_roundtrip_known_values() {
+        // Known answers from RFC 4648.
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
 
-  #[test]
-  fn base64_handles_binary() {
-    // Non-ASCII bytes should encode unchanged.
-    let bytes = vec![0u8, 1, 2, 3, 0xff, 0xfe, 0xfd];
-    let out = base64_encode(&bytes);
-    // Just check we don't panic and produce something pad-aligned.
-    assert_eq!(out.len() % 4, 0);
-    assert!(!out.is_empty());
-  }
+    #[test]
+    fn base64_handles_binary() {
+        // Non-ASCII bytes should encode unchanged.
+        let bytes = vec![0u8, 1, 2, 3, 0xff, 0xfe, 0xfd];
+        let out = base64_encode(&bytes);
+        // Just check we don't panic and produce something pad-aligned.
+        assert_eq!(out.len() % 4, 0);
+        assert!(!out.is_empty());
+    }
 }

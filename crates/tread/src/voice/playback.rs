@@ -7,126 +7,134 @@ use std::time::{Duration, Instant};
 use super::{VoicePlayingInfo, chunk_paragraphs, provider::TtsProvider};
 
 pub enum PlaybackCommand {
-  Start {
-    text: String,
-    doc_start_line: usize,
-    doc_end_line: usize,
-    /// Monotonic session id assigned by `PlaybackController::start`.
-    /// The playback loop publishes this to `PlaybackController::session`
-    /// so a Reader can detect when another Reader preempted it.
-    session_id: u64,
-  },
-  Pause,
-  Resume,
-  Stop,
+    Start {
+        text: String,
+        doc_start_line: usize,
+        doc_end_line: usize,
+        /// Monotonic session id assigned by `PlaybackController::start`.
+        /// The playback loop publishes this to `PlaybackController::session`
+        /// so a Reader can detect when another Reader preempted it.
+        session_id: u64,
+    },
+    Pause,
+    Resume,
+    Stop,
 }
 
 #[derive(Clone, PartialEq)]
 pub enum PlaybackStatus {
-  Idle,
-  Loading,
-  Playing,
-  Paused,
+    Idle,
+    Loading,
+    Playing,
+    Paused,
 }
 
 pub struct PlaybackController {
-  cmd_tx: Sender<PlaybackCommand>,
-  pub status: Arc<Mutex<PlaybackStatus>>,
-  pub voice_error: Arc<Mutex<Option<String>>>,
-  pub playing_info: Arc<Mutex<Option<VoicePlayingInfo>>>,
-  /// Monotonic counter feeding `start()`'s return value.  Each call
-  /// produces a unique session id that the calling Reader records on
-  /// its `voice_started_session` field — and checks each tick against
-  /// `session()` to detect cross-tab preemption.
-  session_counter: AtomicU64,
-  /// Current owner's session id, or None when nothing is playing.
-  /// Updated immediately by `start()` (before the playback thread sees
-  /// the command) so a follow-up Reader's `start()` observation isn't
-  /// racing the chunk loop.
-  pub session: Arc<Mutex<Option<u64>>>,
+    cmd_tx: Sender<PlaybackCommand>,
+    pub status: Arc<Mutex<PlaybackStatus>>,
+    pub voice_error: Arc<Mutex<Option<String>>>,
+    pub playing_info: Arc<Mutex<Option<VoicePlayingInfo>>>,
+    /// Monotonic counter feeding `start()`'s return value.  Each call
+    /// produces a unique session id that the calling Reader records on
+    /// its `voice_started_session` field — and checks each tick against
+    /// `session()` to detect cross-tab preemption.
+    session_counter: AtomicU64,
+    /// Current owner's session id, or None when nothing is playing.
+    /// Updated immediately by `start()` (before the playback thread sees
+    /// the command) so a follow-up Reader's `start()` observation isn't
+    /// racing the chunk loop.
+    pub session: Arc<Mutex<Option<u64>>>,
 }
 
 impl PlaybackController {
-  pub fn new(provider: Box<dyn TtsProvider>) -> Self {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<PlaybackCommand>();
-    let status = Arc::new(Mutex::new(PlaybackStatus::Idle));
-    let voice_error = Arc::new(Mutex::new(None::<String>));
-    let playing_info = Arc::new(Mutex::new(None::<VoicePlayingInfo>));
-    let session = Arc::new(Mutex::new(None::<u64>));
+    pub fn new(provider: Box<dyn TtsProvider>) -> Self {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<PlaybackCommand>();
+        let status = Arc::new(Mutex::new(PlaybackStatus::Idle));
+        let voice_error = Arc::new(Mutex::new(None::<String>));
+        let playing_info = Arc::new(Mutex::new(None::<VoicePlayingInfo>));
+        let session = Arc::new(Mutex::new(None::<u64>));
 
-    let status_clone = Arc::clone(&status);
-    let error_clone = Arc::clone(&voice_error);
-    let info_clone = Arc::clone(&playing_info);
-    let session_clone = Arc::clone(&session);
+        let status_clone = Arc::clone(&status);
+        let error_clone = Arc::clone(&voice_error);
+        let info_clone = Arc::clone(&playing_info);
+        let session_clone = Arc::clone(&session);
 
-    thread::spawn(move || {
-      playback_loop(provider, cmd_rx, status_clone, error_clone, info_clone, session_clone);
-    });
+        thread::spawn(move || {
+            playback_loop(
+                provider,
+                cmd_rx,
+                status_clone,
+                error_clone,
+                info_clone,
+                session_clone,
+            );
+        });
 
-    Self {
-      cmd_tx,
-      status,
-      voice_error,
-      playing_info,
-      session_counter: AtomicU64::new(0),
-      session,
+        Self {
+            cmd_tx,
+            status,
+            voice_error,
+            playing_info,
+            session_counter: AtomicU64::new(0),
+            session,
+        }
     }
-  }
 
-  /// Start playback of `text`.  Returns the monotonic session id stamped
-  /// on this request — callers should record it (e.g. on
-  /// `Reader::voice_started_session`) and compare against
-  /// `session_id()` each tick to detect when another caller preempted
-  /// them.  The current playing-session field is updated synchronously
-  /// here, before the command is even consumed by the playback thread,
-  /// so a near-simultaneous follow-up `start()` from a different caller
-  /// observes the new id without any race.
-  pub fn start(
-    &self,
-    text: String,
-    doc_start_line: usize,
-    doc_end_line: usize,
-  ) -> u64 {
-    let id = self.session_counter.fetch_add(1, Ordering::SeqCst) + 1;
-    *self.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(id);
-    let _ = self.cmd_tx.send(PlaybackCommand::Start {
-      text,
-      doc_start_line,
-      doc_end_line,
-      session_id: id,
-    });
-    id
-  }
+    /// Start playback of `text`.  Returns the monotonic session id stamped
+    /// on this request — callers should record it (e.g. on
+    /// `Reader::voice_started_session`) and compare against
+    /// `session_id()` each tick to detect when another caller preempted
+    /// them.  The current playing-session field is updated synchronously
+    /// here, before the command is even consumed by the playback thread,
+    /// so a near-simultaneous follow-up `start()` from a different caller
+    /// observes the new id without any race.
+    pub fn start(&self, text: String, doc_start_line: usize, doc_end_line: usize) -> u64 {
+        let id = self.session_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(id);
+        let _ = self.cmd_tx.send(PlaybackCommand::Start {
+            text,
+            doc_start_line,
+            doc_end_line,
+            session_id: id,
+        });
+        id
+    }
 
-  /// Currently-playing session id, or None when nothing is playing or
-  /// the most recent session ended naturally.  Compare against your
-  /// recorded `voice_started_session`: if `Some(other) != Some(yours)`,
-  /// you were preempted by another caller and should exit reading mode
-  /// quietly.
-  pub fn session_id(&self) -> Option<u64> {
-    *self.session.lock().unwrap_or_else(|e| e.into_inner())
-  }
+    /// Currently-playing session id, or None when nothing is playing or
+    /// the most recent session ended naturally.  Compare against your
+    /// recorded `voice_started_session`: if `Some(other) != Some(yours)`,
+    /// you were preempted by another caller and should exit reading mode
+    /// quietly.
+    pub fn session_id(&self) -> Option<u64> {
+        *self.session.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
-  pub fn pause(&self) {
-    let _ = self.cmd_tx.send(PlaybackCommand::Pause);
-  }
+    pub fn pause(&self) {
+        let _ = self.cmd_tx.send(PlaybackCommand::Pause);
+    }
 
-  pub fn resume(&self) {
-    let _ = self.cmd_tx.send(PlaybackCommand::Resume);
-  }
+    pub fn resume(&self) {
+        let _ = self.cmd_tx.send(PlaybackCommand::Resume);
+    }
 
-  pub fn stop(&self) {
-    let _ = self.cmd_tx.send(PlaybackCommand::Stop);
-  }
+    pub fn stop(&self) {
+        let _ = self.cmd_tx.send(PlaybackCommand::Stop);
+    }
 
-  pub fn status(&self) -> PlaybackStatus {
-    self.status.lock().unwrap_or_else(|e| e.into_inner()).clone()
-  }
+    pub fn status(&self) -> PlaybackStatus {
+        self.status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
 
-  /// Take the pending error message (clears it after reading).
-  pub fn take_error(&self) -> Option<String> {
-    self.voice_error.lock().unwrap_or_else(|e| e.into_inner()).take()
-  }
+    /// Take the pending error message (clears it after reading).
+    pub fn take_error(&self) -> Option<String> {
+        self.voice_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    }
 }
 
 /// When the controller is dropped (because the owning Editor closed), make
@@ -134,9 +142,9 @@ impl PlaybackController {
 /// Without this, audio queued in rodio keeps playing after the reader closes,
 /// since the loop only checks for interrupts between chunks.
 impl Drop for PlaybackController {
-  fn drop(&mut self) {
-    let _ = self.cmd_tx.send(PlaybackCommand::Stop);
-  }
+    fn drop(&mut self) {
+        let _ = self.cmd_tx.send(PlaybackCommand::Stop);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -145,185 +153,198 @@ impl Drop for PlaybackController {
 
 #[cfg(feature = "voice")]
 fn playback_loop(
-  provider: Box<dyn TtsProvider>,
-  cmd_rx: Receiver<PlaybackCommand>,
-  status: Arc<Mutex<PlaybackStatus>>,
-  error: Arc<Mutex<Option<String>>>,
-  playing_info: Arc<Mutex<Option<VoicePlayingInfo>>>,
-  session: Arc<Mutex<Option<u64>>>,
+    provider: Box<dyn TtsProvider>,
+    cmd_rx: Receiver<PlaybackCommand>,
+    status: Arc<Mutex<PlaybackStatus>>,
+    error: Arc<Mutex<Option<String>>>,
+    playing_info: Arc<Mutex<Option<VoicePlayingInfo>>>,
+    session: Arc<Mutex<Option<u64>>>,
 ) {
-  // Lazy audio init.  Creating an `OutputStream` spins up a cpal
-  // playback thread (a real OS thread that wakes for buffer fills)
-  // and opens the default audio device — work that's pure overhead
-  // for the common case where the user never invokes voice mode.
-  // Build it on the first Start command instead, reuse for the
-  // remaining lifetime of the playback thread.  If init fails we
-  // surface the error and `continue` rather than tearing down the
-  // whole loop, so a later Start with the audio system fixed can
-  // still succeed.
-  let mut output: Option<(rodio::OutputStream, rodio::OutputStreamHandle)> = None;
+    // Lazy audio init.  Creating an `OutputStream` spins up a cpal
+    // playback thread (a real OS thread that wakes for buffer fills)
+    // and opens the default audio device — work that's pure overhead
+    // for the common case where the user never invokes voice mode.
+    // Build it on the first Start command instead, reuse for the
+    // remaining lifetime of the playback thread.  If init fails we
+    // surface the error and `continue` rather than tearing down the
+    // whole loop, so a later Start with the audio system fixed can
+    // still succeed.
+    let mut output: Option<(rodio::OutputStream, rodio::OutputStreamHandle)> = None;
 
-  for cmd in cmd_rx.iter() {
-    match cmd {
-      // ------------------------------------------------------------------ //
-      PlaybackCommand::Start { text, doc_start_line, doc_end_line, session_id: my_session } => {
-        if output.is_none() {
-          match rodio::OutputStream::try_default() {
-            Ok(r) => output = Some(r),
-            Err(e) => {
-              *error.lock().unwrap_or_else(|e| e.into_inner()) =
-                Some(format!("Audio init failed: {e}"));
-              continue;
-            }
-          }
-        }
-        let handle = &output.as_ref().expect("output just set").1;
-        let sink = match rodio::Sink::try_new(handle) {
-          Ok(s) => s,
-          Err(e) => {
-            *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("Audio sink error: {e}"));
-            continue;
-          }
-        };
-        let mut was_stopped = false;
-        let mut chars_before: usize = 0;
-
-        'chunks: for chunk_text in chunk_paragraphs(&text) {
-          // Check for interrupt before starting the next synthesis request
-          while let Ok(interrupt) = cmd_rx.try_recv() {
-            match interrupt {
-              PlaybackCommand::Stop => {
-                was_stopped = true;
-                break 'chunks;
-              }
-              PlaybackCommand::Pause => {
-                sink.pause();
-                *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Paused;
-              }
-              PlaybackCommand::Resume => {
-                sink.play();
-                *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Playing;
-              }
-              PlaybackCommand::Start { .. } => {
-                was_stopped = true;
-                break 'chunks;
-              }
-            }
-          }
-
-          let buf = match provider.stream(&chunk_text) {
-            Err(msg) => {
-              *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg);
-              was_stopped = true;
-              break 'chunks;
-            }
-            Ok(b) => b,
-          };
-
-          // Wait for enough bytes for the decoder to parse the audio header
-          const PRE_BUFFER: usize = 16 * 1024;
-          loop {
-            if buf.buffered_len() >= PRE_BUFFER || buf.is_done() {
-              break;
-            }
-            if let Ok(interrupt) = cmd_rx.try_recv() {
-              if matches!(interrupt, PlaybackCommand::Stop) {
-                was_stopped = true;
-                break 'chunks;
-              }
-            }
-            thread::sleep(Duration::from_millis(20));
-          }
-
-          let chunk_len = chunk_text.len();
-          match rodio::Decoder::new(buf) {
-            Ok(source) => {
-              *playing_info.lock().unwrap_or_else(|e| e.into_inner()) = Some(VoicePlayingInfo {
+    for cmd in cmd_rx.iter() {
+        match cmd {
+            // ------------------------------------------------------------------ //
+            PlaybackCommand::Start {
+                text,
                 doc_start_line,
                 doc_end_line,
-                started_at: Instant::now(),
-                chars_before_chunk: chars_before,
-              });
-              *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Playing;
-              sink.append(source);
-            }
-            Err(e) => {
-              *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("Audio decode error: {e}"));
-              was_stopped = true;
-              break 'chunks;
-            }
-          }
-
-          // Poll until rodio finishes playing this chunk, responding to cmds
-          while sink.len() > 0 {
-            if let Ok(interrupt) = cmd_rx.try_recv() {
-              match interrupt {
-                PlaybackCommand::Stop => {
-                  sink.stop();
-                  was_stopped = true;
-                  break 'chunks;
-                }
-                PlaybackCommand::Pause => {
-                  sink.pause();
-                  *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Paused;
-                  'paused: for pcmd in cmd_rx.iter() {
-                    match pcmd {
-                      PlaybackCommand::Resume => {
-                        sink.play();
-                        *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Playing;
-                        break 'paused;
-                      }
-                      PlaybackCommand::Stop => {
-                        sink.stop();
-                        was_stopped = true;
-                        break 'chunks;
-                      }
-                      PlaybackCommand::Start { .. } => {
-                        sink.stop();
-                        was_stopped = true;
-                        break 'chunks;
-                      }
-                      PlaybackCommand::Pause => {}
+                session_id: my_session,
+            } => {
+                if output.is_none() {
+                    match rodio::OutputStream::try_default() {
+                        Ok(r) => output = Some(r),
+                        Err(e) => {
+                            *error.lock().unwrap_or_else(|e| e.into_inner()) =
+                                Some(format!("Audio init failed: {e}"));
+                            continue;
+                        }
                     }
-                  }
                 }
-                PlaybackCommand::Resume => {}
-                PlaybackCommand::Start { .. } => {
-                  sink.stop();
-                  was_stopped = true;
-                  break 'chunks;
+                let handle = &output.as_ref().expect("output just set").1;
+                let sink = match rodio::Sink::try_new(handle) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        *error.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(format!("Audio sink error: {e}"));
+                        continue;
+                    }
+                };
+                let mut was_stopped = false;
+                let mut chars_before: usize = 0;
+
+                'chunks: for chunk_text in chunk_paragraphs(&text) {
+                    // Check for interrupt before starting the next synthesis request
+                    while let Ok(interrupt) = cmd_rx.try_recv() {
+                        match interrupt {
+                            PlaybackCommand::Stop => {
+                                was_stopped = true;
+                                break 'chunks;
+                            }
+                            PlaybackCommand::Pause => {
+                                sink.pause();
+                                *status.lock().unwrap_or_else(|e| e.into_inner()) =
+                                    PlaybackStatus::Paused;
+                            }
+                            PlaybackCommand::Resume => {
+                                sink.play();
+                                *status.lock().unwrap_or_else(|e| e.into_inner()) =
+                                    PlaybackStatus::Playing;
+                            }
+                            PlaybackCommand::Start { .. } => {
+                                was_stopped = true;
+                                break 'chunks;
+                            }
+                        }
+                    }
+
+                    let buf = match provider.stream(&chunk_text) {
+                        Err(msg) => {
+                            *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg);
+                            was_stopped = true;
+                            break 'chunks;
+                        }
+                        Ok(b) => b,
+                    };
+
+                    // Wait for enough bytes for the decoder to parse the audio header
+                    const PRE_BUFFER: usize = 16 * 1024;
+                    loop {
+                        if buf.buffered_len() >= PRE_BUFFER || buf.is_done() {
+                            break;
+                        }
+                        if let Ok(interrupt) = cmd_rx.try_recv() {
+                            if matches!(interrupt, PlaybackCommand::Stop) {
+                                was_stopped = true;
+                                break 'chunks;
+                            }
+                        }
+                        thread::sleep(Duration::from_millis(20));
+                    }
+
+                    let chunk_len = chunk_text.len();
+                    match rodio::Decoder::new(buf) {
+                        Ok(source) => {
+                            *playing_info.lock().unwrap_or_else(|e| e.into_inner()) =
+                                Some(VoicePlayingInfo {
+                                    doc_start_line,
+                                    doc_end_line,
+                                    started_at: Instant::now(),
+                                    chars_before_chunk: chars_before,
+                                });
+                            *status.lock().unwrap_or_else(|e| e.into_inner()) =
+                                PlaybackStatus::Playing;
+                            sink.append(source);
+                        }
+                        Err(e) => {
+                            *error.lock().unwrap_or_else(|e| e.into_inner()) =
+                                Some(format!("Audio decode error: {e}"));
+                            was_stopped = true;
+                            break 'chunks;
+                        }
+                    }
+
+                    // Poll until rodio finishes playing this chunk, responding to cmds
+                    while sink.len() > 0 {
+                        if let Ok(interrupt) = cmd_rx.try_recv() {
+                            match interrupt {
+                                PlaybackCommand::Stop => {
+                                    sink.stop();
+                                    was_stopped = true;
+                                    break 'chunks;
+                                }
+                                PlaybackCommand::Pause => {
+                                    sink.pause();
+                                    *status.lock().unwrap_or_else(|e| e.into_inner()) =
+                                        PlaybackStatus::Paused;
+                                    'paused: for pcmd in cmd_rx.iter() {
+                                        match pcmd {
+                                            PlaybackCommand::Resume => {
+                                                sink.play();
+                                                *status.lock().unwrap_or_else(|e| e.into_inner()) =
+                                                    PlaybackStatus::Playing;
+                                                break 'paused;
+                                            }
+                                            PlaybackCommand::Stop => {
+                                                sink.stop();
+                                                was_stopped = true;
+                                                break 'chunks;
+                                            }
+                                            PlaybackCommand::Start { .. } => {
+                                                sink.stop();
+                                                was_stopped = true;
+                                                break 'chunks;
+                                            }
+                                            PlaybackCommand::Pause => {}
+                                        }
+                                    }
+                                }
+                                PlaybackCommand::Resume => {}
+                                PlaybackCommand::Start { .. } => {
+                                    sink.stop();
+                                    was_stopped = true;
+                                    break 'chunks;
+                                }
+                            }
+                        }
+                        thread::sleep(Duration::from_millis(50));
+                    }
+
+                    chars_before += chunk_len;
                 }
-              }
+
+                let _ = was_stopped;
+                *playing_info.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Idle;
+                // Clear our session id only if we still own it.  If a follow-up
+                // `start()` arrived and bumped the session counter while we were
+                // mid-chunk (we received a Start interrupt and broke out), the
+                // `session` field already holds the new id — leaving it alone
+                // means the new caller's `session_id()` query reflects reality.
+                let mut s = session.lock().unwrap_or_else(|e| e.into_inner());
+                if *s == Some(my_session) {
+                    *s = None;
+                }
             }
-            thread::sleep(Duration::from_millis(50));
-          }
 
-          chars_before += chunk_len;
+            // ------------------------------------------------------------------ //
+            PlaybackCommand::Stop => {
+                *playing_info.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Idle;
+                *session.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
+            PlaybackCommand::Pause | PlaybackCommand::Resume => {}
         }
-
-        let _ = was_stopped;
-        *playing_info.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Idle;
-        // Clear our session id only if we still own it.  If a follow-up
-        // `start()` arrived and bumped the session counter while we were
-        // mid-chunk (we received a Start interrupt and broke out), the
-        // `session` field already holds the new id — leaving it alone
-        // means the new caller's `session_id()` query reflects reality.
-        let mut s = session.lock().unwrap_or_else(|e| e.into_inner());
-        if *s == Some(my_session) {
-          *s = None;
-        }
-      }
-
-      // ------------------------------------------------------------------ //
-      PlaybackCommand::Stop => {
-        *playing_info.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Idle;
-        *session.lock().unwrap_or_else(|e| e.into_inner()) = None;
-      }
-      PlaybackCommand::Pause | PlaybackCommand::Resume => {}
     }
-  }
 }
 
 /// No-rodio playback loop used when the `voice` feature is off.
@@ -349,46 +370,46 @@ fn playback_loop(
 
 #[cfg(test)]
 mod tests {
-  use super::*;
-  use super::super::provider::TtsProvider;
-  use super::super::stream_buffer::StreamBuffer;
+    use super::super::provider::TtsProvider;
+    use super::super::stream_buffer::StreamBuffer;
+    use super::*;
 
-  /// A no-op provider that always errors.  Lets us construct a real
-  /// `PlaybackController` without depending on the audio device — the
-  /// chunk loop runs, errors out at `provider.stream`, and falls
-  /// through.  Sufficient for testing the synchronous parts of the
-  /// API (session counter, session field updates).
-  struct ErrProvider;
-  impl TtsProvider for ErrProvider {
-    fn stream(&self, _text: &str) -> Result<StreamBuffer, String> {
-      Err("test mock".to_string())
+    /// A no-op provider that always errors.  Lets us construct a real
+    /// `PlaybackController` without depending on the audio device — the
+    /// chunk loop runs, errors out at `provider.stream`, and falls
+    /// through.  Sufficient for testing the synchronous parts of the
+    /// API (session counter, session field updates).
+    struct ErrProvider;
+    impl TtsProvider for ErrProvider {
+        fn stream(&self, _text: &str) -> Result<StreamBuffer, String> {
+            Err("test mock".to_string())
+        }
     }
-  }
 
-  #[test]
-  fn session_counter_is_monotonic() {
-    let pc = PlaybackController::new(Box::new(ErrProvider));
-    let id1 = pc.start("a".to_string(), 0, 0);
-    let id2 = pc.start("b".to_string(), 0, 0);
-    let id3 = pc.start("c".to_string(), 0, 0);
-    assert!(id1 > 0);
-    assert!(id2 > id1);
-    assert!(id3 > id2);
-  }
+    #[test]
+    fn session_counter_is_monotonic() {
+        let pc = PlaybackController::new(Box::new(ErrProvider));
+        let id1 = pc.start("a".to_string(), 0, 0);
+        let id2 = pc.start("b".to_string(), 0, 0);
+        let id3 = pc.start("c".to_string(), 0, 0);
+        assert!(id1 > 0);
+        assert!(id2 > id1);
+        assert!(id3 > id2);
+    }
 
-  #[test]
-  fn start_synchronously_updates_session() {
-    // start() writes to `session` BEFORE sending the command on the
-    // channel, so a second caller observes the new id immediately —
-    // no race with the playback thread's processing of the first
-    // Start command.  This is what makes cross-tab preemption work
-    // without subscribing to thread events.
-    let pc = PlaybackController::new(Box::new(ErrProvider));
-    let _id1 = pc.start("a".to_string(), 0, 0);
-    let id2 = pc.start("b".to_string(), 0, 0);
-    // Right after the second start, session is Some(id2).  (After the
-    // playback thread eventually processes both Stops it clears, but
-    // we read here before yielding.)
-    assert_eq!(pc.session_id(), Some(id2));
-  }
+    #[test]
+    fn start_synchronously_updates_session() {
+        // start() writes to `session` BEFORE sending the command on the
+        // channel, so a second caller observes the new id immediately —
+        // no race with the playback thread's processing of the first
+        // Start command.  This is what makes cross-tab preemption work
+        // without subscribing to thread events.
+        let pc = PlaybackController::new(Box::new(ErrProvider));
+        let _id1 = pc.start("a".to_string(), 0, 0);
+        let id2 = pc.start("b".to_string(), 0, 0);
+        // Right after the second start, session is Some(id2).  (After the
+        // playback thread eventually processes both Stops it clears, but
+        // we read here before yielding.)
+        assert_eq!(pc.session_id(), Some(id2));
+    }
 }

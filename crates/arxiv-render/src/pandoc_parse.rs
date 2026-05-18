@@ -51,8 +51,7 @@ pub fn try_pandoc(sources: &[(String, String)]) -> Result<Vec<Block>, String> {
             std::fs::create_dir_all(parent).ok();
         }
         let processed = preprocess_latex_source(content);
-        std::fs::write(&dest, processed.as_bytes())
-            .map_err(|e| format!("write {name}: {e}"))?;
+        std::fs::write(&dest, processed.as_bytes()).map_err(|e| format!("write {name}: {e}"))?;
     }
 
     let root = find_root_name(sources);
@@ -73,8 +72,8 @@ pub fn try_pandoc(sources: &[(String, String)]) -> Result<Vec<Block>, String> {
         ));
     }
 
-    let ast: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("pandoc JSON: {e}"))?;
+    let ast: Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("pandoc JSON: {e}"))?;
 
     // Walk every source for tabular layout info — Pandoc strips `|` characters
     // (vertical rules) and mid-body `\hline` directives, so we recover both
@@ -159,7 +158,10 @@ fn extract_meta_blocks(meta: &Value) -> Vec<Block> {
 // flat MetaInlines block Pandoc produces for \author{Name\thanks{} \\ Inst \And ...}.
 fn extract_author_names(author_meta: &Value) -> Vec<String> {
     let items = match author_meta["t"].as_str() {
-        Some("MetaList") => author_meta["c"].as_array().map(|a| a.as_slice()).unwrap_or(&[]),
+        Some("MetaList") => author_meta["c"]
+            .as_array()
+            .map(|a| a.as_slice())
+            .unwrap_or(&[]),
         _ => return vec![],
     };
 
@@ -204,8 +206,9 @@ fn extract_author_names(author_meta: &Value) -> Vec<String> {
                 return None;
             }
             // Name lines have a Note or Span footnote marker.
-            let has_marker =
-                seg.iter().any(|n| matches!(n["t"].as_str(), Some("Note") | Some("Span")));
+            let has_marker = seg
+                .iter()
+                .any(|n| matches!(n["t"].as_str(), Some("Note") | Some("Span")));
             if !has_marker {
                 return None;
             }
@@ -249,7 +252,15 @@ struct SectionCounters {
 }
 
 impl SectionCounters {
-    fn new() -> Self { Self { sec: [0; 3], table: 0, figure: 0, kitty_id: 0, equation: 0 } }
+    fn new() -> Self {
+        Self {
+            sec: [0; 3],
+            table: 0,
+            figure: 0,
+            kitty_id: 0,
+            equation: 0,
+        }
+    }
 
     /// Increment the equation counter by `count` and return the LAST
     /// allocated number — used so that an `align` block with N lines
@@ -273,7 +284,9 @@ impl SectionCounters {
     fn bump(&mut self, level: u8) -> String {
         let lv = level.clamp(1, 3) as usize;
         self.sec[lv - 1] += 1;
-        for i in lv..3 { self.sec[i] = 0; }
+        for i in lv..3 {
+            self.sec[i] = 0;
+        }
         match lv {
             1 => format!("{}", self.sec[0]),
             2 => format!("{}.{}", self.sec[0], self.sec[1]),
@@ -386,7 +399,13 @@ fn walk_blocks(
                 if let Some(items) = c.as_array() {
                     for item in items {
                         if let Some(item_blocks) = item.as_array() {
-                            out.extend(list_item_blocks(item_blocks, list_depth, "•", specs, counters));
+                            out.extend(list_item_blocks(
+                                item_blocks,
+                                list_depth,
+                                "•",
+                                specs,
+                                counters,
+                            ));
                         }
                     }
                 }
@@ -400,7 +419,13 @@ fn walk_blocks(
                     for (i, item) in items.iter().enumerate() {
                         let marker = format!("{}.", start + i);
                         if let Some(item_blocks) = item.as_array() {
-                            out.extend(list_item_blocks(item_blocks, list_depth, &marker, specs, counters));
+                            out.extend(list_item_blocks(
+                                item_blocks,
+                                list_depth,
+                                &marker,
+                                specs,
+                                counters,
+                            ));
                         }
                     }
                 }
@@ -425,7 +450,9 @@ fn walk_blocks(
                 // numbered bibliography pulled from the source-extracted
                 // bibitem map.
                 let is_thebib = c[0][1].as_array().map_or(false, |classes| {
-                    classes.iter().any(|cl| cl.as_str() == Some("thebibliography"))
+                    classes
+                        .iter()
+                        .any(|cl| cl.as_str() == Some("thebibliography"))
                 });
                 if is_thebib {
                     // synthesize_bibliography reads from BIBITEMS_ORDERED
@@ -474,10 +501,7 @@ fn walk_blocks(
                 //
                 // The result is a vec of vecs: outer = stack rows,
                 // inner = side-by-side siblings within a row.
-                let blocks_in_figure: Vec<Value> = c[2]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default();
+                let blocks_in_figure: Vec<Value> = c[2].as_array().cloned().unwrap_or_default();
                 // Layout-detection precedence:
                 //   1. Multiple top-level blocks → side-by-side
                 //      (minipage/subfigure pattern).
@@ -490,10 +514,7 @@ fn walk_blocks(
                     let block = &blocks_in_figure[0];
                     let t = block["t"].as_str();
                     if matches!(t, Some("Para") | Some("Plain")) {
-                        let inlines = block["c"]
-                            .as_array()
-                            .cloned()
-                            .unwrap_or_default();
+                        let inlines = block["c"].as_array().cloned().unwrap_or_default();
                         // (2) Explicit `\\` separator wins.
                         let by_linebreak = split_inlines_by_linebreak(&inlines);
                         if by_linebreak.len() > 1 {
@@ -502,15 +523,16 @@ fn walk_blocks(
                             // (3) Width-attribute inference.
                             let with_widths = collect_images_with_width(&inlines);
                             if with_widths.iter().any(|(_, fw)| *fw) {
-                                with_widths.into_iter()
-                                    .map(|(s, _)| vec![s])
-                                    .collect()
+                                with_widths.into_iter().map(|(s, _)| vec![s]).collect()
                             } else {
                                 // (4) Default side-by-side row.
-                                let srcs: Vec<String> = with_widths.into_iter()
-                                    .map(|(s, _)| s)
-                                    .collect();
-                                if srcs.is_empty() { Vec::new() } else { vec![srcs] }
+                                let srcs: Vec<String> =
+                                    with_widths.into_iter().map(|(s, _)| s).collect();
+                                if srcs.is_empty() {
+                                    Vec::new()
+                                } else {
+                                    vec![srcs]
+                                }
                             }
                         }
                     } else if t == Some("Table") {
@@ -525,7 +547,11 @@ fn walk_blocks(
                         // Div or other wrapper: treat as one row of images.
                         let mut imgs = Vec::new();
                         walk_for_images(std::slice::from_ref(block), &mut imgs);
-                        if imgs.is_empty() { Vec::new() } else { vec![imgs] }
+                        if imgs.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![imgs]
+                        }
                     }
                 } else {
                     // (1) Multiple top-level blocks (minipage / subfigure):
@@ -534,7 +560,11 @@ fn walk_blocks(
                     for block in &blocks_in_figure {
                         walk_for_images(std::slice::from_ref(block), &mut all_imgs);
                     }
-                    if all_imgs.is_empty() { Vec::new() } else { vec![all_imgs] }
+                    if all_imgs.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![all_imgs]
+                    }
                 };
 
                 if groups.is_empty() {
@@ -544,46 +574,29 @@ fn walk_blocks(
                         out.push(Block::Line(format!("[Figure {n}]")));
                     }
                 } else {
-                    // `stack_total` tells build_visual_lines how to
-                    // budget vertical space — N panels in a stack
-                    // share the figure's row budget instead of each
-                    // claiming the whole thing.  A `Block::Blank`
-                    // between non-last panels gives them visual
-                    // breathing room.  Caption attaches only to the
-                    // LAST panel so it doesn't repeat between rows.
-                    let stack_total = groups.len() as u8;
-                    let last_idx = groups.len() - 1;
-                    for (i, group) in groups.into_iter().enumerate() {
-                        let item_alt = if i == last_idx { alt.clone() } else { String::new() };
-                        if group.len() == 1 {
-                            let kitty_id = counters.next_kitty_id();
-                            out.push(Block::Image {
-                                path: std::path::PathBuf::from(&group[0]),
-                                alt: item_alt,
-                                kitty_id,
-                                dims: None, // populated post-parse by absolutize_image_paths
-                                stack_total,
-                            });
-                        } else {
-                            // Side-by-side row inside this panel slot.
-                            // (Mixed stacked-and-side-by-side figures
-                            // are rare; ImageRow doesn't track stack
-                            // membership today — would be a v2 add.)
-                            let items: Vec<doc_model::ImageItem> = group.iter()
+                    // One Pandoc Figure node → one Block::Figure.  The
+                    // 2D `rows` grid mirrors the source's stacked-vs-
+                    // side-by-side structure exactly, so downstream
+                    // consumers (FigureIndex, build_visual_lines, the
+                    // preview tiler) don't have to reconstruct it.
+                    let rows: Vec<Vec<doc_model::ImageItem>> = groups
+                        .into_iter()
+                        .map(|group| {
+                            group
+                                .into_iter()
                                 .map(|src| doc_model::ImageItem {
                                     path: std::path::PathBuf::from(src),
                                     kitty_id: counters.next_kitty_id(),
                                     dims: None, // populated post-parse by absolutize_image_paths
                                 })
-                                .collect();
-                            out.push(Block::ImageRow { items, alt: item_alt });
-                        }
-                        // Separator between stacked panels (not after
-                        // the last one — caption follows there).
-                        if i < last_idx {
-                            out.push(Block::Blank);
-                        }
-                    }
+                                .collect()
+                        })
+                        .collect();
+                    out.push(Block::Figure {
+                        rows,
+                        alt,
+                        figure_id: n,
+                    });
                 }
                 out.push(Block::Blank);
             }
@@ -625,9 +638,7 @@ fn para_to_block(inlines: &[Value], counters: &mut SectionCounters) -> Vec<Block
         .iter()
         .enumerate()
         .filter_map(|(i, n)| {
-            if n["t"].as_str() == Some("Math")
-                && n["c"][0]["t"].as_str() == Some("DisplayMath")
-            {
+            if n["t"].as_str() == Some("Math") && n["c"][0]["t"].as_str() == Some("DisplayMath") {
                 Some(i)
             } else {
                 None
@@ -707,11 +718,10 @@ fn para_to_block(inlines: &[Value], counters: &mut SectionCounters) -> Vec<Block
 /// individual rows; this function ignores them today.  See `v2.md`.
 fn equation_count_for_source(latex: &str) -> u32 {
     let trimmed = latex.trim_start();
-    let env = trimmed.strip_prefix("\\begin{")
-        .and_then(|rest| {
-            let close = rest.find('}')?;
-            Some(&rest[..close])
-        });
+    let env = trimmed.strip_prefix("\\begin{").and_then(|rest| {
+        let close = rest.find('}')?;
+        Some(&rest[..close])
+    });
     let Some(env) = env else {
         // No `\begin{...}` — bare display math, treat as one numbered eq.
         return 1;
@@ -797,7 +807,11 @@ fn list_item_blocks(
 
 // ── Table parsing ─────────────────────────────────────────────────────────────
 
-fn parse_table(c: &Value, specs: &mut Vec<TableSpec>, counters: &mut SectionCounters) -> Vec<Block> {
+fn parse_table(
+    c: &Value,
+    specs: &mut Vec<TableSpec>,
+    counters: &mut SectionCounters,
+) -> Vec<Block> {
     // Pandoc 3.x: c = [attr, caption, colspec, head, [bodies…], foot]
     let mut out = Vec::new();
 
@@ -853,7 +867,10 @@ fn parse_table(c: &Value, specs: &mut Vec<TableSpec>, counters: &mut SectionCoun
     }
 
     if !head_rows.is_empty() {
-        out.push(Block::Matrix { rows: head_rows, vertical_rules: vertical_rules.clone() });
+        out.push(Block::Matrix {
+            rows: head_rows,
+            vertical_rules: vertical_rules.clone(),
+        });
         out.push(Block::Rule);
     }
 
@@ -878,21 +895,30 @@ fn parse_table(c: &Value, specs: &mut Vec<TableSpec>, counters: &mut SectionCoun
 
     if !data_rows.is_empty() {
         if body_rule_offsets.is_empty() {
-            out.push(Block::Matrix { rows: data_rows, vertical_rules });
+            out.push(Block::Matrix {
+                rows: data_rows,
+                vertical_rules,
+            });
             out.push(Block::Rule);
         } else {
             let mut start = 0usize;
             for offset in &body_rule_offsets {
                 if *offset > start {
                     let chunk: Vec<_> = data_rows[start..*offset].to_vec();
-                    out.push(Block::Matrix { rows: chunk, vertical_rules: vertical_rules.clone() });
+                    out.push(Block::Matrix {
+                        rows: chunk,
+                        vertical_rules: vertical_rules.clone(),
+                    });
                     out.push(Block::Rule);
                 }
                 start = *offset;
             }
             if start < data_rows.len() {
                 let chunk: Vec<_> = data_rows[start..].to_vec();
-                out.push(Block::Matrix { rows: chunk, vertical_rules });
+                out.push(Block::Matrix {
+                    rows: chunk,
+                    vertical_rules,
+                });
                 out.push(Block::Rule);
             }
         }
@@ -919,7 +945,11 @@ fn take_matching_spec(specs: &mut Vec<TableSpec>, table_cols: usize) -> TableSpe
             return specs.remove(k);
         }
     }
-    TableSpec { col_count: table_cols, vertical_rules: Vec::new(), horizontal_rules: Vec::new() }
+    TableSpec {
+        col_count: table_cols,
+        vertical_rules: Vec::new(),
+        horizontal_rules: Vec::new(),
+    }
 }
 
 /// Count the leading rows of `rows` that look like header rows.  Stops at the
@@ -927,9 +957,7 @@ fn take_matching_spec(specs: &mut Vec<TableSpec>, table_cols: usize) -> TableSpe
 /// puts every row in the body (which happens for booktabs tables once cmidrule
 /// commands have been stripped).
 fn count_header_prefix(rows: &[Vec<(String, usize)>]) -> usize {
-    rows.iter()
-        .take_while(|r| !looks_like_data_row(r))
-        .count()
+    rows.iter().take_while(|r| !looks_like_data_row(r)).count()
 }
 
 /// A row is "data-like" if its leading non-empty cells fit the
@@ -937,10 +965,7 @@ fn count_header_prefix(rows: &[Vec<(String, usize)>]) -> usize {
 /// non-empty cell starts with a digit (e.g. "1", "23.75"), or the second
 /// non-empty cell does (e.g. "ByteNet", "23.75").
 fn looks_like_data_row(row: &[(String, usize)]) -> bool {
-    let mut non_empty = row
-        .iter()
-        .map(|(t, _)| t.trim())
-        .filter(|t| !t.is_empty());
+    let mut non_empty = row.iter().map(|(t, _)| t.trim()).filter(|t| !t.is_empty());
     let first = match non_empty.next() {
         Some(s) => s,
         None => return false, // empty row — neither header nor data
@@ -1028,9 +1053,7 @@ fn extract_cell_text(blocks: &Value) -> String {
         .map(|bs| {
             bs.iter()
                 .filter_map(|b| match b["t"].as_str()? {
-                    "Para" | "Plain" => {
-                        b["c"].as_array().map(|il| walk_inlines_text(il))
-                    }
+                    "Para" | "Plain" => b["c"].as_array().map(|il| walk_inlines_text(il)),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -1042,15 +1065,17 @@ fn extract_cell_text(blocks: &Value) -> String {
 fn extract_caption_text(cap: &Value) -> String {
     // Pandoc 3.x serialises Caption as [short_or_null, [blocks]].
     // Older serialisations use {"t":"Caption","c":[short,[blocks]]}.
-    let blocks = if cap.is_array() { &cap[1] } else { &cap["c"][1] };
+    let blocks = if cap.is_array() {
+        &cap[1]
+    } else {
+        &cap["c"][1]
+    };
     blocks
         .as_array()
         .map(|bs| {
             bs.iter()
                 .filter_map(|b| match b["t"].as_str()? {
-                    "Para" | "Plain" => {
-                        b["c"].as_array().map(|il| walk_inlines_text(il))
-                    }
+                    "Para" | "Plain" => b["c"].as_array().map(|il| walk_inlines_text(il)),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -1092,10 +1117,12 @@ fn walk_for_images_with_width(nodes: &[Value], out: &mut Vec<(String, bool)>) {
                 if !src.is_empty() {
                     let full = c[0][2]
                         .as_array()
-                        .map(|kvs| kvs.iter().any(|kv| {
-                            kv[0].as_str() == Some("width")
-                                && kv[1].as_str().is_some_and(is_full_width)
-                        }))
+                        .map(|kvs| {
+                            kvs.iter().any(|kv| {
+                                kv[0].as_str() == Some("width")
+                                    && kv[1].as_str().is_some_and(is_full_width)
+                            })
+                        })
                         .unwrap_or(false);
                     out.push((src.to_string(), full));
                     continue;
@@ -1172,7 +1199,11 @@ fn split_inlines_by_linebreak(inlines: &[Value]) -> Vec<Vec<String>> {
 fn walk_table_rows_for_images(table: &Value) -> Vec<Vec<String>> {
     let mut groups: Vec<Vec<String>> = Vec::new();
     let push_row = |row: &Value, out: &mut Vec<Vec<String>>| {
-        let cells = match row.as_array().and_then(|r| r.get(1)).and_then(Value::as_array) {
+        let cells = match row
+            .as_array()
+            .and_then(|r| r.get(1))
+            .and_then(Value::as_array)
+        {
             Some(c) => c,
             None => return,
         };
@@ -1266,18 +1297,36 @@ fn synthesize_bibliography() -> Vec<Block> {
 /// render as cohesive linked phrases instead of "(prose) (linked-number)".
 /// Case-insensitive match; trailing dot on abbreviations matched.
 const REF_PREFIX_WORDS: &[&str] = &[
-    "table", "tab.", "tab",
-    "figure", "fig.", "fig",
-    "section", "sec.", "sec",
-    "equation", "eq.", "eq",
-    "algorithm", "alg.", "alg",
-    "theorem", "thm.", "thm",
-    "lemma", "lem.",
-    "chapter", "chap.",
-    "appendix", "app.",
-    "definition", "def.",
-    "proposition", "prop.",
-    "corollary", "cor.",
+    "table",
+    "tab.",
+    "tab",
+    "figure",
+    "fig.",
+    "fig",
+    "section",
+    "sec.",
+    "sec",
+    "equation",
+    "eq.",
+    "eq",
+    "algorithm",
+    "alg.",
+    "alg",
+    "theorem",
+    "thm.",
+    "thm",
+    "lemma",
+    "lem.",
+    "chapter",
+    "chap.",
+    "appendix",
+    "app.",
+    "definition",
+    "def.",
+    "proposition",
+    "prop.",
+    "corollary",
+    "cor.",
 ];
 
 /// Walk backward through `out` from the tail.  If the most recent prose
@@ -1286,13 +1335,17 @@ const REF_PREFIX_WORDS: &[&str] = &[
 /// both that span and the whitespace span so a phrase like "Table 3"
 /// gets uniform link styling.
 fn extend_link_back_to_prefix(out: &mut [InlineSpan], target: &LinkTarget) {
-    if out.is_empty() { return; }
+    if out.is_empty() {
+        return;
+    }
     let mut idx = out.len();
     // Skip an optional trailing whitespace span.
     if idx > 0 && out[idx - 1].text.trim().is_empty() {
         idx -= 1;
     }
-    if idx == 0 { return; }
+    if idx == 0 {
+        return;
+    }
     let candidate = &out[idx - 1];
     let trimmed = candidate.text.trim().to_ascii_lowercase();
     if !REF_PREFIX_WORDS.contains(&trimmed.as_str()) {
@@ -1400,7 +1453,10 @@ fn walk_inlines_spans(inlines: &[Value]) -> Vec<InlineSpan> {
             "Code" => {
                 // c = [attr, text]
                 if let Some(text) = c[1].as_str() {
-                    out.push(InlineSpan { monospace: true, ..InlineSpan::plain(text) });
+                    out.push(InlineSpan {
+                        monospace: true,
+                        ..InlineSpan::plain(text)
+                    });
                 }
             }
 
@@ -1494,12 +1550,13 @@ fn walk_inlines_spans(inlines: &[Value]) -> Vec<InlineSpan> {
                     let primary = keys[0].clone();
                     let rendered = CITE_NUMBERS.with(|cn| {
                         let map = cn.borrow();
-                        let parts: Vec<String> = keys.iter().map(|k| {
-                            match map.get(k) {
+                        let parts: Vec<String> = keys
+                            .iter()
+                            .map(|k| match map.get(k) {
                                 Some(n) => n.to_string(),
                                 None => k.clone(),
-                            }
-                        }).collect();
+                            })
+                            .collect();
                         format!("[{}]", parts.join(", "))
                     });
                     out.push(InlineSpan::citation(rendered, primary));
@@ -1716,9 +1773,7 @@ fn strip_multirow(src: &str) -> String {
             let after = i + cmd.len();
             let bnd_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
             if bnd_ok {
-                if let Some((arg3_start, arg3_end, end)) =
-                    parse_three_brace_args(bytes, after)
-                {
+                if let Some((arg3_start, arg3_end, end)) = parse_three_brace_args(bytes, after) {
                     out.push_str(&src[copy_from..i]);
                     out.push_str(&src[arg3_start..arg3_end]);
                     i = end;
@@ -1949,7 +2004,10 @@ pub(crate) fn extract_tabular_specs(src: &str) -> Vec<TableSpec> {
                 }
                 let close = match match_brace(bytes, p) {
                     Some(c) => c,
-                    None => { i += utf8_char_width(bytes[i]); continue; }
+                    None => {
+                        i += utf8_char_width(bytes[i]);
+                        continue;
+                    }
                 };
                 p = skip_ascii_ws(bytes, close + 1);
             }
@@ -1959,15 +2017,23 @@ pub(crate) fn extract_tabular_specs(src: &str) -> Vec<TableSpec> {
             }
             let close = match match_brace(bytes, p) {
                 Some(c) => c,
-                None => { i += utf8_char_width(bytes[i]); continue; }
+                None => {
+                    i += utf8_char_width(bytes[i]);
+                    continue;
+                }
             };
             // p+1 is past `{` (ASCII), close is the position of `}` (ASCII)
             // — both are guaranteed char boundaries, so this slice is safe.
             let spec_str = &src[p + 1..close];
             if let Some((col_count, vertical_rules)) = parse_column_spec(spec_str) {
                 let content_start = close + 1;
-                let (horizontal_rules, content_end) = scan_table_horizontal_rules(bytes, content_start);
-                out.push(TableSpec { col_count, vertical_rules, horizontal_rules });
+                let (horizontal_rules, content_end) =
+                    scan_table_horizontal_rules(bytes, content_start);
+                out.push(TableSpec {
+                    col_count,
+                    vertical_rules,
+                    horizontal_rules,
+                });
                 i = content_end;
                 continue;
             }
@@ -2070,11 +2136,17 @@ fn scan_table_horizontal_rules(bytes: &[u8], start: usize) -> (Vec<usize>, usize
 /// to 1 for ill-formed leading bytes so the scanner makes progress instead of
 /// looping forever.
 fn utf8_char_width(b: u8) -> usize {
-    if b < 0x80 { 1 }
-    else if b < 0xC2 { 1 }
-    else if b < 0xE0 { 2 }
-    else if b < 0xF0 { 3 }
-    else { 4 }
+    if b < 0x80 {
+        1
+    } else if b < 0xC2 {
+        1
+    } else if b < 0xE0 {
+        2
+    } else if b < 0xF0 {
+        3
+    } else {
+        4
+    }
 }
 
 /// True iff `bytes[pos]` is preceded by an odd number of consecutive
@@ -2183,8 +2255,7 @@ mod para_to_block_tests {
             Block::Rule => "Rule",
             Block::Quote(_) => "Quote",
             Block::Anchor(_) => "Anchor",
-            Block::Image { .. } => "Image",
-            Block::ImageRow { .. } => "ImageRow",
+            Block::Figure { .. } => "Figure",
         }
     }
 
@@ -2197,7 +2268,9 @@ mod para_to_block_tests {
         let mut counters = SectionCounters::new();
         let blocks = para_to_block(&inlines, &mut counters);
         assert!(
-            blocks.iter().any(|b| matches!(b, Block::DisplayMath { .. })),
+            blocks
+                .iter()
+                .any(|b| matches!(b, Block::DisplayMath { .. })),
             "expected DisplayMath block, got kinds: {:?}",
             blocks.iter().map(block_kind).collect::<Vec<_>>()
         );
@@ -2228,15 +2301,11 @@ mod para_to_block_tests {
             .iter()
             .any(|b| matches!(b, Block::DisplayMath { .. }));
         let before_styled = blocks.iter().any(|b| match b {
-            Block::StyledLine(spans) => {
-                spans.iter().any(|s| s.text.contains("layers"))
-            }
+            Block::StyledLine(spans) => spans.iter().any(|s| s.text.contains("layers")),
             _ => false,
         });
         let after_styled = blocks.iter().any(|b| match b {
-            Block::StyledLine(spans) => {
-                spans.iter().any(|s| s.text.contains("discussing"))
-            }
+            Block::StyledLine(spans) => spans.iter().any(|s| s.text.contains("discussing")),
             _ => false,
         });
         let kinds: Vec<&str> = blocks.iter().map(block_kind).collect();
@@ -2349,22 +2418,22 @@ mod section_counter_tests {
     #[test]
     fn outer_bump_resets_inner() {
         let mut c = SectionCounters::new();
-        c.bump(1);            // 1
-        c.bump(2);            // 1.1
-        c.bump(3);            // 1.1.1
-        assert_eq!(c.bump(1), "2");        // resets sub & subsub
-        assert_eq!(c.bump(2), "2.1");      // sub starts fresh
-        assert_eq!(c.bump(3), "2.1.1");    // subsub starts fresh
+        c.bump(1); // 1
+        c.bump(2); // 1.1
+        c.bump(3); // 1.1.1
+        assert_eq!(c.bump(1), "2"); // resets sub & subsub
+        assert_eq!(c.bump(2), "2.1"); // sub starts fresh
+        assert_eq!(c.bump(3), "2.1.1"); // subsub starts fresh
     }
 
     #[test]
     fn subsection_bump_resets_subsubsection() {
         let mut c = SectionCounters::new();
-        c.bump(1);            // 1
-        c.bump(2);            // 1.1
-        c.bump(3);            // 1.1.1
-        c.bump(3);            // 1.1.2
-        assert_eq!(c.bump(2), "1.2");      // sub bump resets subsub
+        c.bump(1); // 1
+        c.bump(2); // 1.1
+        c.bump(3); // 1.1.1
+        c.bump(3); // 1.1.2
+        assert_eq!(c.bump(2), "1.2"); // sub bump resets subsub
         assert_eq!(c.bump(3), "1.2.1");
     }
 
@@ -2417,7 +2486,10 @@ mod spec_parser_tests {
     #[test]
     fn modifier_macro_skipped() {
         // >{\bfseries}c >{\itshape}c → 2 cols, no rules
-        assert_eq!(parse_column_spec(">{\\bfseries}c>{\\itshape}c"), Some((2, vec![])));
+        assert_eq!(
+            parse_column_spec(">{\\bfseries}c>{\\itshape}c"),
+            Some((2, vec![]))
+        );
     }
 
     /// Regression: extract_tabular_specs must not panic on sources containing

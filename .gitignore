@@ -8,3 +8,11 @@ todo.md
 v2.md
 claude.md
 CLAUDE.md
+ARCHITECTURE_PLAN.md
+crates/*/ARCHITECTURE_PLAN.md
+
+# Editor / OS detritus and perf-run artifacts.
+.DS_Store
+*.swp
+profile.json
+profile.json.gz
