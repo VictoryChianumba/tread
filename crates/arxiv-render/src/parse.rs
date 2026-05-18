@@ -125,7 +125,15 @@ const TABULAR_ENVS: &[&str] = &[
 /// numbered bibliography that replaces Pandoc's structureless rendering.
 pub fn extract_bibitems_ordered(sources: &[(String, String)]) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    for (_, content) in sources {
+    for (path, content) in sources {
+        if path.ends_with(".bib") {
+            for (key, body) in crate::bibtex::extract_bibtex_entries(content) {
+                if !out.iter().any(|(k, _)| k == &key) {
+                    out.push((key, body));
+                }
+            }
+            continue;
+        }
         let bytes = content.as_bytes();
         let mut i = 0;
         while i + 8 < bytes.len() {
@@ -182,7 +190,13 @@ pub fn extract_bibitems_ordered(sources: &[(String, String)]) -> Vec<(String, St
 /// reader's bib-entry popups.
 pub fn extract_bibitems(sources: &[(String, String)]) -> HashMap<String, String> {
     let mut out = HashMap::new();
-    for (_, content) in sources {
+    for (path, content) in sources {
+        if path.ends_with(".bib") {
+            for (key, body) in crate::bibtex::extract_bibtex_entries(content) {
+                out.insert(key, body);
+            }
+            continue;
+        }
         let bytes = content.as_bytes();
         let mut i = 0;
         while i + 8 < bytes.len() {

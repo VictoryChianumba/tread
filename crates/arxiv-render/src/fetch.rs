@@ -289,7 +289,7 @@ fn try_tar_gz(bytes: &[u8], asset_dir: &Path) -> Result<Vec<(String, String)>, S
       .to_string_lossy()
       .to_string();
 
-    if path.ends_with(".tex") || path.ends_with(".bbl") {
+    if path.ends_with(".tex") || path.ends_with(".bbl") || path.ends_with(".bib") {
       let mut content = String::new();
       entry
         .read_to_string(&mut content)
@@ -302,6 +302,11 @@ fn try_tar_gz(bytes: &[u8], asset_dir: &Path) -> Result<Vec<(String, String)>, S
       // identical to inline thebibliography, so feeding it through the
       // same vec lets `extract_bibitems` pick up entries from papers that
       // ship .bbl instead of inline bibitems (e.g. GPT-3 / 2005.14165).
+      //
+      // `.bib` is the raw BibTeX database that bibtex would compile to a
+      // .bbl.  Papers that ship the .bib but skip the compile step
+      // (2605.04035) had zero bibitems otherwise.  Routed through
+      // `bibtex::extract_bibtex_entries` inside `extract_bibitems`.
       files.push((path, content));
     } else if is_asset_path(&path) {
       // Write asset bytes to disk under asset_dir at the same relative
