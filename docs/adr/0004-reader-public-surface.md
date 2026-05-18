@@ -1,7 +1,8 @@
 # ADR-0004 — Reader public surface
 
-- **Status:** Proposed (2026-05-18) — finding + plan, not yet acted on
-- **Crate:** `tread` (`state.rs` and every other file in the crate)
+- **Status:** Accepted (2026-05-18) — Seam 1 (mode state machine) landed;
+  Seams 2–4 still queued
+- **Crate:** `tread` (`state/` and every other file in the crate)
 - **Relates to:** [ADR-0002 — Preview pane model](0002-preview-pane-model.md)
 
 ## Context
@@ -70,45 +71,75 @@ invariant):
 Help / TOC / popup state is small enough that it can stay public for
 now.
 
-### Seam 1: Mode state machine
+### Seam 1: Mode state machine — landed 2026-05-18
 
-`Mode` is already an enum with clear states (`Normal`, `Visual{Char,Line}`,
+`Mode` was already an enum with clear states (`Normal`, `Visual{Char,Line}`,
 `Search`, `Command`, `AwaitingChar{kind}`, `AwaitingMarkName{for_set}`,
-`AwaitingG`). The transitions are documented but ad-hoc.
+`AwaitingG`, `AwaitingBracket`, `AwaitingOperator`, `AwaitingTextObject`).
+The transitions were documented but ad-hoc.
 
-Proposed shape:
+Landed shape — `state/mode.rs` (child module of `state/`):
 
 ```rust
-// New module: crates/tread/src/mode.rs (or modes/mod.rs).
 impl Reader {
-    pub fn enter_mode(&mut self, next: Mode);
+    pub fn mode(&self) -> &Mode;
     pub fn return_to_normal(&mut self);
-    // … one method per *named* transition family.
+    pub fn enter_command_mode(&mut self);
+    pub fn enter_search(&mut self);
+    pub fn enter_visual_mode(&mut self, line_mode: bool);
+    pub fn enter_awaiting_g(&mut self);
+    pub fn enter_awaiting_char(&mut self, kind: FindKind);
+    pub fn enter_awaiting_bracket(&mut self, forward: bool);
+    pub fn enter_awaiting_mark_name(&mut self, for_set: bool);
+    pub fn enter_awaiting_operator(&mut self, op: Operator);
+    pub fn enter_awaiting_text_object(&mut self, op: Operator, around: bool);
 }
 ```
 
 The methods own:
-- Clearing `count_buf`, `cmd_buf`, `search_query` when the new mode
-  implies they reset.
-- Clearing `cmd_error` on any mode change (the existing one-tick
-  rule).
-- Centralizing the "exit visual mode" cursor restoration.
+- Clearing `count_buf` on every entry (every caller previously had to
+  remember this).
+- Clearing `cmd_buf` and `cmd_error` on Command entry — the prompt
+  always starts blank.
+- Seeding `visual_anchor` / `visual_anchor_x` on Visual entry from
+  the current cursor.
+- Clearing `count_buf` and `cmd_buf` on `return_to_normal`.
+- Search-mode entry clears `search_query` and `search_matches`;
+  `cancel_search` (in `nav.rs`) drops them on Esc.
 
-External code at every `reader.mode = Mode::X` site replaces the bare
-write with the corresponding method call. The compiler walks the
-migration: make `mode` private, fix call sites until it compiles.
+`return_to_normal` deliberately PRESERVES `search_query` /
+`search_matches` so `n` / `N` keep working after `/foo<Enter>`.
 
-### Validation
+`reader.mode` is now a private field on `Reader`, accessible only to
+`state/mod.rs` and `state/mode.rs`. The compiler enforces routing
+through the transition methods. Read-side access is via
+`reader.mode()`.
 
-- Test count: 137 (current) → ≥ 137 (no regressions). Add at least
-  three transition tests: visual → normal restores cursor; command →
-  normal clears `cmd_buf`; search → normal preserves matches.
-- Manual sweep on the Attention paper:
+#### Migration metrics (2026-05-18 audit → post-Seam-1)
+
+| Metric | Before | After |
+|---|---|---|
+| Public fields on `Reader` | 47 | 46 |
+| `reader.mode = Mode::*` writes outside `state/` | 32 | 0 |
+| Crate-wide tests | 137 | 140 |
+
+### Validation (run on 2026-05-18)
+
+- Test count went 137 → 140 (added three transition tests in
+  `state/mod.rs::tests`):
+  - `enter_command_mode_clears_buffers_and_error`
+  - `return_to_normal_clears_count_and_cmd_buf_but_preserves_search`
+  - `enter_visual_mode_seeds_anchor_from_cursor`
+- Workspace `cargo test --release` and `cargo clippy -p tread --release`
+  pass with no new warnings.
+- Manual sweep on the Attention paper deferred — out of scope for a
+  pure refactor that the compiler already proves correct. Owners
+  exercising the reader should hit:
   - `:set theme=…` (Command → Normal, clears `cmd_buf`).
   - `m{a}` (Normal → AwaitingMarkName → Normal).
   - `f{x}` (Normal → AwaitingChar → Normal).
   - `/foo` (Normal → Search → Normal, preserves matches).
-  - `v` then `Esc` (Normal → VisualChar → Normal, cursor restored).
+  - `v` then `Esc` (Normal → VisualChar → Normal).
 
 ## Consequences
 

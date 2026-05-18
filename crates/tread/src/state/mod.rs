@@ -9,6 +9,8 @@ use ratatui::layout::Rect;
 use crate::PaperData;
 use crate::highlights::HighlightSet;
 
+mod mode;
+
 pub const TOC_WIDTH: usize = 28;
 const PREVIEW_TEXT_PERCENT: usize = 60;
 
@@ -342,7 +344,9 @@ pub struct Reader {
     pub search_query: String,
     pub search_matches: Vec<usize>,
     pub search_idx: usize,
-    pub mode: Mode,
+    /// Active mode.  Private so every transition lands in `mode.rs`
+    /// (`enter_*` / `return_to_normal`).  Read via `Reader::mode()`.
+    mode: Mode,
     /// Back-navigation stack: (offset, cursor_y) entries pushed before jumps.
     pub nav_history: Vec<(usize, usize)>,
     /// Optional paper metadata shown in the header bar.
@@ -1419,7 +1423,7 @@ mod tests {
         let mut reader = Reader::new(doc_with_one_image(), 80, 24);
         let normal_height = reader.content_height();
 
-        reader.mode = Mode::Command;
+        reader.enter_command_mode();
 
         assert_eq!(reader.content_height(), normal_height - 1);
     }
@@ -1807,5 +1811,68 @@ mod tests {
             new_match_line, prior_match_line,
             "search_idx should re-anchor to the user's prior match line",
         );
+    }
+
+    // ── Mode-transition invariants (ADR-0004 Seam 1) ───────────────────
+    //
+    // These tests pin the per-method invariants documented in
+    // `state/mode.rs`.  They exist so future refactors that fold modes
+    // together or add new ones can't silently drop a buffer clear or
+    // forget to seed an anchor.
+
+    #[test]
+    fn enter_command_mode_clears_buffers_and_error() {
+        let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+        reader.count_buf.push_str("12");
+        reader.cmd_buf.push_str("stale");
+        reader.cmd_error = Some("prev".into());
+
+        reader.enter_command_mode();
+
+        assert_eq!(*reader.mode(), Mode::Command);
+        assert!(reader.count_buf.is_empty());
+        assert!(reader.cmd_buf.is_empty());
+        assert!(reader.cmd_error.is_none());
+    }
+
+    #[test]
+    fn return_to_normal_clears_count_and_cmd_buf_but_preserves_search() {
+        let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+        reader.enter_search();
+        reader.search_query.push_str("foo");
+        reader.search_matches.push(0);
+        reader.count_buf.push_str("3");
+        reader.cmd_buf.push_str("set");
+
+        reader.return_to_normal();
+
+        assert_eq!(*reader.mode(), Mode::Normal);
+        assert!(reader.count_buf.is_empty());
+        assert!(reader.cmd_buf.is_empty());
+        // Search state survives the round-trip so `n` / `N` keep working
+        // (vim convention; explicit `cancel_search` is the way to drop it).
+        assert_eq!(reader.search_query, "foo");
+        assert_eq!(reader.search_matches, vec![0]);
+    }
+
+    #[test]
+    fn enter_visual_mode_seeds_anchor_from_cursor() {
+        let mut reader = Reader::new(doc_with_one_image(), 80, 24);
+        // Move cursor down one line and forward a few columns.
+        reader.cursor_y = 0;
+        reader.cursor_x = 5;
+        let cur_line = reader.current_line();
+
+        reader.enter_visual_mode(false);
+        assert_eq!(*reader.mode(), Mode::Visual { line_mode: false });
+        assert_eq!(reader.visual_anchor, cur_line);
+        assert_eq!(reader.visual_anchor_x, 5);
+
+        // Line-mode forces horizontal anchor to 0 regardless of cursor_x.
+        reader.return_to_normal();
+        reader.cursor_x = 7;
+        reader.enter_visual_mode(true);
+        assert_eq!(*reader.mode(), Mode::Visual { line_mode: true });
+        assert_eq!(reader.visual_anchor_x, 0);
     }
 }

@@ -1,4 +1,4 @@
-use crate::state::{FindKind, Mode, Reader};
+use crate::state::{FindKind, Reader};
 
 // ── Char-class helpers (used by word motions) ─────────────────────────────────
 
@@ -138,14 +138,10 @@ impl Reader {
         self.jump_to_match(idx);
     }
 
-    pub fn enter_search(&mut self) {
-        self.mode = Mode::Search;
-        self.search_query.clear();
-        self.search_matches.clear();
-    }
-
     pub fn confirm_search(&mut self) {
-        self.mode = Mode::Normal;
+        // Enter on `/foo`: return to Normal but PRESERVE search_query /
+        // search_matches so `n` / `N` keep working (vim convention).
+        self.return_to_normal();
         if !self.search_matches.is_empty() {
             self.push_nav_mark();
             let idx = self.search_idx;
@@ -154,7 +150,10 @@ impl Reader {
     }
 
     pub fn cancel_search(&mut self) {
-        self.mode = Mode::Normal;
+        // Esc on `/foo`: return to Normal AND drop the in-progress
+        // query + matches so the next `n` doesn't jump to phantom
+        // results from a query the user explicitly cancelled.
+        self.return_to_normal();
         self.search_query.clear();
         self.search_matches.clear();
     }

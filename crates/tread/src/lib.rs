@@ -835,7 +835,12 @@ impl Reader {
           self.popup = None;
           return ReaderAction::Continue;
         }
-        match self.mode {
+        // Clone the active mode out of the borrow so we can call
+        // `handle_*(self, ...)` (which needs `&mut self`).  Mode is
+        // small (one enum tag plus a few primitives in the largest
+        // variant) so the clone is negligible.
+        let mode = self.mode().clone();
+        match mode {
           Mode::Normal => {
             if handle_normal(self, key.code, key.modifiers) {
               ReaderAction::Quit
@@ -1446,10 +1451,10 @@ mod acceptance_tests {
 
     reader.handle_event(char_key('/'));
     send_chars(&mut reader, "method");
-    assert!(matches!(reader.mode, Mode::Search));
+    assert!(matches!(reader.mode(), Mode::Search));
     assert!(!reader.search_matches.is_empty());
     reader.handle_event(key(KeyCode::Enter));
-    assert!(matches!(reader.mode, Mode::Normal));
+    assert!(matches!(reader.mode(), Mode::Normal));
     assert!(reader.visual_lines[reader.current_line()].text.contains("method"));
 
     reader.handle_event(char_key('\\'));
@@ -1460,7 +1465,7 @@ mod acceptance_tests {
     send_chars(&mut reader, "2");
     let action = reader.handle_event(key(KeyCode::Enter));
     assert!(matches!(action, ReaderAction::Continue));
-    assert!(matches!(reader.mode, Mode::Normal));
+    assert!(matches!(reader.mode(), Mode::Normal));
     assert_eq!(reader.current_line(), 1);
   }
 
@@ -1481,7 +1486,7 @@ mod acceptance_tests {
     reader.handle_event(char_key('V'));
     reader.handle_event(char_key('j'));
     reader.handle_event(char_key('H'));
-    assert!(matches!(reader.mode, Mode::Normal));
+    assert!(matches!(reader.mode(), Mode::Normal));
     assert!(
       !reader.highlights.highlights.is_empty(),
       "visual highlight should create persistent block-byte highlights"
@@ -1561,8 +1566,7 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
       }
     }
     KeyCode::Char('g') => {
-      reader.count_buf.clear();
-      reader.mode = Mode::AwaitingG;
+      reader.enter_awaiting_g();
     }
     KeyCode::Char('G') => {
       if reader.count_buf.is_empty() {
@@ -1702,24 +1706,16 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
     }
     // Find char on current line — enters AwaitingChar mode for the next keystroke.
     KeyCode::Char('f') => {
-      reader.count_buf.clear();
-      reader.mode = Mode::AwaitingChar { kind: FindKind::F };
+      reader.enter_awaiting_char(FindKind::F);
     }
     KeyCode::Char('F') => {
-      reader.count_buf.clear();
-      reader.mode = Mode::AwaitingChar {
-        kind: FindKind::ShiftF,
-      };
+      reader.enter_awaiting_char(FindKind::ShiftF);
     }
     KeyCode::Char('t') => {
-      reader.count_buf.clear();
-      reader.mode = Mode::AwaitingChar { kind: FindKind::T };
+      reader.enter_awaiting_char(FindKind::T);
     }
     KeyCode::Char('T') => {
-      reader.count_buf.clear();
-      reader.mode = Mode::AwaitingChar {
-        kind: FindKind::ShiftT,
-      };
+      reader.enter_awaiting_char(FindKind::ShiftT);
     }
     // Matching brace — `%` jumps between paired brackets on the current line.
     KeyCode::Char('%') => {
@@ -1786,10 +1782,7 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
       }
     }
     KeyCode::Char(':') => {
-      reader.count_buf.clear();
-      reader.cmd_buf.clear();
-      reader.cmd_error = None;
-      reader.mode = Mode::Command;
+      reader.enter_command_mode();
     }
     KeyCode::Char('/') => {
       reader.count_buf.clear();
@@ -1807,12 +1800,10 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
       // `]` is now a prefix (vim convention): `]]` jumps section,
       // `]f` steps the figure preview.  Section jump is one keystroke
       // longer than before but matches vim's section-motion idiom.
-      reader.count_buf.clear();
-      reader.mode = Mode::AwaitingBracket { forward: true };
+      reader.enter_awaiting_bracket(true);
     }
     KeyCode::Char('[') => {
-      reader.count_buf.clear();
-      reader.mode = Mode::AwaitingBracket { forward: false };
+      reader.enter_awaiting_bracket(false);
     }
     KeyCode::Char('i') => {
       // Figure-preview side pane.  Toggle is a single keystroke
@@ -1834,31 +1825,22 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
       reader.toggle_help();
     }
     KeyCode::Char('m') => {
-      reader.count_buf.clear();
-      reader.mode = Mode::AwaitingMarkName { for_set: true };
+      reader.enter_awaiting_mark_name(true);
     }
     KeyCode::Char('\'') | KeyCode::Char('`') => {
-      reader.count_buf.clear();
-      reader.mode = Mode::AwaitingMarkName { for_set: false };
+      reader.enter_awaiting_mark_name(false);
     }
     KeyCode::Char('y') => {
       // Vim operator-pending: bare `y` waits for a follow-up.  `yy`
       // yanks the current line, `yi<obj>` / `ya<obj>` yanks a text
       // object.  Any other key cancels and returns to Normal.
-      reader.count_buf.clear();
-      reader.mode = Mode::AwaitingOperator { op: Operator::Yank };
+      reader.enter_awaiting_operator(Operator::Yank);
     }
     KeyCode::Char('v') => {
-      reader.count_buf.clear();
-      reader.visual_anchor = reader.current_line();
-      reader.visual_anchor_x = reader.cursor_x;
-      reader.mode = Mode::Visual { line_mode: false };
+      reader.enter_visual_mode(false);
     }
     KeyCode::Char('V') => {
-      reader.count_buf.clear();
-      reader.visual_anchor = reader.current_line();
-      reader.visual_anchor_x = 0;
-      reader.mode = Mode::Visual { line_mode: true };
+      reader.enter_visual_mode(true);
     }
     _ => {
       reader.count_buf.clear();
@@ -1892,25 +1874,24 @@ fn handle_awaiting_char(reader: &mut Reader, code: KeyCode, kind: FindKind) {
       reader.remember_column();
     }
   }
-  reader.mode = Mode::Normal;
+  reader.return_to_normal();
 }
 
 fn handle_command(reader: &mut Reader, code: KeyCode) -> ReaderAction {
   match code {
     KeyCode::Esc => {
-      reader.cmd_buf.clear();
-      reader.mode = Mode::Normal;
+      reader.return_to_normal();
       ReaderAction::Continue
     }
     KeyCode::Enter => {
       let line = std::mem::take(&mut reader.cmd_buf);
-      reader.mode = Mode::Normal;
+      reader.return_to_normal();
       commands::execute(reader, &line)
     }
     KeyCode::Backspace => {
       if reader.cmd_buf.pop().is_none() {
         // Empty buffer: backspace exits command mode (matches search bar UX).
-        reader.mode = Mode::Normal;
+        reader.return_to_normal();
       }
       ReaderAction::Continue
     }
@@ -1933,16 +1914,16 @@ fn handle_awaiting_operator(reader: &mut Reader, code: KeyCode, op: Operator) {
         let text = vl.text.clone();
         osc52_yank(&text);
       }
-      reader.mode = Mode::Normal;
+      reader.return_to_normal();
     }
     KeyCode::Char('i') => {
-      reader.mode = Mode::AwaitingTextObject { op, around: false };
+      reader.enter_awaiting_text_object(op, false);
     }
     KeyCode::Char('a') => {
-      reader.mode = Mode::AwaitingTextObject { op, around: true };
+      reader.enter_awaiting_text_object(op, true);
     }
     _ => {
-      reader.mode = Mode::Normal;
+      reader.return_to_normal();
     }
   }
 }
@@ -1972,7 +1953,7 @@ fn handle_awaiting_text_object(reader: &mut Reader, code: KeyCode, op: Operator,
       Operator::Yank => osc52_yank(&text),
     }
   }
-  reader.mode = Mode::Normal;
+  reader.return_to_normal();
 }
 
 /// Resolve the `LinkTarget` (if any) under the cursor by scanning the
@@ -2094,7 +2075,7 @@ fn handle_awaiting_g(reader: &mut Reader, code: KeyCode) {
     }
     _ => {}
   }
-  reader.mode = Mode::Normal;
+  reader.return_to_normal();
 }
 
 fn handle_awaiting_bracket(reader: &mut Reader, code: KeyCode, forward: bool) {
@@ -2114,7 +2095,7 @@ fn handle_awaiting_bracket(reader: &mut Reader, code: KeyCode, forward: bool) {
     }
     _ => {}
   }
-  reader.mode = Mode::Normal;
+  reader.return_to_normal();
 }
 
 fn handle_awaiting_mark_name(reader: &mut Reader, code: KeyCode, for_set: bool) {
@@ -2128,13 +2109,13 @@ fn handle_awaiting_mark_name(reader: &mut Reader, code: KeyCode, for_set: bool) 
       }
     }
   }
-  reader.mode = Mode::Normal;
+  reader.return_to_normal();
 }
 
 fn handle_visual(reader: &mut Reader, code: KeyCode) {
   match code {
     KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('V') => {
-      reader.mode = Mode::Normal;
+      reader.return_to_normal();
     }
     KeyCode::Char('j') | KeyCode::Down => reader.nav_down(),
     KeyCode::Char('k') | KeyCode::Up => reader.nav_up(),
@@ -2143,11 +2124,11 @@ fn handle_visual(reader: &mut Reader, code: KeyCode) {
     KeyCode::Char('y') => {
       let text = yank_selection(reader);
       osc52_yank(&text);
-      reader.mode = Mode::Normal;
+      reader.return_to_normal();
     }
     KeyCode::Char('H') => {
       commit_selection_as_highlights(reader);
-      reader.mode = Mode::Normal;
+      reader.return_to_normal();
     }
     _ => {}
   }
@@ -2163,7 +2144,7 @@ fn commit_selection_as_highlights(reader: &mut Reader) {
   let cur = reader.current_line();
   let anchor = reader.visual_anchor;
   let (lo, hi) = (cur.min(anchor), cur.max(anchor));
-  let is_line_mode = matches!(reader.mode, Mode::Visual { line_mode: true });
+  let is_line_mode = matches!(reader.mode(), Mode::Visual { line_mode: true });
   let ax = reader.visual_anchor_x;
   let cx = reader.cursor_x;
 
@@ -2256,7 +2237,7 @@ fn yank_selection(reader: &Reader) -> String {
   let cur = reader.current_line();
   let anchor = reader.visual_anchor;
   let (lo, hi) = (cur.min(anchor), cur.max(anchor));
-  let is_line_mode = matches!(reader.mode, Mode::Visual { line_mode: true });
+  let is_line_mode = matches!(reader.mode(), Mode::Visual { line_mode: true });
 
   let lines: Vec<&str> = (lo..=hi)
     .filter_map(|i| reader.visual_lines.get(i))

@@ -39,10 +39,10 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
         let _s = crate::bench::Span::new("draw_status");
         draw_status(frame, reader, status_area, t);
     }
-    if reader.mode == Mode::Search {
+    if *reader.mode() == Mode::Search {
         draw_search_bar(frame, reader, search_area.unwrap(), t);
     }
-    if reader.mode == Mode::Command {
+    if *reader.mode() == Mode::Command {
         draw_command_bar(frame, reader, search_area.unwrap(), t);
     }
     if let Some(popup) = &reader.popup {
@@ -112,7 +112,7 @@ pub fn split_layout(
         (None, below_header)
     };
 
-    let (content_area, status_area, search_area) = match reader.mode {
+    let (content_area, status_area, search_area) = match reader.mode() {
         Mode::Normal
         | Mode::Visual { .. }
         | Mode::AwaitingChar { .. }
@@ -212,7 +212,7 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     let total = reader.total_lines();
     let q = reader.search_query.to_lowercase();
 
-    let visual_range: Option<(usize, usize)> = match &reader.mode {
+    let visual_range: Option<(usize, usize)> = match reader.mode() {
         Mode::Visual { .. } => {
             let cur = reader.current_line();
             let anchor = reader.visual_anchor;
@@ -1075,7 +1075,7 @@ fn draw_command_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
 }
 
 fn mode_label(reader: &Reader) -> &'static str {
-    match reader.mode {
+    match reader.mode() {
         Mode::Normal => "READ",
         Mode::Search => "SEARCH",
         Mode::Visual { line_mode: true } => "VISUAL LINE",
@@ -1091,7 +1091,7 @@ fn mode_label(reader: &Reader) -> &'static str {
 }
 
 fn pending_input_label(reader: &Reader) -> Option<String> {
-    match &reader.mode {
+    match reader.mode() {
         Mode::AwaitingChar { kind } => {
             let prefix = match kind {
                 crate::state::FindKind::F => "f",
