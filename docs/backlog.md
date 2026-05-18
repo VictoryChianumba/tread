@@ -22,18 +22,10 @@ Last revalidation: **2026-05-18**.
 | **B1** Mixed display math (Pandoc path) | Already fixed before this session — confirmed in May 2026 revalidation | — |
 | **B3** Inline `thebibliography` extraction | Partial — `\bibliography{file.bib}` external still open (B3a) | `a7141f0`, `d2bf341` |
 | **B3** Latin-1 source fetch | UTF-8 lossy conversion accepts ISO-8859 sources | `e5b042b` |
-
-## Open — architecture (ADR-0004 four-seam plan)
-
-| # | Seam | What it absorbs |
-|---|---|---|
-| Seam 1 | Mode state machine | ~30 `reader.mode = Mode::*` writes across `lib.rs`; clears `count_buf`/`cmd_buf`/`search_query`/`cmd_error` on transition |
-| Seam 2 | Cursor / scroll | bare writes to `offset`, `cursor_y`, `cursor_x` route through a `cursor::*` seam |
-| Seam 3 | Voice state | 8 fields collapse behind `voice::*` |
-| Seam 4 | Bookmarks | Move from `HashMap<char, usize>` to block-byte addressing (like highlights); reflow survival as side benefit |
-
-Pickup phrase: "continue ADR-0004" or "do Seam N". The ADR has the
-proposed shape, validation sweep, and risk notes.
+| **#1** Reader public surface — Seam 1 (mode state machine) | `state/mode.rs` owns every mode transition; `mode` field private | `5f6312c` |
+| **#1** Reader public surface — Seam 2 (cursor/scroll) | `state/cursor.rs` owns jumps/centering; `offset`/`cursor_y`/`cursor_x`/`desired_column` private | `984b86c` |
+| **#1** Reader public surface — Seam 3 (voice) | `voice_control.rs` moved into `state/`; 10 voice fields private | `db741fe` |
+| **#1** Reader public surface — Seam 4 (bookmarks) | `state/bookmarks.rs` owns marks; storage moved to block-byte addressing; reflow-survival regression test | `945eb3b` |
 
 ## Open — resilience (Tier 2 latent crashes)
 
@@ -92,9 +84,11 @@ notable ones:
 
 ## How to use this document
 
-- When picking up: scan **Open — architecture** for plan-shaped work,
-  **Open — resilience** for bug-fix work, **Open — parser** for
-  feature work.
+- When picking up: scan **Open — resilience** for bug-fix work,
+  **Open — parser** for feature work, **Open — trench integration**
+  for cross-repo work.  (Architecture refactor is closed: ADR-0004's
+  four-seam plan landed in commits `5f6312c` / `984b86c` / `db741fe`
+  / `945eb3b`.)
 - When closing items: move the row from the open table to the
   **Recently resolved** table with the commit ref. If an item is
   large enough to need a design doc, open a new ADR and link it from
