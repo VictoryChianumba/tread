@@ -86,10 +86,7 @@ pub fn load() -> ReaderConfig {
     let Some(p) = config_path() else {
         return ReaderConfig::default();
     };
-    let Ok(data) = std::fs::read_to_string(&p) else {
-        return ReaderConfig::default();
-    };
-    serde_json::from_str(&data).unwrap_or_default()
+    crate::persist::load_json(&p)
 }
 
 pub fn save(c: &ReaderConfig) {

@@ -7,6 +7,7 @@ mod html;
 mod images;
 mod markdown;
 mod pdf;
+mod persist;
 mod progress;
 mod render;
 mod state;

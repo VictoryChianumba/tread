@@ -12,15 +12,10 @@ fn progress_path() -> Option<PathBuf> {
 }
 
 pub fn load() -> HashMap<String, ReaderProgress> {
-    let path = match progress_path() {
-        Some(p) => p,
-        None => return HashMap::new(),
+    let Some(path) = progress_path() else {
+        return HashMap::new();
     };
-    let bytes = match fs::read(&path) {
-        Ok(b) => b,
-        Err(_) => return HashMap::new(),
-    };
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    crate::persist::load_json(&path)
 }
 
 pub fn save(progress: &HashMap<String, ReaderProgress>) {
