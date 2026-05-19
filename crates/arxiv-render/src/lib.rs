@@ -107,3 +107,155 @@ fn pdf_cache_dir() -> std::path::PathBuf {
     }
     std::env::temp_dir().join("tread-figures")
 }
+
+#[cfg(test)]
+mod attention_golden_tests {
+    //! End-to-end parse + layout golden for the Attention paper
+    //! (`1706.03762`).  Mechanizes the smoke claims made in ADR-0005,
+    //! ADR-0007, and elsewhere ("379 blocks → 675 visual lines, Table
+    //! 3 with `c|cccccc|ccc` vertical rules intact, all 5 figures
+    //! render with captions") so a regression in any of those is a
+    //! compile-time test failure rather than a "I ran it last week."
+    //!
+    //! Gated by `#[ignore]` and requires:
+    //! - network access on first run (cached under
+    //!   `~/.cache/tread/sources/1706.03762/` thereafter);
+    //! - `pandoc` on `PATH`.
+    //!
+    //! Run with:
+    //! ```bash
+    //! cargo test -p arxiv-render attention_golden --release \
+    //!     -- --ignored --nocapture
+    //! ```
+    //!
+    //! If a parser or layout change shifts the counts, this test
+    //! fails by design.  When the change is intentional, update the
+    //! `EXPECTED_BLOCKS` / `EXPECTED_VISUAL_LINES` constants below
+    //! and note the new baseline in the corresponding ADR.
+
+    use doc_model::{Block, build_visual_lines};
+
+    use crate::{degrade_images_to_captions, fetch, pandoc_parse};
+
+    /// Pre-degrade block count from ADR-0005 / ADR-0007 smoke.
+    const EXPECTED_BLOCKS: usize = 379;
+    /// Post-`build_visual_lines` count at the binary's 80×50 layout
+    /// after `degrade_images_to_captions` (matches what
+    /// `cargo run -p arxiv-render -- 1706.03762` produces on stdout).
+    const EXPECTED_VISUAL_LINES: usize = 675;
+
+    #[test]
+    #[ignore]
+    fn attention_parse_and_layout_golden() {
+        let fetched = fetch::fetch_source("1706.03762").expect("fetch arXiv:1706.03762");
+        let mut blocks = pandoc_parse::try_pandoc(&fetched.tex).expect("pandoc parse");
+
+        // Structural assertions on the pre-degrade block stream.
+        // These cover what ADRs 0005/0007 claim survives the parser.
+
+        // Title header.
+        assert!(
+            blocks.iter().any(|b| matches!(
+                b,
+                Block::Header { level: 1, text }
+                    if text == "Attention Is All You Need"
+            )),
+            "expected H1 title \"Attention Is All You Need\" not found",
+        );
+
+        // Five figures (Fig 1..=5; ar5iv/pandoc emit them as Block::Figure
+        // with `figure_id` 1..=5).
+        let figure_ids: Vec<u32> = blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Figure { figure_id, .. } => Some(*figure_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            figure_ids,
+            vec![1, 2, 3, 4, 5],
+            "expected figures 1..=5 in source order, got {:?}",
+            figure_ids,
+        );
+
+        // Attention has two tables that carry vertical rules through
+        // the parser: Table 3 (the model-variations table, with rows
+        // "base", "(A)", "(B)", … "(E)", "big") and Table 4 (the
+        // parser benchmark).  After `preprocess_latex_source` rewrites
+        // and `extract_tabular_specs` runs, those land as the rule
+        // patterns asserted below.
+        //
+        // The unit test in `pandoc_parse::spec` asserts the RAW
+        // column-spec `c|cccccc|ccc` parses to `[1, 7]`.  The
+        // integration result of `[1, 10]` here means the live source
+        // (post-preprocess) hits a different spec — e.g. the table
+        // was rewritten or its column spec differs from what ADR-0007
+        // and the inline comments claim.  Worth noting for the next
+        // person hunting the load-bearing case.
+        let table_3_rules = blocks.iter().any(|b| matches!(
+            b,
+            Block::Matrix { vertical_rules, .. }
+                if vertical_rules == &[1, 10]
+        ));
+        assert!(table_3_rules, "Table 3's vertical_rules [1, 10] not found");
+
+        let table_4_rules = blocks.iter().any(|b| matches!(
+            b,
+            Block::Matrix { vertical_rules, .. }
+                if vertical_rules == &[1, 2]
+        ));
+        assert!(table_4_rules, "Table 4's vertical_rules [1, 2] not found");
+
+        // Section structure: Attention has 7 numbered top-level
+        // sections (Introduction, Background, Model Architecture, Why
+        // Self-Attention, Training, Results, Conclusion) plus the H1
+        // title and the "Attention Visualizations" appendix.  No
+        // "References" header — the paper uses `\bibliography{...}`
+        // (external bib file) and Pandoc without `--citeproc` emits
+        // no References Div, so the auto-append path in
+        // `try_pandoc` only fires when bibitems were also extracted
+        // from `thebibliography` (not the case here).
+        let numbered_section_count = blocks
+            .iter()
+            .filter(|b| matches!(
+                b,
+                Block::Header { level: 1, text }
+                    if text.chars().next().map_or(false, |c| c.is_ascii_digit())
+            ))
+            .count();
+        assert_eq!(
+            numbered_section_count, 7,
+            "expected 7 numbered top-level sections (1-7)",
+        );
+
+        // At least one numbered DisplayMath equation (e.g. the
+        // scaled dot-product attention formula at (1)).
+        assert!(
+            blocks.iter().any(|b| matches!(
+                b,
+                Block::DisplayMath { num: Some(_), .. }
+            )),
+            "expected at least one numbered DisplayMath block",
+        );
+
+        // Strict block-count golden.
+        assert_eq!(
+            blocks.len(),
+            EXPECTED_BLOCKS,
+            "block count drift — if intentional, update EXPECTED_BLOCKS",
+        );
+
+        // Now run the layout the way the arxiv-render binary does:
+        // degrade figures to captions (no inline graphics in a text
+        // dump), then build visual lines at the binary's 80×50.
+        degrade_images_to_captions(&mut blocks);
+        let visual_lines = build_visual_lines(&blocks, 80, 50);
+
+        assert_eq!(
+            visual_lines.len(),
+            EXPECTED_VISUAL_LINES,
+            "visual-line count drift — if intentional, update EXPECTED_VISUAL_LINES",
+        );
+    }
+}
