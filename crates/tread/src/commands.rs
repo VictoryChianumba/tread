@@ -16,7 +16,7 @@
 use ui_theme::{Theme, ThemeId};
 
 use crate::config;
-use crate::state::{PopupContent, Reader};
+use crate::state::Reader;
 
 /// Outcome of executing a command line, returned all the way up to the
 /// host event loop.  Renamed from `CommandResult` when tread became

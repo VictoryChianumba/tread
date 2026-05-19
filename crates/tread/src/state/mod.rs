@@ -234,17 +234,21 @@ pub struct Reader {
     pub highlights: HighlightSet,
     /// Resolution map for `\ref{X}` jumps: label → first visual-line index
     /// of the labeled element.  Built from `Block::Anchor` markers in
-    /// `Reader::new`.  For ref-targets we want the line *before* the
-    /// labeled element when possible (so the equation/figure/table is
-    /// fully visible after the jump); see `follow_link_target`.
-    pub label_lines: HashMap<String, usize>,
+    /// `Reader::new` and mirrored from `LayoutCache.label_lines` on each
+    /// rebuild.  For ref-targets we want the line *before* the labeled
+    /// element when possible (so the equation/figure/table is fully
+    /// visible after the jump); see `follow_link_target`.  Private;
+    /// read via `Reader::label_lines()`.
+    label_lines: HashMap<String, usize>,
     /// Bibliography entry text by cite-key.  Pandoc bib divs use
     /// `id="ref-<key>"`; we capture the rendered entry text for popup
-    /// display by `:K` / `Shift+Enter` on a citation.
-    pub bib_entries: HashMap<String, String>,
+    /// display by `:K` / `Shift+Enter` on a citation.  Private; read
+    /// via `Reader::bib_entries()`.
+    bib_entries: HashMap<String, String>,
     /// Bibliography entry first-VL index by cite-key.  `Enter` on a
-    /// citation jumps here (line *before* the entry).
-    pub bib_entry_lines: HashMap<String, usize>,
+    /// citation jumps here (line *before* the entry).  Private; read
+    /// via `Reader::bib_entry_lines()`.
+    bib_entry_lines: HashMap<String, usize>,
     source_bibitems: HashMap<String, String>,
     /// Effective byte column of the cursor on the current line.  Always
     /// represents the rendered position — horizontal motions write here.
@@ -280,8 +284,8 @@ pub struct Reader {
     /// post-draw to load PNG bytes for terminals that speak the Kitty
     /// graphics protocol.  Paths that fail to resolve are silently
     /// skipped — the caption row always renders, so degradation is
-    /// graceful.
-    pub image_paths: HashMap<u32, std::path::PathBuf>,
+    /// graceful.  Private; read via `Reader::image_paths()`.
+    image_paths: HashMap<u32, std::path::PathBuf>,
     figure_index: FigureIndex,
     preview_state: FigurePreviewState,
     /// When true, image rows are dropped from `visual_lines` so text
@@ -584,6 +588,31 @@ impl Reader {
     /// loop on every keystroke when a popup is open.
     pub fn close_popup(&mut self) {
         self.popup = None;
+    }
+
+    /// Resolution map for `\ref{X}` jumps.  Rebuilt with the layout
+    /// cache; writes only happen via `LayoutCache::rebuild_layout`.
+    pub fn label_lines(&self) -> &HashMap<String, usize> {
+        &self.label_lines
+    }
+
+    /// Bibliography entry text by cite-key.  Rebuilt with the layout
+    /// cache plus external bibitems extracted at fetch time.
+    pub fn bib_entries(&self) -> &HashMap<String, String> {
+        &self.bib_entries
+    }
+
+    /// Bibliography entry first-VL index by cite-key.  Rebuilt with
+    /// the layout cache.
+    pub fn bib_entry_lines(&self) -> &HashMap<String, usize> {
+        &self.bib_entry_lines
+    }
+
+    /// Resolved on-disk path for every `Block::Image` in the document,
+    /// keyed by its `kitty_id`.  Built once at construction; never
+    /// mutated thereafter.
+    pub fn image_paths(&self) -> &HashMap<u32, std::path::PathBuf> {
+        &self.image_paths
     }
 
     /// Append a typed character to the `:`-command line.  Called from

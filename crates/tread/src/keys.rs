@@ -485,8 +485,8 @@ fn follow_link_at_cursor(reader: &mut Reader) {
     return;
   };
   let line = match &target {
-    doc_model::LinkTarget::Internal(label) => reader.label_lines.get(label).copied(),
-    doc_model::LinkTarget::Citation(key) => reader.bib_entry_lines.get(key).copied(),
+    doc_model::LinkTarget::Internal(label) => reader.label_lines().get(label).copied(),
+    doc_model::LinkTarget::Citation(key) => reader.bib_entry_lines().get(key).copied(),
   };
   let Some(line) = line else { return };
   // Land one line before the labeled element so it's fully visible
@@ -508,7 +508,7 @@ fn popup_citation_at_cursor(reader: &mut Reader) {
     _ => return,
   };
   let entry = reader
-    .bib_entries
+    .bib_entries()
     .get(&key)
     .cloned()
     .unwrap_or_else(|| "(no entry available)".to_string());

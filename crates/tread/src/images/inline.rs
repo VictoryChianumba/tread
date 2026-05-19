@@ -153,7 +153,7 @@ pub fn place_visible(reader: &Reader, state: &mut ImageState, content_area: Rect
             placements,
         );
         for &(id, _, _, _, _) in &placements {
-            let path = reader.image_paths.get(&id);
+            let path = reader.image_paths().get(&id);
             let load_status = match state.bytes.get(&id) {
                 Some(Some(b)) => format!("loaded ({} bytes)", b.len()),
                 Some(None) => "LOAD FAILED (cached negative)".to_string(),
@@ -206,7 +206,7 @@ pub fn place_visible(reader: &Reader, state: &mut ImageState, content_area: Rect
     let has_cache = kitty_graphics::has_persistent_image_cache();
     for &(id, abs_row, rows, abs_col, cols) in &placements {
         if !state.bytes.contains_key(&id) {
-            if let Some(path) = reader.image_paths.get(&id).cloned() {
+            if let Some(path) = reader.image_paths().get(&id).cloned() {
                 schedule_image_job(
                     state,
                     ImageJob::resolve_png(id, path),
