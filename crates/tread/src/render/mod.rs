@@ -1,3 +1,4 @@
+mod chrome;
 mod preview;
 mod toc;
 
@@ -19,7 +20,7 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
 
     if let Some(ha) = header_area {
         let _s = crate::bench::Span::new("draw_header");
-        draw_header(frame, reader, ha, t);
+        chrome::draw_header(frame, reader, ha, t);
     }
     if let Some(ta) = toc_area {
         let _s = crate::bench::Span::new("draw_toc");
@@ -40,7 +41,7 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
     }
     {
         let _s = crate::bench::Span::new("draw_status");
-        draw_status(frame, reader, status_area, t);
+        chrome::draw_status(frame, reader, status_area, t);
     }
     if *reader.mode() == Mode::Search {
         draw_search_bar(frame, reader, search_area.unwrap(), t);
@@ -152,38 +153,6 @@ pub fn split_layout(
         search_area,
     )
 }
-
-fn draw_header(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
-    let Some(meta) = &reader.meta else { return };
-    let w = area.width as usize;
-    let title = format!(" {}", meta.title);
-    let authors = if meta.authors.is_empty() {
-        String::new()
-    } else {
-        format!("  {}", meta.authors)
-    };
-    let title_width = title.chars().count();
-    let authors_width = authors.chars().count();
-    let mut spans = Vec::new();
-    if authors.is_empty() || title_width + authors_width >= w {
-        spans.push(Span::styled(
-            toc_trunc(&title, w),
-            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-        ));
-    } else {
-        spans.push(Span::styled(
-            title,
-            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(
-            " ".repeat(w.saturating_sub(title_width + authors_width)),
-        ));
-        spans.push(Span::styled(authors, Style::default().fg(t.text_dim)));
-    }
-    let header = Paragraph::new(Line::from(spans)).style(Style::default().bg(t.bg_panel));
-    frame.render_widget(header, area);
-}
-
 
 fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     let ch = area.height as usize;
@@ -966,73 +935,6 @@ pub(super) fn toc_trunc(s: &str, max: usize) -> String {
     }
 }
 
-fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
-    let cur = reader.current_line() + 1;
-    let tot = reader.total_lines();
-    let pct = if tot == 0 { 0 } else { cur * 100 / tot };
-    // Errors from the most recent `:` command override the rest of the status
-    // line so they're hard to miss.  Cleared on the next keystroke.
-    if let Some(err) = &reader.cmd_error {
-        let status =
-            Paragraph::new(format!(" {err}")).style(Style::default().bg(t.bg_input).fg(t.error));
-        frame.render_widget(status, area);
-        return;
-    }
-
-    let mode = mode_label(reader);
-    let mut details: Vec<String> = Vec::new();
-    if !reader.search_matches.is_empty() {
-        details.push(format!(
-            "match {}/{}",
-            reader.search_idx + 1,
-            reader.search_matches.len()
-        ));
-    }
-    if let Some((idx, total)) = reader
-        .current_figure_position()
-        .filter(|_| reader.figure_preview_visible())
-    {
-        details.push(format!("fig {idx}/{total}"));
-    }
-    if let Some(pending) = pending_input_label(reader) {
-        details.push(pending);
-    }
-    if !reader.count_buf.is_empty() {
-        details.push(format!("count {}_", reader.count_buf));
-    }
-    if let Some(voice) = crate::state::voice_control::voice_status_label(reader) {
-        details.push(voice);
-    }
-
-    let mode_text = format!(" {mode} ");
-    let right = format!("{cur}/{tot}  {pct}% ");
-    let detail_text = if details.is_empty() {
-        String::new()
-    } else {
-        format!(" {}", details.join("  "))
-    };
-    let available = area.width as usize;
-    let used = mode_text.chars().count() + right.chars().count();
-    let detail = toc_trunc(&detail_text, available.saturating_sub(used));
-    let spacer_width = available
-        .saturating_sub(mode_text.chars().count() + detail.chars().count() + right.chars().count());
-
-    let line = Line::from(vec![
-        Span::styled(
-            mode_text,
-            Style::default()
-                .bg(t.accent)
-                .fg(t.text_on_accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(detail, Style::default().fg(t.text_dim)),
-        Span::raw(" ".repeat(spacer_width)),
-        Span::styled(right, Style::default().fg(t.text_dim)),
-    ]);
-    let status = Paragraph::new(line).style(Style::default().bg(t.bg_input));
-    frame.render_widget(status, area);
-}
-
 fn draw_search_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     let suffix = if reader.search_matches.is_empty() {
         String::new()
@@ -1054,62 +956,6 @@ fn draw_command_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     );
     let bar = Paragraph::new(line).style(Style::default().bg(t.bg_input));
     frame.render_widget(bar, area);
-}
-
-fn mode_label(reader: &Reader) -> &'static str {
-    match reader.mode() {
-        Mode::Normal => "READ",
-        Mode::Search => "SEARCH",
-        Mode::Visual { line_mode: true } => "VISUAL LINE",
-        Mode::Visual { line_mode: false } => "VISUAL",
-        Mode::AwaitingChar { .. }
-        | Mode::AwaitingMarkName { .. }
-        | Mode::AwaitingG
-        | Mode::AwaitingBracket { .. }
-        | Mode::AwaitingOperator { .. }
-        | Mode::AwaitingTextObject { .. } => "PENDING",
-        Mode::Command => "COMMAND",
-    }
-}
-
-fn pending_input_label(reader: &Reader) -> Option<String> {
-    match reader.mode() {
-        Mode::AwaitingChar { kind } => {
-            let prefix = match kind {
-                crate::state::FindKind::F => "f",
-                crate::state::FindKind::ShiftF => "F",
-                crate::state::FindKind::T => "t",
-                crate::state::FindKind::ShiftT => "T",
-            };
-            Some(format!("{prefix}_"))
-        }
-        Mode::AwaitingMarkName { for_set } => {
-            if *for_set {
-                Some("m_".to_string())
-            } else {
-                Some("'_".to_string())
-            }
-        }
-        Mode::AwaitingG => Some("g_".to_string()),
-        Mode::AwaitingBracket { forward } => {
-            if *forward {
-                Some("]_".to_string())
-            } else {
-                Some("[_".to_string())
-            }
-        }
-        Mode::AwaitingOperator { op } => match op {
-            crate::state::Operator::Yank => Some("y_".to_string()),
-        },
-        Mode::AwaitingTextObject { op, around } => {
-            let prefix = match op {
-                crate::state::Operator::Yank => "y",
-            };
-            let mid = if *around { "a" } else { "i" };
-            Some(format!("{prefix}{mid}_"))
-        }
-        _ => None,
-    }
 }
 
 fn prompt_line<'a>(
