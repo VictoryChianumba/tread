@@ -109,49 +109,91 @@ fn pdf_cache_dir() -> std::path::PathBuf {
 }
 
 #[cfg(test)]
-mod attention_golden_tests {
-    //! End-to-end parse + layout golden for the Attention paper
-    //! (`1706.03762`).  Mechanizes the smoke claims made in ADR-0005,
-    //! ADR-0007, and elsewhere ("379 blocks → 675 visual lines, Table
-    //! 3 with `c|cccccc|ccc` vertical rules intact, all 5 figures
-    //! render with captions") so a regression in any of those is a
-    //! compile-time test failure rather than a "I ran it last week."
+mod golden_tests {
+    //! End-to-end parse + layout goldens for benchmark papers from
+    //! `test-papers.txt`.  Mechanizes the smoke claims made in
+    //! ADR-0005, ADR-0007, and elsewhere ("N blocks → M visual lines,
+    //! Table 3 vertical rules intact, …") so a regression in any of
+    //! those is a `cargo test` failure rather than "I ran it once."
     //!
-    //! Gated by `#[ignore]` and requires:
+    //! Each test is `#[ignore]`-gated and requires:
     //! - network access on first run (cached under
-    //!   `~/.cache/tread/sources/1706.03762/` thereafter);
-    //! - `pandoc` on `PATH`.
+    //!   `~/.cache/tread/sources/<id>/` thereafter);
+    //! - `pandoc` on `PATH` (this exercises the Pandoc fallback
+    //!   path; the production code path tries ar5iv first via
+    //!   `tread::paper::open_arxiv`).
     //!
-    //! Run with:
+    //! Run a single golden:
     //! ```bash
-    //! cargo test -p arxiv-render attention_golden --release \
-    //!     -- --ignored --nocapture
+    //! cargo test -p arxiv-render attention_parse_and_layout_golden \
+    //!   --release -- --ignored --nocapture
     //! ```
     //!
-    //! If a parser or layout change shifts the counts, this test
-    //! fails by design.  When the change is intentional, update the
-    //! `EXPECTED_BLOCKS` / `EXPECTED_VISUAL_LINES` constants below
-    //! and note the new baseline in the corresponding ADR.
+    //! Run every golden:
+    //! ```bash
+    //! cargo test -p arxiv-render golden --release \
+    //!   -- --ignored --nocapture
+    //! ```
+    //!
+    //! When a parser or layout change shifts a count intentionally,
+    //! update the EXPECTED_* constants in the corresponding test and
+    //! note the new baseline in the ADR that justifies the change.
 
     use doc_model::{Block, build_visual_lines};
 
     use crate::{degrade_images_to_captions, fetch, pandoc_parse};
 
-    /// Pre-degrade block count from ADR-0005 / ADR-0007 smoke.
-    const EXPECTED_BLOCKS: usize = 379;
-    /// Post-`build_visual_lines` count at the binary's 80×50 layout
-    /// after `degrade_images_to_captions` (matches what
-    /// `cargo run -p arxiv-render -- 1706.03762` produces on stdout).
-    const EXPECTED_VISUAL_LINES: usize = 675;
+    /// Shared pipeline: fetch the e-print tarball, run Pandoc, assert
+    /// the pre-degrade block count, return the blocks for paper-
+    /// specific structural assertions.  Caller follows up with
+    /// `assert_visual_line_count` once it has finished its asserts.
+    fn parse_and_check_block_count(arxiv_id: &str, expected_blocks: usize) -> Vec<Block> {
+        let fetched = fetch::fetch_source(arxiv_id)
+            .unwrap_or_else(|e| panic!("fetch arXiv:{arxiv_id}: {e}"));
+        let blocks = pandoc_parse::try_pandoc(&fetched.tex)
+            .unwrap_or_else(|e| panic!("pandoc parse arXiv:{arxiv_id}: {e}"));
+        assert_eq!(
+            blocks.len(),
+            expected_blocks,
+            "[{arxiv_id}] block count drift — if intentional, update the EXPECTED_BLOCKS constant",
+        );
+        blocks
+    }
+
+    /// Run the post-degrade layout the way the arxiv-render binary
+    /// does (figures → captions, 80×50 area) and assert the visual-
+    /// line count.
+    fn assert_visual_line_count(
+        arxiv_id: &str,
+        mut blocks: Vec<Block>,
+        expected_visual_lines: usize,
+    ) {
+        degrade_images_to_captions(&mut blocks);
+        let visual_lines = build_visual_lines(&blocks, 80, 50);
+        assert_eq!(
+            visual_lines.len(),
+            expected_visual_lines,
+            "[{arxiv_id}] visual-line count drift — if intentional, update the EXPECTED_VISUAL_LINES constant",
+        );
+    }
+
+    // ── Attention Is All You Need (1706.03762) ─────────────────────
+    // ML paper; stresses equations, tables with vertical rules,
+    // figures, multi-section structure, external bibliography
+    // (\bibliography{NIPS2017}).
 
     #[test]
     #[ignore]
     fn attention_parse_and_layout_golden() {
-        let fetched = fetch::fetch_source("1706.03762").expect("fetch arXiv:1706.03762");
-        let mut blocks = pandoc_parse::try_pandoc(&fetched.tex).expect("pandoc parse");
+        const ID: &str = "1706.03762";
+        /// Pre-degrade block count from ADR-0005 / ADR-0007 smoke.
+        const EXPECTED_BLOCKS: usize = 379;
+        /// Post-`build_visual_lines` count at the binary's 80×50 layout
+        /// after `degrade_images_to_captions` (matches what
+        /// `cargo run -p arxiv-render -- 1706.03762` produces on stdout).
+        const EXPECTED_VISUAL_LINES: usize = 675;
 
-        // Structural assertions on the pre-degrade block stream.
-        // These cover what ADRs 0005/0007 claim survives the parser.
+        let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 
         // Title header.
         assert!(
@@ -160,7 +202,7 @@ mod attention_golden_tests {
                 Block::Header { level: 1, text }
                     if text == "Attention Is All You Need"
             )),
-            "expected H1 title \"Attention Is All You Need\" not found",
+            "[{ID}] expected H1 title \"Attention Is All You Need\" not found",
         );
 
         // Five figures (Fig 1..=5; ar5iv/pandoc emit them as Block::Figure
@@ -175,8 +217,7 @@ mod attention_golden_tests {
         assert_eq!(
             figure_ids,
             vec![1, 2, 3, 4, 5],
-            "expected figures 1..=5 in source order, got {:?}",
-            figure_ids,
+            "[{ID}] expected figures 1..=5 in source order, got {figure_ids:?}",
         );
 
         // Attention has two tables that carry vertical rules through
@@ -188,25 +229,19 @@ mod attention_golden_tests {
         // of arXiv:1706.03762 — NINE inner c's plus 1+3 outer cols =
         // 13 total) → vertical_rules == [1, 10].  Pinned at the unit
         // level by `pandoc_parse::spec::tests::attention_table_3_spec`.
-        // The neighbouring `two_rules` unit test asserts the synthetic
-        // `c|cccccc|ccc` pattern (6 inner c's, 10 cols total → [1, 7])
-        // — a smaller minimal case, not Table 3.  An earlier draft of
-        // ADR-0007 and several inline comments confused the two; the
-        // ADR-0007 follow-up was closed once the real spec was traced
-        // back to the source.
         let table_3_rules = blocks.iter().any(|b| matches!(
             b,
             Block::Matrix { vertical_rules, .. }
                 if vertical_rules == &[1, 10]
         ));
-        assert!(table_3_rules, "Table 3's vertical_rules [1, 10] not found");
+        assert!(table_3_rules, "[{ID}] Table 3's vertical_rules [1, 10] not found");
 
         let table_4_rules = blocks.iter().any(|b| matches!(
             b,
             Block::Matrix { vertical_rules, .. }
                 if vertical_rules == &[1, 2]
         ));
-        assert!(table_4_rules, "Table 4's vertical_rules [1, 2] not found");
+        assert!(table_4_rules, "[{ID}] Table 4's vertical_rules [1, 2] not found");
 
         // Section structure: Attention has 7 numbered top-level
         // sections (Introduction, Background, Model Architecture, Why
@@ -222,12 +257,12 @@ mod attention_golden_tests {
             .filter(|b| matches!(
                 b,
                 Block::Header { level: 1, text }
-                    if text.chars().next().map_or(false, |c| c.is_ascii_digit())
+                    if text.chars().next().is_some_and(|c| c.is_ascii_digit())
             ))
             .count();
         assert_eq!(
             numbered_section_count, 7,
-            "expected 7 numbered top-level sections (1-7)",
+            "[{ID}] expected 7 numbered top-level sections (1-7)",
         );
 
         // At least one numbered DisplayMath equation (e.g. the
@@ -237,26 +272,125 @@ mod attention_golden_tests {
                 b,
                 Block::DisplayMath { num: Some(_), .. }
             )),
-            "expected at least one numbered DisplayMath block",
+            "[{ID}] expected at least one numbered DisplayMath block",
         );
 
-        // Strict block-count golden.
-        assert_eq!(
-            blocks.len(),
-            EXPECTED_BLOCKS,
-            "block count drift — if intentional, update EXPECTED_BLOCKS",
-        );
-
-        // Now run the layout the way the arxiv-render binary does:
-        // degrade figures to captions (no inline graphics in a text
-        // dump), then build visual lines at the binary's 80×50.
-        degrade_images_to_captions(&mut blocks);
-        let visual_lines = build_visual_lines(&blocks, 80, 50);
-
-        assert_eq!(
-            visual_lines.len(),
-            EXPECTED_VISUAL_LINES,
-            "visual-line count drift — if intentional, update EXPECTED_VISUAL_LINES",
-        );
+        assert_visual_line_count(ID, blocks, EXPECTED_VISUAL_LINES);
     }
+
+    // ── GPT-3 (2005.14165) ─────────────────────────────────────────
+    // 50+ source files via \input{}; stress for cross-file
+    // resolution.  Different shape from Attention: more sections,
+    // more prose, fewer tables with vertical rules.
+
+    #[test]
+    #[ignore]
+    fn gpt3_parse_and_layout_golden() {
+        const ID: &str = "2005.14165";
+        const EXPECTED_BLOCKS: usize = 1422;
+        const EXPECTED_VISUAL_LINES: usize = 3138;
+
+        let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
+
+        // GPT-3's title is split across two lines in the source
+        // ("Language Models are Few-Shot Learners").  Pandoc renders
+        // it as a single H1.
+        assert!(
+            blocks.iter().any(|b| matches!(
+                b,
+                Block::Header { level: 1, text }
+                    if text.contains("Language Models")
+                       && text.contains("Few-Shot Learners")
+            )),
+            "[{ID}] expected H1 title containing 'Language Models … Few-Shot Learners'",
+        );
+
+        // At least one figure (figure 1.1 is the canonical few-shot
+        // accuracy plot).
+        assert!(
+            blocks.iter().any(|b| matches!(b, Block::Figure { .. })),
+            "[{ID}] expected at least one Block::Figure",
+        );
+
+        // Multiple numbered DisplayMath entries — the paper has
+        // explicit numbered equations in §2.
+        let numbered_math_count = blocks
+            .iter()
+            .filter(|b| matches!(b, Block::DisplayMath { num: Some(_), .. }))
+            .count();
+        assert!(
+            numbered_math_count >= 1,
+            "[{ID}] expected ≥1 numbered DisplayMath block, got {numbered_math_count}",
+        );
+
+        // Heavy multi-section structure — at least 6 numbered top
+        // level sections (Intro, Approach, Results, Measuring &
+        // Preventing, Related Work, Discussion).
+        let numbered_sections: Vec<&str> = blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Header { level: 1, text }
+                    if text.chars().next().is_some_and(|c| c.is_ascii_digit()) =>
+                {
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            numbered_sections.len() >= 6,
+            "[{ID}] expected ≥6 numbered top-level sections, got {}: {:?}",
+            numbered_sections.len(),
+            numbered_sections,
+        );
+
+        assert_visual_line_count(ID, blocks, EXPECTED_VISUAL_LINES);
+    }
+
+    // ── Differential Algebra (1707.09763) ──────────────────────────
+    // Dense math, multiline equations, differential operators.
+    // Different stress: heavy DisplayMath payload, fewer prose
+    // paragraphs.
+
+    #[test]
+    #[ignore]
+    fn differential_algebra_parse_and_layout_golden() {
+        const ID: &str = "1707.09763";
+        const EXPECTED_BLOCKS: usize = 530;
+        const EXPECTED_VISUAL_LINES: usize = 1679;
+
+        let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
+
+        // Math-heavy paper: expect a significant fraction of blocks
+        // to be DisplayMath.  Not pinning a tight ratio (paper-style
+        // dependent), but ≥30 numbered display equations is the
+        // empirical floor.
+        let numbered_math_count = blocks
+            .iter()
+            .filter(|b| matches!(b, Block::DisplayMath { num: Some(_), .. }))
+            .count();
+        assert!(
+            numbered_math_count >= 30,
+            "[{ID}] expected ≥30 numbered DisplayMath blocks (math-heavy paper), got {numbered_math_count}",
+        );
+
+        // Any DisplayMath at all (sanity).
+        let display_math_count = blocks
+            .iter()
+            .filter(|b| matches!(b, Block::DisplayMath { .. }))
+            .count();
+        assert!(
+            display_math_count >= 50,
+            "[{ID}] expected ≥50 DisplayMath blocks total, got {display_math_count}",
+        );
+
+        assert_visual_line_count(ID, blocks, EXPECTED_VISUAL_LINES);
+    }
+
+    // ── Known gap: Diffusion Geometry (2602.06006) ─────────────────
+    // Source uses `\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}`
+    // which Pandoc errors on during parse — so this paper has no
+    // Pandoc-path golden today.  An ar5iv-path golden (separate
+    // pipeline using `ar5iv_parse::to_blocks`) would cover it; not
+    // yet wired up.  See test-papers.txt for the source link.
 }

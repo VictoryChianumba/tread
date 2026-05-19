@@ -140,10 +140,25 @@ ATTENTION_PDF=/tmp/tread-pdf-investigation/attention.pdf \
   cargo test -p arxiv-render attention_pdf_anchors --release -- --ignored --nocapture
 ```
 
-The parser+layout golden test in `arxiv-render/src/lib.rs::attention_golden_tests::attention_parse_and_layout_golden` mechanizes the smoke claims in ADRs 0005 / 0007 (379 blocks → 675 visual lines on Attention, Table 3 / Table 4 vertical rules, 7 numbered sections, ≥5 figures, numbered DisplayMath). `#[ignore]` so default `cargo test` skips it; needs pandoc on PATH + network (first run; subsequent runs hit `~/.cache/tread/sources/`). When parser or layout changes shift the counts intentionally, bump `EXPECTED_BLOCKS` / `EXPECTED_VISUAL_LINES` in the test and note the new baseline in the ADR that justified the change.
+Parser+layout goldens live in `arxiv-render/src/lib.rs::golden_tests` and mechanize the smoke claims in ADRs 0005 / 0007 (block / visual-line counts, table vertical rules, section structure).  Each is `#[ignore]`-gated so default `cargo test` skips them; each needs pandoc on PATH + network on first run (subsequent runs hit `~/.cache/tread/sources/`).
+
+Pinned papers and their EXPECTED counts (Pandoc-fallback path):
+
+| arXiv ID | Test | Blocks | Visual lines | Stress |
+|---|---|---:|---:|---|
+| 1706.03762 | `attention_parse_and_layout_golden` | 379 | 675 | Tables (Table 3 `c\|ccccccccc\|ccc`), 5 figures, external `\bibliography{}` |
+| 2005.14165 | `gpt3_parse_and_layout_golden` | 1422 | 3138 | 50+ source-file `\input{}` resolution |
+| 1707.09763 | `differential_algebra_parse_and_layout_golden` | 530 | 1679 | Math-heavy (≥30 numbered DisplayMath) |
+
+When parser or layout changes shift the counts intentionally, bump the per-test EXPECTED_BLOCKS / EXPECTED_VISUAL_LINES constants and note the new baseline in the ADR that justified the change.  The shared `parse_and_check_block_count` + `assert_visual_line_count` helpers in the module keep new-paper additions short.
+
+Known gap: arXiv:2602.06006 fails Pandoc parse on `\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}` — no Pandoc-path golden today; would need an ar5iv-path golden (separate pipeline using `ar5iv_parse::to_blocks`).
 
 ```bash
+# Run a single golden:
 cargo test -p arxiv-render attention_parse_and_layout_golden --release -- --ignored --nocapture
+# Run every golden:
+cargo test -p arxiv-render golden --release -- --ignored --nocapture
 ```
 
 ## Known gotchas
