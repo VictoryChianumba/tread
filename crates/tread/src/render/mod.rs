@@ -1,4 +1,5 @@
 mod preview;
+mod toc;
 
 use doc_model::VisualLineKind;
 use ratatui::{
@@ -22,7 +23,7 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
     }
     if let Some(ta) = toc_area {
         let _s = crate::bench::Span::new("draw_toc");
-        draw_toc(frame, reader, ta, t);
+        toc::draw_toc(frame, reader, ta, t);
     }
     // When the figure-preview pane is active, the right 40% of the
     // content area is reserved for the figure (drawn post-draw by
@@ -946,54 +947,7 @@ fn highlight_spans(
     Line::from(ratatui_spans)
 }
 
-fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
-    let panel_h = area.height as usize;
-    // 1 char right border + 1 char leading space = 2 chars overhead
-    let inner_w = area.width.saturating_sub(2) as usize;
-    let cur_sec = reader.current_section_idx();
-
-    // Scroll to keep current section vertically centered in the panel.
-    let toc_scroll = cur_sec
-        .map(|idx| idx.saturating_sub(panel_h / 2))
-        .unwrap_or(0);
-
-    let total = reader.sections.len();
-
-    let lines: Vec<Line> = (0..panel_h)
-        .map(|row| {
-            let sec_idx = toc_scroll + row;
-            if sec_idx >= total {
-                return Line::raw("");
-            }
-            let (_, level, text) = &reader.sections[sec_idx];
-            let indent = match level {
-                1 => 0usize,
-                2 => 2usize,
-                _ => 4usize,
-            };
-            let avail = inner_w.saturating_sub(indent);
-            let label = format!(" {}{}", " ".repeat(indent), toc_trunc(text, avail));
-            let is_current = cur_sec.map_or(false, |c| c == sec_idx);
-            if is_current {
-                Line::styled(
-                    label,
-                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Line::styled(label, Style::default().fg(t.toc_dim))
-            }
-        })
-        .collect();
-
-    let widget = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::RIGHT)
-            .border_style(Style::default().fg(t.text_dim)),
-    );
-    frame.render_widget(widget, area);
-}
-
-fn toc_trunc(s: &str, max: usize) -> String {
+pub(super) fn toc_trunc(s: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
     }
