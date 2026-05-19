@@ -28,6 +28,26 @@ pub use figures::{
 
 pub const TOC_WIDTH: usize = 28;
 const PREVIEW_TEXT_PERCENT: usize = 60;
+const READER_HORIZONTAL_MARGIN: usize = 4;
+const READER_HORIZONTAL_MARGIN_MIN_WIDTH: usize = 60;
+const READER_VERTICAL_MARGIN: usize = 1;
+const READER_VERTICAL_MARGIN_MIN_HEIGHT: usize = 6;
+
+pub(crate) fn reader_horizontal_margin(width: usize) -> usize {
+    if width >= READER_HORIZONTAL_MARGIN_MIN_WIDTH {
+        READER_HORIZONTAL_MARGIN.min(width / 2)
+    } else {
+        0
+    }
+}
+
+pub(crate) fn reader_vertical_margin(height: usize) -> usize {
+    if height >= READER_VERTICAL_MARGIN_MIN_HEIGHT {
+        READER_VERTICAL_MARGIN.min(height / 2)
+    } else {
+        0
+    }
+}
 
 /// Build visual lines and optionally drop image rows.
 ///
@@ -482,12 +502,13 @@ impl Reader {
         let text_only = false;
         let current_figure: Option<usize> = None;
         let cw = content_width_for(width, false, false);
+        let ch = content_height_for(height, false, false);
         let source_bibitems = bibitems;
         let layout_cache = LayoutCache::rebuild_layout(
             LayoutRebuildReason::Initial,
             &blocks,
             cw,
-            height,
+            ch,
             text_only,
             &source_bibitems,
         );
@@ -772,7 +793,7 @@ impl Reader {
             reason,
             &self.blocks,
             self.content_width(),
-            self.height,
+            self.content_height(),
             self.text_only,
             &self.source_bibitems,
         );
@@ -1154,14 +1175,11 @@ impl Reader {
     }
 
     pub fn content_height(&self) -> usize {
-        let header = if self.meta.is_some() { 1 } else { 0 };
-        let status = 1;
-        let prompt = if matches!(self.mode, Mode::Search | Mode::Command) {
-            1
-        } else {
-            0
-        };
-        self.height.saturating_sub(header + status + prompt)
+        content_height_for(
+            self.height,
+            self.meta.is_some(),
+            matches!(self.mode, Mode::Search | Mode::Command),
+        )
     }
 
     pub fn update_search_matches(&mut self) {
@@ -1199,10 +1217,19 @@ fn content_width_for(terminal_width: usize, toc_visible: bool, preview_visible: 
         terminal_width
     };
     if preview_visible {
-        content_width.saturating_mul(PREVIEW_TEXT_PERCENT) / 100
+        let pane_width = content_width.saturating_mul(PREVIEW_TEXT_PERCENT) / 100;
+        pane_width.saturating_sub(reader_horizontal_margin(pane_width) * 2)
     } else {
-        content_width
+        content_width.saturating_sub(reader_horizontal_margin(content_width) * 2)
     }
+}
+
+fn content_height_for(terminal_height: usize, has_header: bool, has_prompt: bool) -> usize {
+    let header = usize::from(has_header);
+    let status = 1;
+    let prompt = usize::from(has_prompt);
+    let content_height = terminal_height.saturating_sub(header + status + prompt);
+    content_height.saturating_sub(reader_vertical_margin(content_height) * 2)
 }
 
 fn build_sections(visual_lines: &[VisualLine]) -> Vec<(usize, u8, String)> {
@@ -1516,11 +1543,11 @@ mod tests {
         let mut blocks = doc_with_one_image();
         blocks.insert(0, Block::Rule);
         let mut reader = Reader::new(blocks, 100, 24);
-        assert_eq!(reader.content_width(), 100);
+        assert_eq!(reader.content_width(), 92);
 
         reader.set_figure_preview_active(true);
 
-        assert_eq!(reader.content_width(), 60);
+        assert_eq!(reader.content_width(), 52);
         assert_eq!(
             reader
                 .visual_lines

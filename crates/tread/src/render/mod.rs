@@ -10,7 +10,9 @@ use ratatui::{
 };
 use ui_theme::Theme;
 
-use crate::state::{Mode, Reader, TOC_WIDTH};
+use crate::state::{
+    Mode, Reader, TOC_WIDTH, reader_horizontal_margin, reader_vertical_margin,
+};
 
 pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
     let (header_area, toc_area, content_area, status_area, search_area) =
@@ -68,13 +70,24 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
 /// over the reader text.
 pub fn split_content_for_preview(area: Rect, reader: &Reader) -> (Rect, Option<Rect>) {
     if !reader.figure_preview_visible() {
-        return (area, None);
+        return (reader_text_area(area), None);
     }
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(area);
-    (cols[0], Some(cols[1]))
+    (reader_text_area(cols[0]), Some(cols[1]))
+}
+
+pub fn reader_text_area(area: Rect) -> Rect {
+    let horizontal = reader_horizontal_margin(area.width as usize) as u16;
+    let vertical = reader_vertical_margin(area.height as usize) as u16;
+    Rect::new(
+        area.x.saturating_add(horizontal),
+        area.y.saturating_add(vertical),
+        area.width.saturating_sub(horizontal.saturating_mul(2)),
+        area.height.saturating_sub(vertical.saturating_mul(2)),
+    )
 }
 
 pub fn preview_image_area(area: Rect) -> Rect {
@@ -202,8 +215,18 @@ mod tests {
         let (reader_area, preview_area) =
             split_content_for_preview(Rect::new(0, 0, 100, 20), &reader);
 
-        assert_eq!(reader_area.width, 60);
-        assert_eq!(preview_area.map(|area| area.width), Some(40));
+        assert_eq!(reader_area, Rect::new(4, 1, 52, 18));
+        assert_eq!(preview_area, Some(Rect::new(60, 0, 40, 20)));
+    }
+
+    #[test]
+    fn split_content_for_preview_insets_single_reader_pane() {
+        let reader = Reader::new(vec![Block::Line("hello".to_string())], 100, 24);
+        let (reader_area, preview_area) =
+            split_content_for_preview(Rect::new(0, 0, 100, 20), &reader);
+
+        assert_eq!(reader_area, Rect::new(4, 1, 92, 18));
+        assert_eq!(preview_area, None);
     }
 
     #[test]

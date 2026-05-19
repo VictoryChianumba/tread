@@ -602,7 +602,7 @@ mod acceptance_tests {
     reader.set_figure_preview_active(true);
     assert!(reader.figure_preview_visible());
     assert_eq!(reader.current_figure_kitty_id(), Some(1));
-    assert_eq!(reader.content_width(), 60);
+    assert_eq!(reader.content_width(), 52);
 
     for _ in 0..8 {
       reader.handle_event(char_key('j'));
@@ -639,7 +639,7 @@ mod acceptance_tests {
 
     reader.handle_event(char_key('\\'));
     assert!(reader.toc_visible);
-    assert_eq!(reader.content_width(), 71);
+    assert_eq!(reader.content_width(), 63);
 
     reader.handle_event(char_key(':'));
     send_chars(&mut reader, "2");
