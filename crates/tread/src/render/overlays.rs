@@ -21,10 +21,10 @@ use crate::state::{PopupContent, Reader};
 use super::toc_trunc;
 
 pub(super) fn draw_search_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
-    let suffix = if reader.search_matches.is_empty() {
+    let suffix = if reader.search_matches().is_empty() {
         String::new()
     } else {
-        format!(" {}/{}", reader.search_idx + 1, reader.search_matches.len())
+        format!(" {}/{}", reader.search_idx + 1, reader.search_matches().len())
     };
     let line = prompt_line("/", &reader.search_query, &suffix, area.width as usize, t);
     let bar = Paragraph::new(line).style(Style::default().bg(t.bg_input));
@@ -34,7 +34,7 @@ pub(super) fn draw_search_bar(frame: &mut Frame, reader: &Reader, area: Rect, t:
 pub(super) fn draw_command_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
     let line = prompt_line(
         ":",
-        &format!("{}_", reader.cmd_buf),
+        &format!("{}_", reader.cmd_buf()),
         "",
         area.width as usize,
         t,

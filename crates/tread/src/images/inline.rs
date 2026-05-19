@@ -52,7 +52,7 @@ pub fn place_visible(reader: &Reader, state: &mut ImageState, content_area: Rect
     // Collect first-row Image VLs that fall inside content_area, plus
     // the set of all kitty_ids touching the visible window (which may
     // include rows of an image whose first row scrolled off the top).
-    let total = reader.visual_lines.len();
+    let total = reader.visual_lines().len();
     let height = content_area.height as usize;
     let cell_cols = content_area.width;
 
@@ -78,7 +78,7 @@ pub fn place_visible(reader: &Reader, state: &mut ImageState, content_area: Rect
         // `current` excludes the id, the dropped-set fires, the image
         // disappears cleanly.  See v2.md for the scale-to-fit alternative.
         let viewport_bottom = content_area.y.saturating_add(content_area.height);
-        match &reader.visual_lines[vl_idx].kind {
+        match &reader.visual_lines()[vl_idx].kind {
             VisualLineKind::Image {
                 kitty_id,
                 cols,

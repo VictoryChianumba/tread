@@ -188,8 +188,15 @@ pub struct PaperMeta {
 
 pub struct Reader {
     pub blocks: Vec<Block>,
-    pub visual_lines: Vec<VisualLine>,
-    pub sections: Vec<(usize, u8, String)>, // (line_idx, level, title)
+    /// Layout-cache projection: visual lines as flowed for the current
+    /// terminal width.  Private so writes only happen via the layout
+    /// rebuild path in `LayoutCache::rebuild_layout`.  Read via
+    /// `Reader::visual_lines()`.
+    visual_lines: Vec<VisualLine>,
+    /// Layout-cache projection: section index (line_idx, level, title).
+    /// Same private/getter shape as `visual_lines`.  Read via
+    /// `Reader::sections()`.
+    sections: Vec<(usize, u8, String)>,
     layout_cache: LayoutCache,
     pub toc_visible: bool,
     pub help_visible: bool,
@@ -204,7 +211,10 @@ pub struct Reader {
     pub width: usize,
     pub height: usize,
     pub search_query: String,
-    pub search_matches: Vec<usize>,
+    /// Visual-line indices of `/`-search matches.  Private; writes
+    /// happen via `update_search_matches` / `remap_search_matches_after_layout`
+    /// only.  Read via `Reader::search_matches()`.
+    search_matches: Vec<usize>,
     pub search_idx: usize,
     /// Active mode.  Private so every transition lands in `mode.rs`
     /// (`enter_*` / `return_to_normal`).  Read via `Reader::mode()`.
@@ -252,8 +262,11 @@ pub struct Reader {
     pub visual_anchor_x: usize,
     /// Accumulated digit prefix for count motions (e.g. "5" before `j`).
     pub count_buf: String,
-    /// In-progress text after `:` in Command mode.
-    pub cmd_buf: String,
+    /// In-progress text after `:` in Command mode.  Private; writes
+    /// happen via the Command-mode key handler in `lib.rs` (push_char
+    /// / pop_char on the buffer) and via `mode::*` transitions that
+    /// clear it.  Read via `Reader::cmd_buf()`.
+    cmd_buf: String,
     /// One-line error message shown in the status line after a command
     /// failed (e.g. unknown command, unknown theme).  Cleared on next event.
     pub cmd_error: Option<String>,
@@ -516,6 +529,53 @@ impl Reader {
     /// cancel an in-progress mode.
     pub fn is_normal_mode(&self) -> bool {
         matches!(self.mode, Mode::Normal)
+    }
+
+    /// Flat visual-line table for the current layout.  Built by
+    /// `LayoutCache::rebuild_layout` and refreshed on resize / reload /
+    /// text-only toggle.
+    pub fn visual_lines(&self) -> &[VisualLine] {
+        &self.visual_lines
+    }
+
+    /// Section index built from `Block::Header` markers — one entry
+    /// per section as `(visual_line_idx, level, title)`.  Rebuilt
+    /// alongside `visual_lines`.
+    pub fn sections(&self) -> &[(usize, u8, String)] {
+        &self.sections
+    }
+
+    /// Visual-line indices of the current `/`-search matches.  Empty
+    /// when no search is active or the query has no hits.  Writes
+    /// happen via the internal `update_search_matches` path only.
+    pub fn search_matches(&self) -> &[usize] {
+        &self.search_matches
+    }
+
+    /// In-progress `:`-command line.  Empty outside `Mode::Command`.
+    /// The Command-mode key handler is the only writer.
+    pub fn cmd_buf(&self) -> &str {
+        &self.cmd_buf
+    }
+
+    /// Append a typed character to the `:`-command line.  Called from
+    /// the Command-mode key handler on each `KeyCode::Char(c)`.
+    pub fn push_cmd_char(&mut self, c: char) {
+        self.cmd_buf.push(c);
+    }
+
+    /// Pop the last char (backspace in Command mode).  Returns false
+    /// if the buffer was already empty so the caller can decide to
+    /// cancel command mode instead.
+    pub fn pop_cmd_char(&mut self) -> bool {
+        self.cmd_buf.pop().is_some()
+    }
+
+    /// Take the in-progress `:`-command line, leaving an empty buffer.
+    /// Called when the user presses Enter — the returned String is
+    /// dispatched to `commands::execute`.
+    pub fn take_cmd_buf(&mut self) -> String {
+        std::mem::take(&mut self.cmd_buf)
     }
 
     /// Stop voice playback and clear every per-Reader voice flag.

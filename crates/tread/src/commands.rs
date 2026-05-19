@@ -167,15 +167,15 @@ fn cmd_goto(reader: &mut Reader, args: &[&str]) -> ReaderAction {
     return ReaderAction::Error("goto: missing argument".to_string());
   }
   let arg = args.join(" ");
-  if reader.sections.is_empty() {
+  if reader.sections().is_empty() {
     return ReaderAction::Error("no sections in this document".to_string());
   }
   // First try numeric form ("3", "3.2", "3.2.1").
   let target = if arg.chars().next().map_or(false, |c| c.is_ascii_digit()) {
-    reader.sections.iter().find(|s| section_starts_with(&s.2, &arg)).map(|s| s.0)
+    reader.sections().iter().find(|s| section_starts_with(&s.2, &arg)).map(|s| s.0)
   } else {
     let needle = arg.to_ascii_lowercase();
-    reader.sections.iter().find(|s| s.2.to_ascii_lowercase().contains(&needle)).map(|s| s.0)
+    reader.sections().iter().find(|s| s.2.to_ascii_lowercase().contains(&needle)).map(|s| s.0)
   };
   match target {
     Some(line) => {
@@ -203,7 +203,7 @@ fn cmd_references(reader: &mut Reader, _: &[&str]) -> ReaderAction {
 }
 
 fn jump_to_section_named(reader: &mut Reader, candidates: &[&str]) -> ReaderAction {
-  let target = reader.sections.iter().find(|s| {
+  let target = reader.sections().iter().find(|s| {
     let lower = s.2.to_ascii_lowercase();
     candidates.iter().any(|c| lower.contains(c))
   }).map(|s| s.0);
@@ -267,7 +267,7 @@ fn cmd_marks(reader: &mut Reader, _: &[&str]) -> ReaderAction {
     vec!["(no marks set — use m{a} to set one)".to_string()]
   } else {
     entries.iter().map(|(letter, line)| {
-      let snippet = reader.visual_lines.get(*line)
+      let snippet = reader.visual_lines().get(*line)
         .map(|vl| vl.text.clone())
         .unwrap_or_default();
       let snippet: String = snippet.chars().take(48).collect();
@@ -303,7 +303,7 @@ fn cmd_highlights(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   } else {
     reader.highlights.highlights.iter().map(|h| {
       // Find the first VL that overlaps this highlight to extract a snippet.
-      let snippet = reader.visual_lines.iter().find_map(|vl| {
+      let snippet = reader.visual_lines().iter().find_map(|vl| {
         if vl.block_idx == h.block_idx
           && h.byte_start < vl.block_byte_end
           && h.byte_end > vl.block_byte_start

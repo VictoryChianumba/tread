@@ -64,11 +64,11 @@ pub(super) fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect, t: &Th
 
     let mode = mode_label(reader);
     let mut details: Vec<String> = Vec::new();
-    if !reader.search_matches.is_empty() {
+    if !reader.search_matches().is_empty() {
         details.push(format!(
             "match {}/{}",
             reader.search_idx + 1,
-            reader.search_matches.len()
+            reader.search_matches().len()
         ));
     }
     if let Some((idx, total)) = reader

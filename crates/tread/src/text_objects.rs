@@ -16,7 +16,7 @@ use crate::state::Reader;
 /// Inner = the word chars only.  Around = inner + trailing whitespace
 /// (or leading if there's no trailing).
 pub fn word(reader: &Reader, big: bool, around: bool) -> Option<String> {
-    let vl = reader.visual_lines.get(reader.current_line())?;
+    let vl = reader.visual_lines().get(reader.current_line())?;
     let text = vl.text.as_str();
     let bytes = text.as_bytes();
     if bytes.is_empty() {
@@ -77,7 +77,7 @@ pub fn quote(reader: &Reader, ch: char, around: bool) -> Option<String> {
     if !ch.is_ascii() {
         return None;
     }
-    let vl = reader.visual_lines.get(reader.current_line())?;
+    let vl = reader.visual_lines().get(reader.current_line())?;
     let text = vl.text.as_str();
     let bytes = text.as_bytes();
     if bytes.is_empty() {
@@ -139,7 +139,7 @@ pub fn pair(reader: &Reader, open: char, close: char, around: bool) -> Option<St
     if !open.is_ascii() || !close.is_ascii() {
         return None;
     }
-    let vl = reader.visual_lines.get(reader.current_line())?;
+    let vl = reader.visual_lines().get(reader.current_line())?;
     let text = vl.text.as_str();
     let bytes = text.as_bytes();
     if bytes.is_empty() {
@@ -204,8 +204,7 @@ pub fn paragraph(reader: &Reader, around: bool) -> Option<String> {
     // as the paragraph.  We simplify: from a blank line, just yank the
     // run of blank lines (works for `ip`/`ap` consistently enough).
     let is_blank = |i: usize| {
-        reader
-            .visual_lines
+        reader.visual_lines()
             .get(i)
             .map(|vl| vl.text.trim().is_empty())
             .unwrap_or(true)
@@ -256,8 +255,7 @@ pub fn paragraph_with_range(reader: &Reader, _around: bool) -> Option<(String, u
     let cur = reader.current_line();
 
     let is_blank = |i: usize| {
-        reader
-            .visual_lines
+        reader.visual_lines()
             .get(i)
             .map(|vl| vl.text.trim().is_empty())
             .unwrap_or(true)
@@ -298,8 +296,7 @@ pub fn cursor_to_paragraph_end(reader: &Reader) -> Option<(String, usize, usize)
     }
     let cur = reader.current_line();
     let is_blank = |i: usize| {
-        reader
-            .visual_lines
+        reader.visual_lines()
             .get(i)
             .map(|vl| vl.text.trim().is_empty())
             .unwrap_or(true)
@@ -313,12 +310,12 @@ pub fn cursor_to_paragraph_end(reader: &Reader) -> Option<(String, usize, usize)
     }
     // Slice the cursor's line at cursor_x; subsequent lines verbatim.
     let mut out = String::new();
-    if let Some(vl) = reader.visual_lines.get(cur) {
+    if let Some(vl) = reader.visual_lines().get(cur) {
         let cut = reader.cursor_x().min(vl.text.len());
         out.push_str(&vl.text[cut..]);
     }
     for i in (cur + 1)..=end {
-        if let Some(vl) = reader.visual_lines.get(i) {
+        if let Some(vl) = reader.visual_lines().get(i) {
             out.push('\n');
             out.push_str(&vl.text);
         }
@@ -332,7 +329,7 @@ pub fn cursor_to_paragraph_end(reader: &Reader) -> Option<(String, usize, usize)
 fn join_lines(reader: &Reader, start: usize, end: usize) -> String {
     let mut out = String::new();
     for i in start..=end {
-        if let Some(vl) = reader.visual_lines.get(i) {
+        if let Some(vl) = reader.visual_lines().get(i) {
             if i > start {
                 out.push('\n');
             }
@@ -364,7 +361,7 @@ pub fn sentence(reader: &Reader, around: bool) -> Option<String> {
         let mut saw_terminator = false;
         let mut saw_ws_after = true; // start-of-doc sentinel
         'outer: for line in 0..total {
-            let Some(text) = reader.visual_lines.get(line).map(|vl| vl.text.as_str()) else {
+            let Some(text) = reader.visual_lines().get(line).map(|vl| vl.text.as_str()) else {
                 continue;
             };
             let bytes = text.as_bytes();
@@ -403,7 +400,7 @@ pub fn sentence(reader: &Reader, around: bool) -> Option<String> {
         let mut line = start.0;
         let mut col = start.1;
         while line < total {
-            let Some(text) = reader.visual_lines.get(line).map(|vl| vl.text.as_str()) else {
+            let Some(text) = reader.visual_lines().get(line).map(|vl| vl.text.as_str()) else {
                 break;
             };
             let bytes = text.as_bytes();
@@ -437,8 +434,7 @@ pub fn sentence(reader: &Reader, around: bool) -> Option<String> {
     if !found_end {
         // Sentence runs to end of document.
         let last = total.saturating_sub(1);
-        let last_len = reader
-            .visual_lines
+        let last_len = reader.visual_lines()
             .get(last)
             .map(|vl| vl.text.len())
             .unwrap_or(0);
@@ -454,7 +450,7 @@ pub fn sentence(reader: &Reader, around: bool) -> Option<String> {
     let mut a_end = inner_end;
     // Walk forward through whitespace.
     loop {
-        let Some(text) = reader.visual_lines.get(a_end.0).map(|vl| vl.text.as_str()) else {
+        let Some(text) = reader.visual_lines().get(a_end.0).map(|vl| vl.text.as_str()) else {
             break;
         };
         let bytes = text.as_bytes();
@@ -463,7 +459,7 @@ pub fn sentence(reader: &Reader, around: bool) -> Option<String> {
         } else if a_end.1 + 1 >= bytes.len() && a_end.0 + 1 < total {
             a_end = (a_end.0 + 1, 0);
             // Skip leading whitespace on the new line.
-            let Some(next_text) = reader.visual_lines.get(a_end.0).map(|vl| vl.text.as_str())
+            let Some(next_text) = reader.visual_lines().get(a_end.0).map(|vl| vl.text.as_str())
             else {
                 break;
             };
@@ -492,7 +488,7 @@ fn join_range(reader: &Reader, start: (usize, usize), end: (usize, usize)) -> Op
     }
     let mut out = String::new();
     for line in start.0..=end.0 {
-        let text = reader.visual_lines.get(line).map(|vl| vl.text.as_str())?;
+        let text = reader.visual_lines().get(line).map(|vl| vl.text.as_str())?;
         let lo = if line == start.0 { start.1 } else { 0 };
         let hi_excl = if line == end.0 {
             end.1.saturating_add(1).min(text.len())

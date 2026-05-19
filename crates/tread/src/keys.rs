@@ -256,7 +256,7 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
     // Remove highlight under cursor — eXcise.
     KeyCode::Char('X') => {
       reader.count_buf.clear();
-      if let Some(vl) = reader.visual_lines.get(reader.current_line()) {
+      if let Some(vl) = reader.visual_lines().get(reader.current_line()) {
         if vl.block_byte_end > vl.block_byte_start {
           let local = reader
             .cursor_x()
@@ -271,7 +271,7 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
       if let Some(word) = reader.word_at_cursor() {
         reader.search_query = word;
         reader.update_search_matches();
-        if !reader.search_matches.is_empty() {
+        if !reader.search_matches().is_empty() {
           reader.push_nav_mark();
           let idx = reader.search_idx;
           reader.jump_to_match(idx);
@@ -380,19 +380,19 @@ pub(crate) fn handle_command(reader: &mut Reader, code: KeyCode) -> ReaderAction
       ReaderAction::Continue
     }
     KeyCode::Enter => {
-      let line = std::mem::take(&mut reader.cmd_buf);
+      let line = reader.take_cmd_buf();
       reader.return_to_normal();
       commands::execute(reader, &line)
     }
     KeyCode::Backspace => {
-      if reader.cmd_buf.pop().is_none() {
+      if !reader.pop_cmd_char() {
         // Empty buffer: backspace exits command mode (matches search bar UX).
         reader.return_to_normal();
       }
       ReaderAction::Continue
     }
     KeyCode::Char(c) => {
-      reader.cmd_buf.push(c);
+      reader.push_cmd_char(c);
       ReaderAction::Continue
     }
     _ => ReaderAction::Continue,
@@ -406,7 +406,7 @@ pub(crate) fn handle_awaiting_operator(reader: &mut Reader, code: KeyCode, op: O
   //  - Anything else cancels back to Normal.
   match code {
     KeyCode::Char('y') if op == Operator::Yank => {
-      if let Some(vl) = reader.visual_lines.get(reader.current_line()) {
+      if let Some(vl) = reader.visual_lines().get(reader.current_line()) {
         let text = vl.text.clone();
         osc52_yank(&text);
       }
@@ -462,7 +462,7 @@ pub(crate) fn handle_awaiting_text_object(
 /// `cursor_x`.  Returns `None` for non-styled lines, non-prose blocks,
 /// or when the cursor doesn't sit on a linked span.
 fn link_at_cursor(reader: &Reader) -> Option<doc_model::LinkTarget> {
-  let vl = reader.visual_lines.get(reader.current_line())?;
+  let vl = reader.visual_lines().get(reader.current_line())?;
   let spans = match &vl.kind {
     doc_model::VisualLineKind::StyledProse(s) => s,
     _ => return None,
@@ -644,7 +644,7 @@ fn commit_selection_as_highlights(reader: &mut Reader) {
   // block, and merging consecutive same-block runs into one highlight.
   let mut current: Option<(usize, usize, usize)> = None; // (block_idx, byte_start, byte_end)
   for i in lo..=hi {
-    let Some(vl) = reader.visual_lines.get(i) else {
+    let Some(vl) = reader.visual_lines().get(i) else {
       continue;
     };
     // Skip non-text blocks (Matrix, Rule, Blank) — they have zero byte range.
@@ -670,9 +670,18 @@ fn commit_selection_as_highlights(reader: &mut Reader) {
     if byte_end <= byte_start {
       continue;
     }
+    let vl_block_idx = vl.block_idx;
+    // `vl` borrows from `reader.visual_lines()`, which holds an
+    // immutable borrow of the whole Reader.  Drop it before the match
+    // so the `reader.highlights.add(...)` arm can take a mutable
+    // borrow.  Pre-getter (field-public) code held a split borrow on
+    // just `visual_lines`, which the compiler allowed alongside
+    // `&mut reader.highlights`; method getters return `&[..]` from
+    // `&self`, so the wider borrow has to end first.
+    let _ = vl;
 
     match &mut current {
-      Some((blk, _, end)) if *blk == vl.block_idx => {
+      Some((blk, _, end)) if *blk == vl_block_idx => {
         *end = byte_end;
       }
       _ => {
@@ -683,7 +692,7 @@ fn commit_selection_as_highlights(reader: &mut Reader) {
             byte_end: e,
           });
         }
-        current = Some((vl.block_idx, byte_start, byte_end));
+        current = Some((vl_block_idx, byte_start, byte_end));
       }
     }
   }
@@ -724,7 +733,7 @@ fn yank_selection(reader: &Reader) -> String {
   let is_line_mode = matches!(reader.mode(), Mode::Visual { line_mode: true });
 
   let lines: Vec<&str> = (lo..=hi)
-    .filter_map(|i| reader.visual_lines.get(i))
+    .filter_map(|i| reader.visual_lines().get(i))
     .map(|vl| vl.text.as_str())
     .collect();
 

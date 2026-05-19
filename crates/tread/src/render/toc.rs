@@ -27,7 +27,7 @@ pub(super) fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme
         .map(|idx| idx.saturating_sub(panel_h / 2))
         .unwrap_or(0);
 
-    let total = reader.sections.len();
+    let total = reader.sections().len();
 
     let lines: Vec<Line> = (0..panel_h)
         .map(|row| {
@@ -35,7 +35,7 @@ pub(super) fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme
             if sec_idx >= total {
                 return Line::raw("");
             }
-            let (_, level, text) = &reader.sections[sec_idx];
+            let (_, level, text) = &reader.sections()[sec_idx];
             let indent = match level {
                 1 => 0usize,
                 2 => 2usize,

@@ -628,11 +628,11 @@ mod acceptance_tests {
     reader.handle_event(char_key('/'));
     send_chars(&mut reader, "method");
     assert!(matches!(reader.mode(), Mode::Search));
-    assert!(!reader.search_matches.is_empty());
+    assert!(!reader.search_matches().is_empty());
     reader.handle_event(key(KeyCode::Enter));
     assert!(matches!(reader.mode(), Mode::Normal));
     assert!(
-      reader.visual_lines[reader.current_line()]
+      reader.visual_lines()[reader.current_line()]
         .text
         .contains("method")
     );

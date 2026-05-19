@@ -56,7 +56,7 @@ pub(super) fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &T
             // the count) would turn this loop into a silent panic.
             // The `.get()` form returns a blank line on out-of-bounds,
             // which is the visually correct degraded behaviour.
-            let Some(vl) = reader.visual_lines.get(vl_idx) else {
+            let Some(vl) = reader.visual_lines().get(vl_idx) else {
                 return Line::raw("");
             };
             let is_cursor = row == reader.cursor_y();
@@ -100,7 +100,7 @@ pub(super) fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &T
                 is_selected,
                 cursor_col,
                 &q,
-                &reader.search_matches,
+                &reader.search_matches(),
                 vl_idx,
                 &highlight_ranges,
                 t,

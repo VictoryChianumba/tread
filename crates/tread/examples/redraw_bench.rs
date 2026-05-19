@@ -112,7 +112,7 @@ fn main() {
     run_scenario("idle redraw", |_, _| {});
 
     run_scenario("scrolling (offset++)", |r, i| {
-        let max_off = r.visual_lines.len().saturating_sub(HEIGHT as usize).max(1);
+        let max_off = r.visual_lines().len().saturating_sub(HEIGHT as usize).max(1);
         r.jump_to_line(i % max_off);
     });
 
