@@ -288,9 +288,10 @@ pub struct Reader {
     /// reflows past where the figures would have been.  Hosts use this
     /// for "preview pane" reading modes: the reader pane stays text-only
     /// and a dedicated side pane shows one figure at a time via
-    /// `images::place_one_figure`.  Toggle via `set_text_only` — direct
-    /// field writes won't trigger the rebuild and will desync state.
-    pub text_only: bool,
+    /// `images::place_one_figure`.  Private; toggle via `set_text_only`
+    /// — direct field writes won't trigger the rebuild and will desync
+    /// state.
+    text_only: bool,
     /// User-facing toggle for the figure-preview side pane (`i` in
     /// normal mode).  When true, `render::split_content_for_preview`
     /// carves out the right 40% of the content area for a single
@@ -300,13 +301,16 @@ pub struct Reader {
     ///
     /// Distinct from `text_only`: a host could plausibly want
     /// `text_only` without the preview pane (e.g. pure-text export),
-    /// so they stay as separate fields.  `set_figure_preview_active`
-    /// keeps them coherent for the common case.
-    pub figure_preview_active: bool,
+    /// so they stay as separate fields.  Private; toggle via
+    /// `set_figure_preview_active`, which keeps the two coherent.
+    /// Read via `figure_preview_visible()` (the only consumer outside
+    /// state/ is render::draw).
+    figure_preview_active: bool,
     /// Index into `figure_kitty_ids()` for the figure currently shown
     /// in the side preview pane.  `None` when the preview is off or
-    /// the paper has no figures.  `]f` / `[f` step this with wraparound.
-    pub current_figure: Option<usize>,
+    /// the paper has no figures.  Private; written by `step_figure`
+    /// and `set_figure_preview_active` only.
+    current_figure: Option<usize>,
 
     /// arXiv id this Reader is rendering, or `None` when running against a
     /// non-arxiv source.  Used by `:reload`, `:url`, `:cite`, `:open`, and
