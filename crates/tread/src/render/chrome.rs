@@ -80,8 +80,8 @@ pub(super) fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect, t: &Th
     if let Some(pending) = pending_input_label(reader) {
         details.push(pending);
     }
-    if !reader.count_buf.is_empty() {
-        details.push(format!("count {}_", reader.count_buf));
+    if !reader.count_buf().is_empty() {
+        details.push(format!("count {}_", reader.count_buf()));
     }
     if let Some(voice) = crate::state::voice_control::voice_status_label(reader) {
         details.push(voice);

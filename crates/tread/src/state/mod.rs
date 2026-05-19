@@ -265,7 +265,10 @@ pub struct Reader {
     /// Column index where visual selection started.
     pub visual_anchor_x: usize,
     /// Accumulated digit prefix for count motions (e.g. "5" before `j`).
-    pub count_buf: String,
+    /// Private; writes happen via `push_count_char` (typing a digit)
+    /// and `clear_count` (after a motion consumes it).  Read via
+    /// `Reader::count_buf()`.
+    count_buf: String,
     /// In-progress text after `:` in Command mode.  Private; writes
     /// happen via the Command-mode key handler in `lib.rs` (push_char
     /// / pop_char on the buffer) and via `mode::*` transitions that
@@ -613,6 +616,25 @@ impl Reader {
     /// mutated thereafter.
     pub fn image_paths(&self) -> &HashMap<u32, std::path::PathBuf> {
         &self.image_paths
+    }
+
+    /// Accumulated digit prefix for count motions (vim-style "5j" /
+    /// "10gg").  Read by motion handlers to scale repetition.
+    pub fn count_buf(&self) -> &str {
+        &self.count_buf
+    }
+
+    /// Append a typed digit to the count prefix.  Called from the
+    /// Normal-mode key handler when a digit (1-9, or 0 with a non-
+    /// empty buffer) is pressed.
+    pub fn push_count_char(&mut self, c: char) {
+        self.count_buf.push(c);
+    }
+
+    /// Clear the count prefix.  Called by every motion handler after
+    /// it consumes the count, and by mode transitions in `mode.rs`.
+    pub fn clear_count(&mut self) {
+        self.count_buf.clear();
     }
 
     /// Append a typed character to the `:`-command line.  Called from

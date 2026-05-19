@@ -11,11 +11,11 @@ use crate::text_objects;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 pub(crate) fn take_count(reader: &mut Reader) -> usize {
-  if reader.count_buf.is_empty() {
+  if reader.count_buf().is_empty() {
     1
   } else {
-    let n: usize = reader.count_buf.parse().unwrap_or(1).max(1).min(9999);
-    reader.count_buf.clear();
+    let n: usize = reader.count_buf().parse().unwrap_or(1).max(1).min(9999);
+    reader.clear_count();
     n
   }
 }
@@ -34,21 +34,21 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
   // also quitting the reader.
   let key_event = crossterm::event::KeyEvent::new(code, mods);
   if crate::state::voice_control::handle_voice_keys(reader, key_event) {
-    reader.count_buf.clear();
+    reader.clear_count();
     return false;
   }
 
   // Digit accumulation for count prefix (1–9 to start, 0 only after first digit).
   if let KeyCode::Char(c) = code {
-    if c.is_ascii_digit() && (c != '0' || !reader.count_buf.is_empty()) {
-      reader.count_buf.push(c);
+    if c.is_ascii_digit() && (c != '0' || !reader.count_buf().is_empty()) {
+      reader.push_count_char(c);
       return false;
     }
   }
 
   match code {
     KeyCode::Char('q') | KeyCode::Esc => {
-      reader.count_buf.clear();
+      reader.clear_count();
       return true;
     }
     KeyCode::Char('j') | KeyCode::Down => {
@@ -67,7 +67,7 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
       reader.enter_awaiting_g();
     }
     KeyCode::Char('G') => {
-      if reader.count_buf.is_empty() {
+      if reader.count_buf().is_empty() {
         reader.nav_bottom();
       } else {
         let n = take_count(reader);
@@ -115,19 +115,19 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
       }
     }
     KeyCode::Char('H') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.jump_screen_top();
     }
     KeyCode::Char('M') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.jump_screen_middle();
     }
     KeyCode::Char('L') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.jump_screen_bottom();
     }
     KeyCode::Char('z') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.center_cursor();
     }
     KeyCode::Char('h') | KeyCode::Left => {
@@ -187,17 +187,17 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
     }
     // Line edges — `0` to byte 0, `^` to first non-blank, `$` to last char.
     KeyCode::Char('0') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.nav_line_start();
       reader.remember_column();
     }
     KeyCode::Char('^') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.nav_line_first_nonblank();
       reader.remember_column();
     }
     KeyCode::Char('$') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.nav_line_end();
       reader.remember_column();
     }
@@ -216,7 +216,7 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
     }
     // Matching brace — `%` jumps between paired brackets on the current line.
     KeyCode::Char('%') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.nav_match_brace();
       reader.remember_column();
     }
@@ -242,20 +242,20 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
     // universal fallback — vim's canonical "look up" gesture, distinct
     // from lowercase `k` which is cursor-up.)
     KeyCode::Enter if mods.contains(KeyModifiers::SHIFT) => {
-      reader.count_buf.clear();
+      reader.clear_count();
       popup_citation_at_cursor(reader);
     }
     KeyCode::Enter => {
-      reader.count_buf.clear();
+      reader.clear_count();
       follow_link_at_cursor(reader);
     }
     KeyCode::Char('K') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       popup_citation_at_cursor(reader);
     }
     // Remove highlight under cursor — eXcise.
     KeyCode::Char('X') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       if let Some(vl) = reader.visual_lines().get(reader.current_line()) {
         if vl.block_byte_end > vl.block_byte_start {
           let local = reader
@@ -267,7 +267,7 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
       }
     }
     KeyCode::Char('*') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       if let Some(word) = reader.word_at_cursor() {
         reader.search_query = word;
         reader.update_search_matches();
@@ -282,15 +282,15 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
       reader.enter_command_mode();
     }
     KeyCode::Char('/') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.enter_search();
     }
     KeyCode::Char('n') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.search_next();
     }
     KeyCode::Char('N') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.search_prev();
     }
     KeyCode::Char(']') => {
@@ -305,20 +305,20 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
     KeyCode::Char('i') => {
       // Figure-preview side pane.  Toggle is a single keystroke
       // because tread has no insert mode to collide with.
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.toggle_figure_preview();
     }
     // TOC moved off `t` to free the key for vim's `t<char>` find motion.
     KeyCode::Char('\\') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.toggle_toc();
     }
     KeyCode::Char('o') if mods.contains(KeyModifiers::CONTROL) => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.nav_back();
     }
     KeyCode::Char('?') => {
-      reader.count_buf.clear();
+      reader.clear_count();
       reader.toggle_help();
     }
     KeyCode::Char('m') => {
@@ -340,7 +340,7 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
       reader.enter_visual_mode(true);
     }
     _ => {
-      reader.count_buf.clear();
+      reader.clear_count();
     }
   }
   false
