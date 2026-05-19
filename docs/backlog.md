@@ -40,6 +40,7 @@ Last revalidation: **2026-05-19**.
 | **#1** Reader public surface — Seam 5 (read-mostly + popup + figure-preview triple) | 8 fields closed; popup gains atomic `open_popup` constructor | ADR-0008 |
 | **#1** Reader public surface — Seam 6 (LayoutCache projections + count_buf) | 5 fields closed; six-seam tally 47→17 pub fields | ADR-0009 |
 | **Smoke-claim mechanization** | Attention parse+layout golden test pins block / visual-line counts + Table 3/4 vrules; `#[ignore]`-gated. | `cbbd035` |
+| **ADR-0007 follow-up** Table 3 vrules `[1, 7]` vs `[1, 10]` divergence | Misleading inline-comment narrative, not a parser bug.  Attention's actual Table 3 spec is `c|ccccccccc|ccc` (9 inner c's, 13 cols → [1, 10]); the `c|cccccc|ccc → [1, 7]` synthetic in `spec::tests::two_rules` is a minimal pattern that never matched the live paper.  New `attention_table_3_spec` unit test pins the real shape; golden test comment + comments rewritten to stop confusing the two. | _this commit_ |
 
 The resilience cluster and the actionable ADR follow-ups are closed.
 What's left below is explicitly deferred — each item has a blocker
@@ -55,6 +56,7 @@ test paper for B5/B6, or a trench-repo audit pass for A*).
 | **B5** | Tables don't highlight best-result cells | Feature, not a bug — no spec; need a paper with a clearly-marked best-result table to anchor the design |
 | **B6** | Some tables structurally wrong when `take_matching_spec` falls back to default | Need a paper that triggers the fallback so the corruption is reproducible; audit didn't capture an example |
 | **B8** | Image rendering edge cases on standalone tread (image-emit corruption / AAAA walls) | Audit explicitly flags "needs reclassification" — the image subsystem changed materially in `6332f7f`; re-audit before fixing |
+| **F1** | `state::tests::preview_toggle_preserves_current_source_position_after_reflow` and `resize_preserves_current_source_position_after_reflow` flake under parallel `cargo test` (both pass under `--test-threads=1`) | Likely a shared file-system or process-wide side effect (persistence/config layer); needs an isolated reproduction before changing the test or the code |
 
 ## Deferred — trench integration (A-series)
 
@@ -79,15 +81,8 @@ itself.
   tmux-detach scenario to validate against the UX cost (extra query
   escape per focus event). **Blocker:** both need terminal-specific
   benchmarking environments.
-- **ADR-0007:** `pandoc_parse::spec::tests::two_rules` asserts the
-  raw `c|cccccc|ccc` input parses to `[1, 7]`, but the live
-  Attention source reaches the parser with a different column spec
-  (the golden test confirms `[1, 10]`).  Worth tracing through
-  `preprocess_latex_source` to find where the rewrite happens so
-  the unit test can pin the post-rewrite shape too.  **Blocker:**
-  needs a minimal repro of the source-to-post-preprocess transform;
-  the integration test catches the divergence but doesn't isolate
-  the cause.
+<!-- ADR-0007 follow-up resolved 2026-05-19 — see Recently Resolved row above. -->
+
 
 ## How to use this document
 
