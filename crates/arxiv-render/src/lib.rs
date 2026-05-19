@@ -182,17 +182,18 @@ mod attention_golden_tests {
         // Attention has two tables that carry vertical rules through
         // the parser: Table 3 (the model-variations table, with rows
         // "base", "(A)", "(B)", … "(E)", "big") and Table 4 (the
-        // parser benchmark).  After `preprocess_latex_source` rewrites
-        // and `extract_tabular_specs` runs, those land as the rule
-        // patterns asserted below.
+        // parser benchmark).
         //
-        // The unit test in `pandoc_parse::spec` asserts the RAW
-        // column-spec `c|cccccc|ccc` parses to `[1, 7]`.  The
-        // integration result of `[1, 10]` here means the live source
-        // (post-preprocess) hits a different spec — e.g. the table
-        // was rewritten or its column spec differs from what ADR-0007
-        // and the inline comments claim.  Worth noting for the next
-        // person hunting the load-bearing case.
+        // Table 3's source spec is `c|ccccccccc|ccc` (results.tex:54
+        // of arXiv:1706.03762 — NINE inner c's plus 1+3 outer cols =
+        // 13 total) → vertical_rules == [1, 10].  Pinned at the unit
+        // level by `pandoc_parse::spec::tests::attention_table_3_spec`.
+        // The neighbouring `two_rules` unit test asserts the synthetic
+        // `c|cccccc|ccc` pattern (6 inner c's, 10 cols total → [1, 7])
+        // — a smaller minimal case, not Table 3.  An earlier draft of
+        // ADR-0007 and several inline comments confused the two; the
+        // ADR-0007 follow-up was closed once the real spec was traced
+        // back to the source.
         let table_3_rules = blocks.iter().any(|b| matches!(
             b,
             Block::Matrix { vertical_rules, .. }
