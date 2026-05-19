@@ -509,8 +509,17 @@ fn emit_table(el: ElementRef, out: &mut Vec<Block>) {
 }
 
 fn emit_figure_caption(el: ElementRef, out: &mut Vec<Block>) {
-    // Prototype: don't try to fetch image assets; surface the caption as a
-    // bold line so the reader still shows "Figure N: …".
+    // Caption-only emission: surface the figure as a bold "Figure N: …"
+    // line so the reader still has something to navigate to with `]f` /
+    // `[f`.  No `Block::Figure` is emitted — that would require fetching
+    // image assets from ar5iv (or piggy-backing on the Pandoc-path
+    // tarball fetch) and resolving paths.
+    //
+    // Tracked as backlog item B9 (`docs/backlog.md`); HIGH severity
+    // because ar5iv is the primary path for ~95% of papers, so most
+    // production users currently see captions-only.  Run
+    // `cargo run --release -p arxiv-render --example parity_probe -- <id>`
+    // to confirm the gap on a specific paper.
     if let Some(cap) = el
         .child_elements()
         .find(|c| c.value().name() == "figcaption")

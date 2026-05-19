@@ -162,6 +162,12 @@ cargo test -p arxiv-render attention_parse_and_layout_golden --release -- --igno
 cargo test -p arxiv-render golden --release -- --ignored --nocapture
 ```
 
+The parser-parity probe at `crates/arxiv-render/examples/parity_probe.rs` runs both the ar5iv (primary) and Pandoc (fallback) parsers on the same paper and prints a per-`Block`-kind count table.  Use it to spot regressions in either parser and to track the ar5iv feature-parity gaps documented in `docs/backlog.md` (B9 — no `Block::Figure`; B10 — no `Block::ListItem`).  On Attention today: ar5iv emits 385 blocks, pandoc 379; ar5iv produces 0 figures vs pandoc's 5 (B9), 0 ListItem vs 3 (B10).
+
+```bash
+cargo run --release -p arxiv-render --example parity_probe -- 1706.03762
+```
+
 ## Known gotchas
 
 - **Parser chain**: ar5iv (LaTeXML HTML at `ar5iv.labs.arxiv.org`) is primary; Pandoc on the e-print tarball is the fallback for papers ar5iv hasn't processed. Pandoc must be on PATH for the fallback path; without it, ar5iv-miss papers fail loudly. Empirical justification under `bench/results/`.
