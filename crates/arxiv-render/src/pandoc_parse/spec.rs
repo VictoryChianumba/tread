@@ -12,10 +12,10 @@
 //!
 //! Pure byte-level scanning; no Pandoc dependency.
 
-use super::{match_brace, match_delim, parse_three_brace_args, skip_ascii_ws};
+use super::preprocess::{match_brace, match_delim, parse_three_brace_args, skip_ascii_ws};
 
 #[cfg(test)]
-use super::preprocess_latex_source;
+use super::preprocess::preprocess_latex_source;
 
 // ── Tabular column-spec extraction (vertical & horizontal rules) ─────────────
 
