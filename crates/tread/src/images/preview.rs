@@ -110,8 +110,8 @@ pub fn place_one_figure(
             let placement_key = (abs_row, abs_col, cols, rows);
 
             // Lazy byte load — same job pipeline as the inline path.
-            if !state.bytes.contains_key(&id) {
-                if let Some(path) = part_path.clone() {
+            if !state.bytes.contains_key(&id)
+                && let Some(path) = part_path.clone() {
                     schedule_image_job(
                         state,
                         ImageJob::resolve_png(id, path),
@@ -119,7 +119,6 @@ pub fn place_one_figure(
                         ImageLoadContext::Preview,
                     );
                 }
-            }
             if state.pending_jobs.contains(&id) {
                 new_preview_ids.insert(id);
                 continue;

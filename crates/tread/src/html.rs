@@ -306,11 +306,10 @@ impl Walker {
                 self.blocks.push(Block::Rule);
             }
             "br" => {
-                if let Some(last) = self.pending.last_mut() {
-                    if !last.text.ends_with(' ') {
+                if let Some(last) = self.pending.last_mut()
+                    && !last.text.ends_with(' ') {
                         last.text.push(' ');
                     }
-                }
             }
             "strong" | "b" => {
                 let prev = self.style.bold;
@@ -359,15 +358,14 @@ impl Walker {
                 }
                 self.table = Some(TableState::default());
                 self.walk_children(el);
-                if let Some(state) = self.table.take() {
-                    if !state.rows.is_empty() {
+                if let Some(state) = self.table.take()
+                    && !state.rows.is_empty() {
                         self.blocks.push(Block::Matrix {
                             rows: state.rows,
                             vertical_rules: Vec::new(), // HTML has no per-column rules
                         });
                         self.blocks.push(Block::Blank);
                     }
-                }
             }
             "thead" | "tbody" | "tfoot" | "colgroup" => {
                 self.walk_children(el);
@@ -377,12 +375,11 @@ impl Walker {
                     state.current_row.clear();
                 }
                 self.walk_children(el);
-                if let Some(state) = self.table.as_mut() {
-                    if !state.current_row.is_empty() {
+                if let Some(state) = self.table.as_mut()
+                    && !state.current_row.is_empty() {
                         let row = std::mem::take(&mut state.current_row);
                         state.rows.push(row);
                     }
-                }
             }
             "td" | "th" => {
                 if self.table.is_some() {
@@ -436,11 +433,10 @@ impl Walker {
             return;
         }
         // Drop a trailing " | " separator left by the last cell of a row.
-        if let Some(last) = self.pending.last_mut() {
-            if last.text == " | " {
+        if let Some(last) = self.pending.last_mut()
+            && last.text == " | " {
                 self.pending.pop();
             }
-        }
         if self.pending.is_empty() {
             return;
         }

@@ -76,7 +76,7 @@ fn panel_row_budget(figure_budget: u16, stack_total: u8) -> u16 {
             .saturating_sub(separators)
             / n
     };
-    raw.min(PANEL_ROW_CAP).max(MIN_IMAGE_ROWS)
+    raw.clamp(MIN_IMAGE_ROWS, PANEL_ROW_CAP)
 }
 
 /// Compute cell `(cols, rows)` for an image given its pixel `dims` and

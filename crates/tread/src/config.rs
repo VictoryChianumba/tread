@@ -114,11 +114,10 @@ fn trench_theme_id() -> Option<ThemeId> {
 /// chain documented at the top of this module.
 pub fn resolve_theme() -> Theme {
     let cfg = load();
-    if let Some(id) = cfg.theme_override.as_deref() {
-        if let Some(tid) = ThemeId::from_id(id) {
+    if let Some(id) = cfg.theme_override.as_deref()
+        && let Some(tid) = ThemeId::from_id(id) {
             return tid.theme();
         }
-    }
     if let Some(tid) = trench_theme_id() {
         return tid.theme();
     }

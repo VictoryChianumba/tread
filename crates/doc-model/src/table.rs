@@ -255,7 +255,7 @@ fn render_table_group(
                             + (n - 1) * gap_width;
                         if tw > cur {
                             let extra = tw - cur;
-                            let per = (extra + n - 1) / n;
+                            let per = extra.div_ceil(n);
                             for ai in ai_start..ai_end {
                                 col_widths[ai] += per;
                             }
@@ -331,7 +331,7 @@ fn render_table_group(
                     .any(|b| matches!(b, Block::Matrix { .. }));
                 let is_cmidrule = k < header_end && seen_matrix && has_matrix_after;
                 if !is_cmidrule {
-                    let is_bottom = last_matrix_k.map_or(false, |lk| k > lk);
+                    let is_bottom = last_matrix_k.is_some_and(|lk| k > lk);
                     let text = if is_bottom {
                         bottom_rule.clone()
                     } else {
@@ -399,7 +399,7 @@ fn render_table_group(
 fn rows_look_like_header(rows: &[Vec<(String, usize)>]) -> bool {
     rows.iter().all(|row| {
         row.iter().any(|(_, span)| *span > 1)
-            || row.first().map_or(true, |(cell, _)| cell.trim().is_empty())
+            || row.first().is_none_or(|(cell, _)| cell.trim().is_empty())
     })
 }
 

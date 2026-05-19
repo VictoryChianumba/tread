@@ -32,7 +32,7 @@ thread_local! {
     pub(super) static CITE_NUMBERS: std::cell::RefCell<std::collections::HashMap<String, usize>>
         = std::cell::RefCell::new(std::collections::HashMap::new());
     pub(super) static BIBITEMS_ORDERED: std::cell::RefCell<Vec<(String, String)>>
-        = std::cell::RefCell::new(Vec::new());
+        = const { std::cell::RefCell::new(Vec::new()) };
     /// Set by the `thebibliography` Div arm when we hand off rendering
     /// to `synthesize_bibliography`.  Consulted at the end of
     /// `try_pandoc` to decide whether to auto-append a synthesized
@@ -171,14 +171,13 @@ fn find_root_name(sources: &[(String, String)]) -> String {
 fn extract_meta_blocks(meta: &Value) -> Vec<Block> {
     let mut out = vec![Block::Blank];
 
-    if let Some(title_meta) = meta.get("title") {
-        if let Some(inlines) = title_meta["c"].as_array() {
+    if let Some(title_meta) = meta.get("title")
+        && let Some(inlines) = title_meta["c"].as_array() {
             let text = walk_inlines_text(inlines);
             if !text.is_empty() {
                 out.push(Block::Header { level: 1, text });
             }
         }
-    }
 
     if let Some(author_meta) = meta.get("author") {
         let names = extract_author_names(author_meta);
@@ -371,16 +370,15 @@ fn walk_blocks(
                 let level = c[0].as_u64().unwrap_or(1).min(3) as u8;
                 // c[1] = attr = [id, classes, key_vals]. Pandoc tags `\section*{}`
                 // and friends with class="unnumbered" — skip prefix for those.
-                let unnumbered = c[1][1].as_array().map_or(false, |classes| {
+                let unnumbered = c[1][1].as_array().is_some_and(|classes| {
                     classes.iter().any(|cl| cl.as_str() == Some("unnumbered"))
                 });
                 // attr.id is the LaTeX label (or Pandoc-generated slug).
                 // Emit an Anchor so reader can resolve `\ref{}` jumps.
-                if let Some(id) = c[1][0].as_str() {
-                    if !id.is_empty() {
+                if let Some(id) = c[1][0].as_str()
+                    && !id.is_empty() {
                         out.push(Block::Anchor(id.to_string()));
                     }
-                }
                 if let Some(inlines) = c[2].as_array() {
                     let raw = walk_inlines_text(inlines);
                     if !raw.is_empty() {
@@ -404,14 +402,13 @@ fn walk_blocks(
                     .and_then(|cls| cls.first())
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                if let Some(code) = c[1].as_str() {
-                    if !code.is_empty() {
+                if let Some(code) = c[1].as_str()
+                    && !code.is_empty() {
                         out.push(Block::CodeBlock {
                             lang,
                             lines: code.lines().map(|l| l.to_string()).collect(),
                         });
                     }
-                }
             }
 
             "BlockQuote" => {
@@ -475,18 +472,17 @@ fn walk_blocks(
                 // (e.g. table/figure/equation envs in newer Pandoc); emit
                 // an Anchor so reader can resolve refs.  Bib entry divs
                 // (id starts with "ref-") are picked up here too.
-                if let Some(id) = c[0][0].as_str() {
-                    if !id.is_empty() {
+                if let Some(id) = c[0][0].as_str()
+                    && !id.is_empty() {
                         out.push(Block::Anchor(id.to_string()));
                     }
-                }
                 // Special-case `\begin{thebibliography}` divs: Pandoc
                 // emits the inner Paras as plain prose without
                 // cite-keys, which means citations can't jump or popup.
                 // We replace the inner content with a synthesized
                 // numbered bibliography pulled from the source-extracted
                 // bibitem map.
-                let is_thebib = c[0][1].as_array().map_or(false, |classes| {
+                let is_thebib = c[0][1].as_array().is_some_and(|classes| {
                     classes
                         .iter()
                         .any(|cl| cl.as_str() == Some("thebibliography"))
@@ -623,9 +619,10 @@ fn para_to_block(inlines: &[Value], counters: &mut SectionCounters) -> Vec<Block
 /// Pandoc doesn't lift math labels to `attr.id`.
 /// Count how many equation numbers a display-math source claims.
 /// Numbered top-level envs:
-///   - `equation`, `multline` → 1 number total (multline only the last
-///     line is numbered, but for our purposes one number per block).
-///   - `align`, `gather`, `eqnarray` → one number per `\\`-separated row.
+/// - `equation`, `multline` → 1 number total (multline only the last
+///   line is numbered, but for our purposes one number per block).
+/// - `align`, `gather`, `eqnarray` → one number per `\\`-separated row.
+///
 /// Unnumbered envs (`*`-variants) → 0.  Sub-envs that don't number
 /// themselves (`aligned`, `gathered`, `cases`, matrix family) → 0.
 /// Bare display math without a `\begin{}` wrapper → 1 (treated as
@@ -695,8 +692,8 @@ fn list_item_blocks(
 
     for block in item_blocks {
         let t = block["t"].as_str().unwrap_or("");
-        if !emitted_item && (t == "Para" || t == "Plain") {
-            if let Some(inlines) = block["c"].as_array() {
+        if !emitted_item && (t == "Para" || t == "Plain")
+            && let Some(inlines) = block["c"].as_array() {
                 let content = walk_inlines_spans(inlines);
                 if !content.is_empty() {
                     out.push(Block::ListItem {
@@ -708,7 +705,6 @@ fn list_item_blocks(
                     continue;
                 }
             }
-        }
         // Nested lists or extra blocks inside an item.
         out.extend(walk_blocks(
             std::slice::from_ref(block),

@@ -205,7 +205,7 @@ pub fn place_visible(reader: &Reader, state: &mut ImageState, content_area: Rect
     // user-visible fallback.
     let has_cache = kitty_graphics::has_persistent_image_cache();
     for &(id, abs_row, rows, abs_col, cols) in &placements {
-        if !state.bytes.contains_key(&id) {
+        if let std::collections::hash_map::Entry::Vacant(e) = state.bytes.entry(id) {
             if let Some(path) = reader.image_paths().get(&id).cloned() {
                 schedule_image_job(
                     state,
@@ -214,7 +214,7 @@ pub fn place_visible(reader: &Reader, state: &mut ImageState, content_area: Rect
                     ImageLoadContext::Inline,
                 );
             } else {
-                state.bytes.insert(id, None);
+                e.insert(None);
             }
         }
         if state.pending_jobs.contains(&id) {

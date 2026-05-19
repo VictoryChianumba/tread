@@ -170,11 +170,10 @@ fn scan_table_horizontal_rules(bytes: &[u8], start: usize) -> (Vec<usize>, usize
         if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
             i += 2;
             i = skip_ascii_ws(bytes, i);
-            if i < bytes.len() && bytes[i] == b'[' {
-                if let Some(close) = match_delim(bytes, i, b'[', b']') {
+            if i < bytes.len() && bytes[i] == b'['
+                && let Some(close) = match_delim(bytes, i, b'[', b']') {
                     i = close + 1;
                 }
-            }
             if i < bytes.len() && bytes[i] == b'*' {
                 i += 1;
             }
@@ -207,15 +206,14 @@ fn scan_table_horizontal_rules(bytes: &[u8], start: usize) -> (Vec<usize>, usize
         // \specialrule{}{}{}
         if bytes[i..].starts_with(b"\\specialrule") {
             let after = i + b"\\specialrule".len();
-            if after >= bytes.len() || !bytes[after].is_ascii_alphanumeric() {
-                if let Some((_, _, end)) = parse_three_brace_args(bytes, after) {
+            if (after >= bytes.len() || !bytes[after].is_ascii_alphanumeric())
+                && let Some((_, _, end)) = parse_three_brace_args(bytes, after) {
                     if rules.last() != Some(&row_idx) {
                         rules.push(row_idx);
                     }
                     i = end;
                     continue;
                 }
-            }
         }
         i += utf8_char_width(bytes[i]);
     }
@@ -226,9 +224,8 @@ fn scan_table_horizontal_rules(bytes: &[u8], start: usize) -> (Vec<usize>, usize
 /// to 1 for ill-formed leading bytes so the scanner makes progress instead of
 /// looping forever.
 pub(super) fn utf8_char_width(b: u8) -> usize {
-    if b < 0x80 {
-        1
-    } else if b < 0xC2 {
+    if b < 0xC2 {
+        // Covers both ASCII (< 0x80) and ill-formed leading bytes (0x80..0xC2).
         1
     } else if b < 0xE0 {
         2
@@ -276,8 +273,8 @@ pub(crate) struct ParsedColumnSpec {
 /// - `p{...}`, `m{...}`, `b{...}` — a column with width arg (count += 1, skip arg)
 /// - `|`                       — vertical rule before next column
 /// - `>{...}`, `<{...}`, `!{...}` — column-modifier macros (skip brace group)
-/// - `@{...}`                  — column separator; non-empty content
-///                                between two columns marks a group break
+/// - `@{...}`                  — column separator; non-empty content between
+///   two columns marks a group break
 /// - whitespace                — ignored
 ///
 /// Returns `None` if the spec uses unsupported syntax (e.g. `*{N}{spec}` or

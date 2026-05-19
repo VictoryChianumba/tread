@@ -75,7 +75,7 @@ pub(crate) fn wrap_spans(spans: &[InlineSpan], width: usize) -> Vec<(Vec<InlineS
         line_width += token.chars().count();
 
         // Coalesce with previous span when style is identical.
-        let coalesce = line_spans.last().map_or(false, |last| {
+        let coalesce = line_spans.last().is_some_and(|last| {
             last.bold == word.bold
                 && last.italic == word.italic
                 && last.underline == word.underline

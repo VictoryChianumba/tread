@@ -140,13 +140,11 @@ fn identify_groups(blocks: &[Block]) -> Vec<GroupRange> {
         let mut start = i;
         // Capture preceding caption line (placed above the table since the
         // caption-above convention).  Newer caption format is "[Table N:".
-        if start > 0 {
-            if let Block::Line(s) = &blocks[start - 1] {
-                if s.starts_with("[Table") {
+        if start > 0
+            && let Block::Line(s) = &blocks[start - 1]
+                && s.starts_with("[Table") {
                     start -= 1;
                 }
-            }
-        }
         // Capture any preceding `Block::Anchor` (the table's `\label`
         // marker emitted from a Pandoc Div with id="tab:X") so it travels
         // with the lifted table — without this, references to the table

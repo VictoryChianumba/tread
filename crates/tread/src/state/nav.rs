@@ -18,9 +18,7 @@ fn is_word_char(b: u8) -> bool {
 fn char_kind(b: u8, big: bool) -> u8 {
     if b.is_ascii_whitespace() {
         0
-    } else if big {
-        1
-    } else if is_word_char(b) {
+    } else if big || is_word_char(b) {
         1
     } else {
         2

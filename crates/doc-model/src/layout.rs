@@ -83,8 +83,8 @@ pub fn build_visual_lines(
                 let n = lines.len();
                 for (li, line) in lines.iter().enumerate() {
                     let mut centered = center_line(line, block_width, terminal_width);
-                    if li == n - 1 {
-                        if let Some(eq_num) = num {
+                    if li == n - 1
+                        && let Some(eq_num) = num {
                             let tag = format!("({})", eq_num);
                             let used = visual_width(&centered);
                             let avail = terminal_width.saturating_sub(tag.len());
@@ -93,7 +93,6 @@ pub fn build_visual_lines(
                             }
                             centered.push_str(&tag);
                         }
-                    }
                     out.push(VisualLine {
                         block_idx,
                         line_in_block: li,

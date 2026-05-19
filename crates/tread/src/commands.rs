@@ -60,7 +60,7 @@ pub fn execute(reader: &mut Reader, line: &str) -> ReaderAction {
 
   let n = name.as_str();
   for (canonical, aliases, handler) in command_table() {
-    if n == *canonical || aliases.iter().any(|a| *a == n) {
+    if n == *canonical || aliases.contains(&n) {
       return handler(reader, &args);
     }
   }
@@ -171,7 +171,7 @@ fn cmd_goto(reader: &mut Reader, args: &[&str]) -> ReaderAction {
     return ReaderAction::Error("no sections in this document".to_string());
   }
   // First try numeric form ("3", "3.2", "3.2.1").
-  let target = if arg.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+  let target = if arg.chars().next().is_some_and(|c| c.is_ascii_digit()) {
     reader.sections().iter().find(|s| section_starts_with(&s.2, &arg)).map(|s| s.0)
   } else {
     let needle = arg.to_ascii_lowercase();

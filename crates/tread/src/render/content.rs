@@ -61,7 +61,7 @@ pub(super) fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &T
             };
             let is_cursor = row == reader.cursor_y();
             let is_bookmarked = reader.is_line_bookmarked(vl_idx);
-            let is_selected = visual_range.map_or(false, |(lo, hi)| vl_idx >= lo && vl_idx <= hi);
+            let is_selected = visual_range.is_some_and(|(lo, hi)| vl_idx >= lo && vl_idx <= hi);
             let cursor_col = if is_cursor {
                 Some(reader.cursor_x())
             } else {
@@ -88,11 +88,10 @@ pub(super) fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &T
             // persistent character highlights; reuse rather than introducing
             // a parallel system.  Visually distinct because search/highlight
             // never occur during active playback.
-            if let Some((word_vl, ws, we)) = voice_word {
-                if word_vl == vl_idx {
+            if let Some((word_vl, ws, we)) = voice_word
+                && word_vl == vl_idx {
                     highlight_ranges.push((ws, we));
                 }
-            }
             let mut line = render_visual_line(
                 vl,
                 is_cursor,
@@ -100,7 +99,7 @@ pub(super) fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &T
                 is_selected,
                 cursor_col,
                 &q,
-                &reader.search_matches(),
+                reader.search_matches(),
                 vl_idx,
                 &highlight_ranges,
                 t,

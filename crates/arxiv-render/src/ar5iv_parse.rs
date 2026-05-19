@@ -37,15 +37,13 @@ pub fn extract_bibitems(blocks: &[Block]) -> HashMap<String, String> {
     while let Some(b) = iter.next() {
         if let Block::Anchor(id) = b
             && id.starts_with("bib.")
-        {
-            if let Some(Block::StyledLine(spans)) = iter.peek() {
+            && let Some(Block::StyledLine(spans)) = iter.peek() {
                 let text: String = spans.iter().map(|s| s.text.as_str()).collect();
                 let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
                 if !cleaned.is_empty() {
                     out.insert(id.clone(), cleaned);
                 }
             }
-        }
     }
     out
 }
@@ -115,9 +113,9 @@ fn walk_section(el: ElementRef, level: u8, out: &mut Vec<Block>) {
             out.push(Block::Blank);
         } else if has_class(&classes, "ltx_subsection") {
             walk_section(child, level + 1, out);
-        } else if has_class(&classes, "ltx_subsubsection") {
-            walk_section(child, level + 2, out);
-        } else if has_class(&classes, "ltx_paragraph") {
+        } else if has_class(&classes, "ltx_subsubsection")
+            || has_class(&classes, "ltx_paragraph")
+        {
             walk_section(child, level + 2, out);
         } else if has_class(&classes, "ltx_appendix") {
             walk_section(child, level, out);
@@ -326,19 +324,17 @@ fn inline_spans_inner(el: ElementRef, mut style: Style, out: &mut Vec<InlineSpan
 
     // Citations and cross-references hand back interactive spans even when
     // their inner text is short — that's what makes them clickable.
-    if tag == "a" {
-        if let Some(span) = link_span(el, style) {
+    if tag == "a"
+        && let Some(span) = link_span(el, style) {
             out.push(span);
             return;
         }
-    }
     if has_class(&classes, "ltx_cite") {
         for child in el.child_elements() {
-            if child.value().name() == "a" {
-                if let Some(span) = link_span(child, style) {
+            if child.value().name() == "a"
+                && let Some(span) = link_span(child, style) {
                     out.push(span);
                 }
-            }
         }
         return;
     }
@@ -564,7 +560,7 @@ fn collect_heading_text(el: ElementRef) -> String {
 }
 
 fn has_class(classes: &[&str], target: &str) -> bool {
-    classes.iter().any(|c| *c == target)
+    classes.contains(&target)
 }
 
 fn heading_level(classes: &[&str], _section_level: u8) -> u8 {

@@ -179,11 +179,10 @@ fn looks_like_data_row(row: &[(String, usize)]) -> bool {
     if starts_with_ascii_digit(first) {
         return true;
     }
-    if let Some(second) = non_empty.next() {
-        if starts_with_ascii_digit(second) {
+    if let Some(second) = non_empty.next()
+        && starts_with_ascii_digit(second) {
             return true;
         }
-    }
     false
 }
 

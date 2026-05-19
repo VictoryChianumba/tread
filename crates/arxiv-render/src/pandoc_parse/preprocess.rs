@@ -51,15 +51,14 @@ fn strip_resizebox(src: &str) -> String {
                 after += 1;
             }
             let bnd_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
-            if bnd_ok {
-                if let Some((arg3_start, arg3_end, end)) = parse_three_brace_args(bytes, after) {
+            if bnd_ok
+                && let Some((arg3_start, arg3_end, end)) = parse_three_brace_args(bytes, after) {
                     out.push_str(&src[copy_from..i]);
                     out.push_str(&src[arg3_start..arg3_end]);
                     i = end;
                     copy_from = end;
                     continue;
                 }
-            }
         }
         i += 1;
     }
@@ -77,15 +76,14 @@ fn strip_adjustbox(src: &str) -> String {
         if &bytes[i..i + cmd.len()] == cmd {
             let after = i + cmd.len();
             let bnd_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
-            if bnd_ok {
-                if let Some((arg2_start, arg2_end, end)) = parse_two_brace_args(bytes, after) {
+            if bnd_ok
+                && let Some((arg2_start, arg2_end, end)) = parse_two_brace_args(bytes, after) {
                     out.push_str(&src[copy_from..i]);
                     out.push_str(&src[arg2_start..arg2_end]);
                     i = end;
                     copy_from = end;
                     continue;
                 }
-            }
         }
         i += 1;
     }
@@ -103,15 +101,14 @@ fn strip_scalebox(src: &str) -> String {
         if &bytes[i..i + cmd.len()] == cmd {
             let after = i + cmd.len();
             let bnd_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
-            if bnd_ok {
-                if let Some((arg2_start, arg2_end, end)) = parse_two_brace_args(bytes, after) {
+            if bnd_ok
+                && let Some((arg2_start, arg2_end, end)) = parse_two_brace_args(bytes, after) {
                     out.push_str(&src[copy_from..i]);
                     out.push_str(&src[arg2_start..arg2_end]);
                     i = end;
                     copy_from = end;
                     continue;
                 }
-            }
         }
         i += 1;
     }
@@ -129,15 +126,14 @@ fn strip_multirow(src: &str) -> String {
         if &bytes[i..i + cmd.len()] == cmd {
             let after = i + cmd.len();
             let bnd_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
-            if bnd_ok {
-                if let Some((arg3_start, arg3_end, end)) = parse_three_brace_args(bytes, after) {
+            if bnd_ok
+                && let Some((arg3_start, arg3_end, end)) = parse_three_brace_args(bytes, after) {
                     out.push_str(&src[copy_from..i]);
                     out.push_str(&src[arg3_start..arg3_end]);
                     i = end;
                     copy_from = end;
                     continue;
                 }
-            }
         }
         i += 1;
     }
@@ -155,8 +151,8 @@ fn strip_cmidrule(src: &str) -> String {
         if &bytes[i..i + cmd.len()] == cmd {
             let after = i + cmd.len();
             let bnd_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
-            if bnd_ok {
-                if let Some(end) = parse_cmidrule_args(bytes, after) {
+            if bnd_ok
+                && let Some(end) = parse_cmidrule_args(bytes, after) {
                     out.push_str(&src[copy_from..i]);
                     // Drop the command entirely — surrounding whitespace
                     // already separates it from neighbouring tokens.
@@ -164,7 +160,6 @@ fn strip_cmidrule(src: &str) -> String {
                     copy_from = end;
                     continue;
                 }
-            }
         }
         i += 1;
     }

@@ -43,7 +43,7 @@ pub(super) fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme
             };
             let avail = inner_w.saturating_sub(indent);
             let label = format!(" {}{}", " ".repeat(indent), toc_trunc(text, avail));
-            let is_current = cur_sec.map_or(false, |c| c == sec_idx);
+            let is_current = cur_sec == Some(sec_idx);
             if is_current {
                 Line::styled(
                     label,

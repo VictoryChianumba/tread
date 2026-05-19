@@ -14,7 +14,7 @@ pub(crate) fn take_count(reader: &mut Reader) -> usize {
   if reader.count_buf().is_empty() {
     1
   } else {
-    let n: usize = reader.count_buf().parse().unwrap_or(1).max(1).min(9999);
+    let n: usize = reader.count_buf().parse().unwrap_or(1).clamp(1, 9999);
     reader.clear_count();
     n
   }
@@ -39,12 +39,11 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
   }
 
   // Digit accumulation for count prefix (1–9 to start, 0 only after first digit).
-  if let KeyCode::Char(c) = code {
-    if c.is_ascii_digit() && (c != '0' || !reader.count_buf().is_empty()) {
+  if let KeyCode::Char(c) = code
+    && c.is_ascii_digit() && (c != '0' || !reader.count_buf().is_empty()) {
       reader.push_count_char(c);
       return false;
     }
-  }
 
   match code {
     KeyCode::Char('q') | KeyCode::Esc => {
@@ -256,15 +255,14 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
     // Remove highlight under cursor — eXcise.
     KeyCode::Char('X') => {
       reader.clear_count();
-      if let Some(vl) = reader.visual_lines().get(reader.current_line()) {
-        if vl.block_byte_end > vl.block_byte_start {
+      if let Some(vl) = reader.visual_lines().get(reader.current_line())
+        && vl.block_byte_end > vl.block_byte_start {
           let local = reader
             .cursor_x()
             .min(vl.block_byte_end - vl.block_byte_start - 1);
           let byte_in_block = vl.block_byte_start + local;
           reader.highlights.remove_at(vl.block_idx, byte_in_block);
         }
-      }
     }
     KeyCode::Char('*') => {
       reader.clear_count();
@@ -365,11 +363,10 @@ pub(crate) fn handle_search(reader: &mut Reader, code: KeyCode) {
 pub(crate) fn handle_awaiting_char(reader: &mut Reader, code: KeyCode, kind: FindKind) {
   // One-shot: any keystroke ends AwaitingChar.  A Char(c) performs the find;
   // anything else (Esc, arrow keys, etc.) is a quiet cancel.
-  if let KeyCode::Char(c) = code {
-    if let Some(idx) = reader.find_char_in_line(c, kind) {
+  if let KeyCode::Char(c) = code
+    && let Some(idx) = reader.find_char_in_line(c, kind) {
       reader.set_cursor_x(idx);
     }
-  }
   reader.return_to_normal();
 }
 
@@ -581,15 +578,14 @@ pub(crate) fn handle_awaiting_bracket(reader: &mut Reader, code: KeyCode, forwar
 
 pub(crate) fn handle_awaiting_mark_name(reader: &mut Reader, code: KeyCode, for_set: bool) {
   // One-shot: a letter `Char(c)` either sets or jumps; anything else cancels.
-  if let KeyCode::Char(c) = code {
-    if c.is_ascii_alphabetic() {
+  if let KeyCode::Char(c) = code
+    && c.is_ascii_alphabetic() {
       if for_set {
         reader.set_mark(c);
       } else {
         reader.jump_to_mark(c);
       }
     }
-  }
   reader.return_to_normal();
 }
 
@@ -774,7 +770,7 @@ pub(crate) fn osc52_yank(text: &str) {
 
 fn base64_encode(data: &[u8]) -> String {
   const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+  let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
   for chunk in data.chunks(3) {
     let b0 = chunk[0] as usize;
     let b1 = chunk.get(1).copied().unwrap_or(0) as usize;

@@ -67,11 +67,10 @@ fn scan_thebibliography(content: &str) -> Vec<(String, String)> {
         }
         let mut j = i + 8;
         // Optional [label] argument.
-        if j < bytes.len() && bytes[j] == b'[' {
-            if let Some(close) = (j..bytes.len()).find(|&k| bytes[k] == b']') {
+        if j < bytes.len() && bytes[j] == b'['
+            && let Some(close) = (j..bytes.len()).find(|&k| bytes[k] == b']') {
                 j = close + 1;
             }
-        }
         if j >= bytes.len() || bytes[j] != b'{' {
             i = j;
             continue;

@@ -128,9 +128,10 @@ pub struct CaptionPlacement {
 /// when the two callers compute column positions independently.
 ///
 /// Layout order from top to bottom:
-///   1. `headers` (column labels)
-///   2. `image_rows` (the figure body)
-///   3. `caption` (one row of vertical breathing room, then wrapped text)
+/// 1. `headers` (column labels)
+/// 2. `image_rows` (the figure body)
+/// 3. `caption` (one row of vertical breathing room, then wrapped text)
+///
 /// The block is vertically centered inside the input `area`; everything
 /// inside is contiguous (no inter-section padding beyond the caption
 /// gap), so the figure reads as one visual unit rather than three

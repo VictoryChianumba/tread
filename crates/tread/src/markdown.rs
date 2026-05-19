@@ -6,11 +6,13 @@
 //! to support GitHub READMEs and any markdown source the host opens.
 //!
 //! Mapping summary:
+//!
+//! ```text
 //!   #..######           → Block::Header { level: 1..3 }  (clamped)
 //!   plain paragraph     → Block::StyledLine(spans)
 //!   blockquote          → Block::Quote(spans)
 //!   - item / 1. item    → Block::ListItem { depth, marker, content }
-//!   ```lang ... ```     → Block::CodeBlock { lang, lines }
+//!   `lang ... `         → Block::CodeBlock { lang, lines }
 //!   ---                 → Block::Rule
 //!   blank between blocks → Block::Blank
 //!   ![alt](url)         → degraded to "[Image: alt]" StyledLine
@@ -18,6 +20,7 @@
 //!   `inline code`       → InlineSpan { monospace: true }
 //!   **bold** / *italic* → InlineSpan { bold | italic }
 //!   [link](url)         → InlineSpan { url: Some(url) }
+//! ```
 //!
 //! No math handling — markdown doesn't have a standard math syntax,
 //! and adding TeX inline (`$...$`) would conflict with shell-prompt
@@ -110,11 +113,10 @@ impl Walker {
             Event::SoftBreak | Event::HardBreak => {
                 // Treat both as a single space so paragraphs flow.  Hard
                 // breaks could become explicit newlines later if needed.
-                if let Some(last) = self.pending.last_mut() {
-                    if !last.text.ends_with(' ') {
+                if let Some(last) = self.pending.last_mut()
+                    && !last.text.ends_with(' ') {
                         last.text.push(' ');
                     }
-                }
             }
             Event::Rule => {
                 self.flush_pending();
@@ -235,7 +237,7 @@ impl Walker {
                 if let Some(cb) = self.code_block.take() {
                     let lines: Vec<String> = cb.buf.split('\n').map(|s| s.to_string()).collect();
                     // Trim a trailing empty line if the fence had \n before ```.
-                    let lines = if lines.last().map_or(false, |l| l.is_empty()) {
+                    let lines = if lines.last().is_some_and(|l| l.is_empty()) {
                         lines[..lines.len() - 1].to_vec()
                     } else {
                         lines
@@ -277,23 +279,21 @@ impl Walker {
             TagEnd::Strikethrough => self.style.strikethrough = false,
             TagEnd::Link => self.link_url = None,
             TagEnd::Table => {
-                if let Some(state) = self.table.take() {
-                    if !state.rows.is_empty() {
+                if let Some(state) = self.table.take()
+                    && !state.rows.is_empty() {
                         self.blocks.push(Block::Matrix {
                             rows: state.rows,
                             vertical_rules: Vec::new(),
                         });
                         self.blocks.push(Block::Blank);
                     }
-                }
             }
             TagEnd::TableHead | TagEnd::TableRow => {
-                if let Some(state) = self.table.as_mut() {
-                    if !state.current_row.is_empty() {
+                if let Some(state) = self.table.as_mut()
+                    && !state.current_row.is_empty() {
                         let row = std::mem::take(&mut state.current_row);
                         state.rows.push(row);
                     }
-                }
             }
             TagEnd::TableCell => {
                 if let Some(state) = self.table.as_mut() {

@@ -308,7 +308,7 @@ pub(super) fn walk_inlines_spans(inlines: &[Value]) -> Vec<InlineSpan> {
             "Span" => {
                 // c = [attr, inlines]  where attr = [id, [classes], [kvs]]
                 // Skip footnote markers — they leak superscript letters/numbers into prose.
-                let is_footnote = c[0][1].as_array().map_or(false, |cls| {
+                let is_footnote = c[0][1].as_array().is_some_and(|cls| {
                     cls.iter().any(|cl| {
                         matches!(
                             cl.as_str(),
@@ -316,11 +316,10 @@ pub(super) fn walk_inlines_spans(inlines: &[Value]) -> Vec<InlineSpan> {
                         )
                     })
                 });
-                if !is_footnote {
-                    if let Some(inner) = c[1].as_array() {
+                if !is_footnote
+                    && let Some(inner) = c[1].as_array() {
                         out.extend(walk_inlines_spans(inner));
                     }
-                }
             }
 
             "Image" => {

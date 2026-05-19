@@ -267,12 +267,11 @@ fn playback_loop(
                         if buf.buffered_len() >= PRE_BUFFER || buf.is_done() {
                             break;
                         }
-                        if let Ok(interrupt) = cmd_rx.try_recv() {
-                            if matches!(interrupt, PlaybackCommand::Stop) {
+                        if let Ok(interrupt) = cmd_rx.try_recv()
+                            && matches!(interrupt, PlaybackCommand::Stop) {
                                 was_stopped = true;
                                 break 'chunks;
                             }
-                        }
                         thread::sleep(Duration::from_millis(20));
                     }
 

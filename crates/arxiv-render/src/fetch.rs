@@ -286,11 +286,10 @@ fn append_ext(path: &Path, suffix: &str) -> PathBuf {
 
 fn extract_tex_files(bytes: &[u8], asset_dir: &Path) -> Result<Vec<(String, String)>, String> {
   // Try tar.gz (the common case).
-  if let Ok(files) = try_tar_gz(bytes, asset_dir) {
-    if !files.is_empty() {
+  if let Ok(files) = try_tar_gz(bytes, asset_dir)
+    && !files.is_empty() {
       return Ok(files);
     }
-  }
 
   // Some older submissions are a plain gzipped .tex file (not a tar).
   if let Ok(content) = try_plain_gz(bytes) {

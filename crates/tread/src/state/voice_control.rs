@@ -99,17 +99,15 @@ pub fn handle_voice_keys(reader: &mut Reader, key: KeyEvent) -> bool {
             if !reader.reading_mode {
                 reader.reading_mode = true;
             } else {
-                if let Some(vc) = &reader.voice_controller {
-                    if !matches!(reader.voice_status, PlaybackStatus::Idle) {
+                if let Some(vc) = &reader.voice_controller
+                    && !matches!(reader.voice_status, PlaybackStatus::Idle) {
                         vc.stop();
                     }
-                }
                 reader.continuous_reading = false;
-                if let Some((text, start, end)) = paragraph_with_range(reader, false) {
-                    if !text.trim().is_empty() {
+                if let Some((text, start, end)) = paragraph_with_range(reader, false)
+                    && !text.trim().is_empty() {
                         voice_start(reader, text, start, end);
                     }
-                }
             }
             true
         }
@@ -118,16 +116,14 @@ pub fn handle_voice_keys(reader: &mut Reader, key: KeyEvent) -> bool {
         KeyCode::Char('R') => {
             reader.reading_mode = true;
             reader.continuous_reading = false;
-            if let Some(vc) = &reader.voice_controller {
-                if !matches!(reader.voice_status, PlaybackStatus::Idle) {
+            if let Some(vc) = &reader.voice_controller
+                && !matches!(reader.voice_status, PlaybackStatus::Idle) {
                     vc.stop();
                 }
-            }
-            if let Some((text, start, end)) = cursor_to_paragraph_end(reader) {
-                if !text.trim().is_empty() {
+            if let Some((text, start, end)) = cursor_to_paragraph_end(reader)
+                && !text.trim().is_empty() {
                     voice_start(reader, text, start, end);
                 }
-            }
             true
         }
 
@@ -136,16 +132,14 @@ pub fn handle_voice_keys(reader: &mut Reader, key: KeyEvent) -> bool {
             if reader.reading_mode && key.modifiers.contains(KeyModifiers::CONTROL) =>
         {
             reader.continuous_reading = true;
-            if let Some(vc) = &reader.voice_controller {
-                if !matches!(reader.voice_status, PlaybackStatus::Idle) {
+            if let Some(vc) = &reader.voice_controller
+                && !matches!(reader.voice_status, PlaybackStatus::Idle) {
                     vc.stop();
                 }
-            }
-            if let Some((text, start, end)) = paragraph_with_range(reader, false) {
-                if !text.trim().is_empty() {
+            if let Some((text, start, end)) = paragraph_with_range(reader, false)
+                && !text.trim().is_empty() {
                     voice_start(reader, text, start, end);
                 }
-            }
             true
         }
 
@@ -380,14 +374,13 @@ pub fn sync_voice_status(reader: &mut Reader) {
         reader.voice_status = PlaybackStatus::Idle;
         reader.voice_started_at = None;
     }
-    if let Ok(info_guard) = vc.playing_info.lock() {
-        if let Some(info) = info_guard.as_ref() {
+    if let Ok(info_guard) = vc.playing_info.lock()
+        && let Some(info) = info_guard.as_ref() {
             reader.voice_para_start = info.doc_start_line;
             reader.voice_para_end = info.doc_end_line;
             reader.voice_started_at = Some(info.started_at);
             reader.voice_chars_before = info.chars_before_chunk;
         }
-    }
     if matches!(
         reader.voice_status,
         PlaybackStatus::Idle | PlaybackStatus::Paused

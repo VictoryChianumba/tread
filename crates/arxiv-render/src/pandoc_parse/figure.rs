@@ -47,11 +47,10 @@ pub(super) fn extract_figure(
     // Pandoc's Figure node carries the LaTeX `\label{}` at attr.id
     // (c[0][0]).  Emit an Anchor before the caption so `\ref{fig:X}`
     // resolves at runtime.
-    if let Some(id) = c[0][0].as_str() {
-        if !id.is_empty() {
+    if let Some(id) = c[0][0].as_str()
+        && !id.is_empty() {
             out.push(Block::Anchor(id.to_string()));
         }
-    }
     let cap = extract_caption_text(&c[1]);
     let n = counters.bump_figure();
     let alt = if cap.is_empty() {
@@ -212,8 +211,8 @@ fn walk_for_images_with_width(nodes: &[Value], out: &mut Vec<(String, bool)>) {
             let c = &node["c"];
             // c = [attr, alt_inlines, [src, title]]
             // attr = [id, classes, key-value pairs]
-            if let Some(src) = c[2][0].as_str() {
-                if !src.is_empty() {
+            if let Some(src) = c[2][0].as_str()
+                && !src.is_empty() {
                     let full = c[0][2]
                         .as_array()
                         .map(|kvs| {
@@ -226,7 +225,6 @@ fn walk_for_images_with_width(nodes: &[Value], out: &mut Vec<(String, bool)>) {
                     out.push((src.to_string(), full));
                     continue;
                 }
-            }
         }
         if let Some(arr) = node["c"].as_array() {
             walk_for_images_with_width(arr, out);
@@ -399,13 +397,12 @@ fn walk_for_images(nodes: &[Value], out: &mut Vec<String>) {
     for node in nodes {
         if node["t"].as_str() == Some("Image") {
             // c = [attr, alt_inlines, [src, title]]
-            if let Some(src) = node["c"][2][0].as_str() {
-                if !src.is_empty() {
+            if let Some(src) = node["c"][2][0].as_str()
+                && !src.is_empty() {
                     out.push(src.to_string());
                     // Don't recurse into the matched Image's own children.
                     continue;
                 }
-            }
         }
         // Recurse into child arrays — Pandoc nests Image inside Plain,
         // Para, Div, etc.  The child structure varies per node type so
