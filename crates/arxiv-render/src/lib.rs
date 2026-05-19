@@ -387,6 +387,82 @@ mod golden_tests {
         assert_visual_line_count(ID, blocks, EXPECTED_VISUAL_LINES);
     }
 
+    // ── 3D Gaussian Head Reconstruction (2605.04035) ───────────────
+    // Pins the external-`\bibliography{file.bib}` path that B3a was
+    // originally about.  This paper SHIPS its .bib in the e-print
+    // tarball (referenced via `\bibliography{...}`), so the
+    // `bibitems::extract_bibitems_ordered` → `bibtex::extract_bibtex_entries`
+    // wiring reads the entries, the auto-append in `try_pandoc`
+    // synthesizes a References section, and citations resolve.
+    //
+    // Compare with Attention: it ALSO uses `\bibliography{NIPS2017}`
+    // but doesn't ship NIPS2017.bib in the tarball, so the Pandoc
+    // fallback can't reconstruct the bibliography from the local
+    // sources alone.  Production users hit the ar5iv primary path
+    // for that case (ar5iv runs bibtex itself, so the rendered HTML
+    // carries the bibliography).
+
+    #[test]
+    #[ignore]
+    fn gaussian_head_parse_and_layout_golden() {
+        const ID: &str = "2605.04035";
+        const EXPECTED_BLOCKS: usize = 789;
+        const EXPECTED_VISUAL_LINES: usize = 1496;
+
+        let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
+
+        // Title.
+        assert!(
+            blocks.iter().any(|b| matches!(
+                b,
+                Block::Header { level: 1, text }
+                    if text.contains("Gaussian Head Reconstruction")
+            )),
+            "[{ID}] expected H1 title containing 'Gaussian Head Reconstruction'",
+        );
+
+        // References header — the load-bearing B3a assertion.  This
+        // paper ships its .bib in the tarball; without the
+        // `bibitems` → `bibtex` wiring, the auto-append path in
+        // `try_pandoc` would never fire and this header would be
+        // missing.
+        assert!(
+            blocks.iter().any(|b| matches!(
+                b,
+                Block::Header { text, .. } if text == "References"
+            )),
+            "[{ID}] expected References header (B3a regression — bib parsing broken?)",
+        );
+
+        // ≥1 figure (the paper has ~9 in source).
+        let figure_count = blocks
+            .iter()
+            .filter(|b| matches!(b, Block::Figure { .. }))
+            .count();
+        assert!(
+            figure_count >= 5,
+            "[{ID}] expected ≥5 figures, got {figure_count}",
+        );
+
+        // Numbered top-level sections present (Introduction through
+        // the appendix sections — 13 in the live parse: 7 in the
+        // main paper + 6 in the supplementary material).
+        let numbered_section_count = blocks
+            .iter()
+            .filter(|b| matches!(
+                b,
+                Block::Header { level: 1, text }
+                    if text.chars().next().is_some_and(|c| c.is_ascii_digit())
+            ))
+            .count();
+        assert!(
+            numbered_section_count >= 7,
+            "[{ID}] expected ≥7 numbered top-level sections, got {numbered_section_count}",
+        );
+
+        assert_visual_line_count(ID, blocks, EXPECTED_VISUAL_LINES);
+    }
+
     // ── Known gap: Diffusion Geometry (2602.06006) ─────────────────
     // Source uses `\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}`
     // which Pandoc errors on during parse — so this paper has no

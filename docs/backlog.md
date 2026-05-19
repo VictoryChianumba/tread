@@ -40,7 +40,8 @@ Last revalidation: **2026-05-19**.
 | **#1** Reader public surface — Seam 5 (read-mostly + popup + figure-preview triple) | 8 fields closed; popup gains atomic `open_popup` constructor | ADR-0008 |
 | **#1** Reader public surface — Seam 6 (LayoutCache projections + count_buf) | 5 fields closed; six-seam tally 47→17 pub fields | ADR-0009 |
 | **Smoke-claim mechanization** | Attention parse+layout golden test pins block / visual-line counts + Table 3/4 vrules; `#[ignore]`-gated. | `cbbd035` |
-| **ADR-0007 follow-up** Table 3 vrules `[1, 7]` vs `[1, 10]` divergence | Misleading inline-comment narrative, not a parser bug.  Attention's actual Table 3 spec is `c|ccccccccc|ccc` (9 inner c's, 13 cols → [1, 10]); the `c|cccccc|ccc → [1, 7]` synthetic in `spec::tests::two_rules` is a minimal pattern that never matched the live paper.  New `attention_table_3_spec` unit test pins the real shape; golden test comment + comments rewritten to stop confusing the two. | _this commit_ |
+| **ADR-0007 follow-up** Table 3 vrules `[1, 7]` vs `[1, 10]` divergence | Misleading inline-comment narrative, not a parser bug.  Attention's actual Table 3 spec is `c|ccccccccc|ccc` (9 inner c's, 13 cols → [1, 10]); the `c|cccccc|ccc → [1, 7]` synthetic in `spec::tests::two_rules` is a minimal pattern that never matched the live paper.  New `attention_table_3_spec` unit test pins the real shape; golden test comment + comments rewritten to stop confusing the two. | `57cc4a8` |
+| **B3a** | `\bibliography{file.bib}` external BibTeX — the in-tarball case (e.g. 2605.04035, which ships its `.bib`) is handled end-to-end: `bibitems::extract_bibitems_ordered` reads `.bib`/`.bbl` files via `bibtex::extract_bibtex_entries`, `try_pandoc` auto-appends a References section when `bibitems_emitted == false && has_bibitems == true`. New `gaussian_head_parse_and_layout_golden` pins this. **Residual limitation** (un-solvable on Pandoc fallback alone): papers referencing `\bibliography{X}` without shipping the `.bib` (e.g. Attention referencing NIPS2017.bib) — production users hit the ar5iv primary path for these, which carries the rendered bibliography. | _this commit_ |
 
 The resilience cluster and the actionable ADR follow-ups are closed.
 What's left below is explicitly deferred — each item has a blocker
@@ -52,7 +53,6 @@ test paper for B5/B6, or a trench-repo audit pass for A*).
 
 | # | Item | Blocker |
 |---|---|---|
-| **B3a** | `\bibliography{file.bib}` external BibTeX — Pandoc doesn't expand without `--citeproc`; needs a BibTeX file reader stage | New `arxiv-render` fetch stage; needs a test paper that uses the external-bib form (most arXiv papers inline `\bibitem`) |
 | **B5** | Tables don't highlight best-result cells | Feature, not a bug — no spec; need a paper with a clearly-marked best-result table to anchor the design |
 | **B6** | Some tables structurally wrong when `take_matching_spec` falls back to default | Need a paper that triggers the fallback so the corruption is reproducible; audit didn't capture an example |
 | **B8** | Image rendering edge cases on standalone tread (image-emit corruption / AAAA walls) | Audit explicitly flags "needs reclassification" — the image subsystem changed materially in `6332f7f`; re-audit before fixing |
