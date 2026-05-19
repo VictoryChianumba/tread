@@ -198,23 +198,18 @@ fn fetch_paper_inner(
   kitty_supported: bool,
   force_refresh: bool,
 ) -> Result<PaperData, String> {
-  use arxiv_render::{fetch, parse, pdf_anchors, placement};
+  use arxiv_render::{ar5iv_parse, fetch, pdf_anchors, placement};
 
-  // Two pairs of independent work overlap in this scope:
+  // Primary path: ar5iv (LaTeXML-rendered HTML, ~200 KB - 2 MB typical).
+  // Falls back to the tarball + Pandoc path only when ar5iv is missing
+  // a paper or returns an unusable body.  See bench/results/ for the
+  // empirical justification: 100/100 coverage on a stratified sample,
+  // 3–10× faster cold-fetch than the e-print tarball, and parses some
+  // papers Pandoc cannot (e.g. 2602.06006 panics on \newcolumntype).
   //
-  //   1. Source tarball and PDF are independent HTTPS GETs against
-  //      arxiv.org; total network phase = max(both) instead of sum.
-  //   2. parse_to_blocks (Pandoc subprocess on the source bytes) and
-  //      extract_anchors (pdftotext subprocess on the PDF bytes) are
-  //      also independent — they consume different inputs and meet
-  //      only at lift_tables.  Running them in parallel saves
-  //      ~min(parse, anchors) ≈ 500–600ms off the warm-cache wall.
-  //
-  // The anchor thread starts as soon as fetch_pdf completes (it
-  // joins pdf_handle from inside) and runs alongside whatever the
-  // main thread is doing — fetch_source, parse, absolutize.  arXiv
-  // tolerates the two-concurrent-request pattern; trench's openreview
-  // audit hit the same shape.
+  // We still fetch the PDF in parallel for `extract_anchors` — table
+  // placement runs the same lift_tables pass regardless of which
+  // parser produced the blocks.
   std::thread::scope(|s| {
     let pdf_handle = s.spawn(|| {
       bench::time("fetch_pdf", || {
@@ -235,19 +230,34 @@ fn fetch_paper_inner(
       }
     });
 
-    let fetched = bench::time("fetch_source", || {
+    let ar5iv_result = bench::time("fetch_ar5iv", || {
       if force_refresh {
-        fetch::fetch_source_refresh(id)
+        fetch::fetch_ar5iv_refresh(id)
       } else {
-        fetch::fetch_source(id)
+        fetch::fetch_ar5iv(id)
       }
-    })?;
-    let sources = fetched.tex;
-    let asset_dir = fetched.asset_dir;
-    let bibitems = bench::time("extract_bibitems", || {
-      arxiv_render::extract_bibitems(&sources)
     });
-    let mut blocks = bench::time("parse_to_blocks", || parse::to_blocks(sources));
+
+    let (mut blocks, bibitems, asset_dir) = match ar5iv_result {
+      Ok(html) => {
+        let blocks = bench::time("ar5iv_parse", || ar5iv_parse::to_blocks(&html));
+        if blocks.is_empty() {
+          // ar5iv served us something but the parser couldn't make
+          // anything of it — fall back so the user still gets a paper.
+          fallback_tarball_parse(id, force_refresh)?
+        } else {
+          let bibitems = bench::time("extract_bibitems_ar5iv", || {
+            ar5iv_parse::extract_bibitems(&blocks)
+          });
+          // ar5iv hosts figure assets externally; the prototype emits
+          // captions only.  Use an empty asset_dir — downstream image
+          // resolution is a no-op when there are no Figure blocks.
+          (blocks, bibitems, std::path::PathBuf::new())
+        }
+      }
+      Err(_) => fallback_tarball_parse(id, force_refresh)?,
+    };
+
     if kitty_supported {
       bench::time("absolutize_image_paths", || {
         arxiv_render::absolutize_image_paths(&mut blocks, &asset_dir)
@@ -271,6 +281,32 @@ fn fetch_paper_inner(
       asset_dir,
     })
   })
+}
+
+/// Slow-path parser kept around for papers ar5iv hasn't processed
+/// (or for which it returned an empty body).  Fetches the e-print
+/// tarball, runs the Pandoc → block walker, and extracts bibitems
+/// from the LaTeX `\bibitem` macros directly.
+fn fallback_tarball_parse(
+  id: &str,
+  force_refresh: bool,
+) -> Result<(Vec<Block>, HashMap<String, String>, std::path::PathBuf), String> {
+  use arxiv_render::{fetch, parse};
+
+  let fetched = bench::time("fetch_source", || {
+    if force_refresh {
+      fetch::fetch_source_refresh(id)
+    } else {
+      fetch::fetch_source(id)
+    }
+  })?;
+  let sources = fetched.tex;
+  let asset_dir = fetched.asset_dir;
+  let bibitems = bench::time("extract_bibitems", || {
+    arxiv_render::extract_bibitems(&sources)
+  });
+  let blocks = bench::time("parse_to_blocks", || parse::to_blocks(sources));
+  Ok((blocks, bibitems, asset_dir))
 }
 
 /// Fetch a URL and parse into `PaperData`, auto-detecting the format.

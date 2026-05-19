@@ -23,6 +23,32 @@
 
 use doc_model::{Block, InlineSpan, LinkTarget};
 use scraper::{ElementRef, Html, Node, Selector};
+use std::collections::HashMap;
+
+/// Recover a `cite-key → entry-text` map from a block stream produced
+/// by `to_blocks`.  ar5iv emits each bibliography item as an
+/// `Anchor("bib.bibN")` immediately followed by a `StyledLine` carrying
+/// the rendered citation text; we pair them up so the reader's
+/// citation-popup machinery sees the same shape it gets from
+/// `parse::extract_bibitems` on a LaTeX tarball.
+pub fn extract_bibitems(blocks: &[Block]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let mut iter = blocks.iter().peekable();
+    while let Some(b) = iter.next() {
+        if let Block::Anchor(id) = b
+            && id.starts_with("bib.")
+        {
+            if let Some(Block::StyledLine(spans)) = iter.peek() {
+                let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+                let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !cleaned.is_empty() {
+                    out.insert(id.clone(), cleaned);
+                }
+            }
+        }
+    }
+    out
+}
 
 /// Walk an ar5iv HTML document and emit our `Block` stream.
 pub fn to_blocks(html: &str) -> Vec<Block> {

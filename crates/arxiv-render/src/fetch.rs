@@ -13,6 +13,10 @@ const MAX_SOURCE_BYTES: usize = 50 * 1024 * 1024; // 50 MB
 // MAX_SOURCE_BYTES so a paper with a working tarball almost always has
 // a working PDF too.
 const MAX_PDF_BYTES: usize = 50 * 1024 * 1024;
+// ar5iv HTML is much smaller than the tarball — typical pages are
+// 0.2–2 MB; the worst observed case in our benchmark set (1707.09763)
+// was 6 MB.  Cap at 50 MB to leave headroom for outlier papers.
+const MAX_AR5IV_BYTES: usize = 50 * 1024 * 1024;
 const TIMEOUT_SECS: u64 = 30;
 
 /// Image / asset extensions we lift out of the source tarball alongside
@@ -104,6 +108,37 @@ pub fn fetch_pdf_refresh(id: &str) -> Result<Vec<u8>, String> {
 fn fetch_pdf_with(id: &str, force_refresh: bool) -> Result<Vec<u8>, String> {
   let url = format!("https://arxiv.org/pdf/{id}");
   cached_fetch_with(&url, &format!("{id}.pdf"), MAX_PDF_BYTES, force_refresh)
+}
+
+/// Download the LaTeXML-rendered HTML for `id` from ar5iv.  Returns the
+/// raw HTML body as a UTF-8 string so the parser can hand it directly
+/// to `ar5iv_parse::to_blocks` without touching disk a second time.
+/// Pre-2007 papers use slash-style ids (`hep-th/9202088`); we keep the
+/// slash in the cache basename so a single id maps to a single file.
+pub fn fetch_ar5iv(id: &str) -> Result<String, String> {
+  fetch_ar5iv_with(id, false)
+}
+
+/// Sibling of `fetch_ar5iv` that forces a fresh GET, used by `:refresh`.
+pub fn fetch_ar5iv_refresh(id: &str) -> Result<String, String> {
+  fetch_ar5iv_with(id, true)
+}
+
+fn fetch_ar5iv_with(id: &str, force_refresh: bool) -> Result<String, String> {
+  let url = format!("https://ar5iv.labs.arxiv.org/html/{id}");
+  let safe_basename = id.replace('/', "_");
+  let bytes = cached_fetch_with(
+    &url,
+    &format!("{safe_basename}.html"),
+    MAX_AR5IV_BYTES,
+    force_refresh,
+  )?;
+  // ar5iv pages are always served as UTF-8.  Fall back to lossy decode
+  // on the rare mojibake input rather than failing the whole load.
+  match String::from_utf8(bytes) {
+    Ok(s) => Ok(s),
+    Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
+  }
 }
 
 /// Disk-backed conditional HTTP GET.
