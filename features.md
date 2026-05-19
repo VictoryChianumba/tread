@@ -6,11 +6,10 @@
 
 Given an arXiv ID or URL, the reader:
 
-1. Fetches the e-print tarball from arXiv and extracts every `.tex` file.
-2. Pre-scans the source for LaTeX `\begin{tabular}` column specs (vertical rules, internal `\hline`s) so they survive the Pandoc round-trip.
-3. Parses via Pandoc into a structured block list (`doc-model::Block`); falls back to a hand-rolled parser if Pandoc isn't installed.
-4. Fetches the rendered PDF, extracts per-table placement anchors via `pdftotext`, and lifts each table to the position the LaTeX float algorithm chose. Falls back to source-order placement if the PDF or `pdftotext` isn't available.
-5. Renders to a ratatui TUI with full styling (bold, italic, underline, monospace, colour, OSC 8 hyperlinks).
+1. Fetches the **ar5iv** LaTeXML-rendered HTML from `ar5iv.labs.arxiv.org` and walks the DOM into a structured block list (`doc-model::Block`).  This is the primary path for the ~95% of papers ar5iv has processed.
+2. For the long tail ar5iv hasn't reached yet (or where the prototype parser can't make sense of the output), falls back to: fetch the e-print tarball, pre-scan `\begin{tabular}` column specs (vertical rules, internal `\hline`s) so they survive the round-trip, then run Pandoc and walk the JSON AST.
+3. On the Pandoc fallback path only: fetches the rendered PDF, extracts per-table placement anchors via `pdftotext`, and lifts each table to the position the LaTeX float algorithm chose.  Falls back to source-order placement if the PDF or `pdftotext` isn't available.  (The ar5iv source already has tables in render order, so this step is a no-op there.)
+4. Renders to a ratatui TUI with full styling (bold, italic, underline, monospace, colour, OSC 8 hyperlinks).
 
 ## Document features
 
@@ -99,8 +98,9 @@ Configure via the `voice` block in `~/.config/trench/block_reader.json`:
 
 ## Dependencies
 
-- **Pandoc** (recommended) — for high-fidelity LaTeX parsing. Install via `brew install pandoc` on macOS. The reader falls back to a hand-rolled parser if Pandoc isn't on `PATH`.
-- **Poppler's `pdftotext`** (recommended) — for PDF-anchored table placement. Install via `brew install poppler`. The reader falls back to source-order placement if missing.
+- **No required local binaries for the primary parser path.**  Ar5iv (`ar5iv.labs.arxiv.org`) hosts LaTeXML-rendered HTML for the bulk of arXiv; the reader fetches it directly.
+- **Pandoc** (recommended for the fallback path) — Install via `brew install pandoc` on macOS.  Used only when ar5iv hasn't processed a paper or returned HTML the prototype parser couldn't make sense of.  Without Pandoc, those papers fail loudly.
+- **Poppler's `pdftotext`** (recommended) — for PDF-anchored table placement on the Pandoc fallback path.  Install via `brew install poppler`.  The reader falls back to source-order placement if missing.  Not needed on the ar5iv path.
 - **Poppler's `pdftoppm`** (recommended for pixel figures) — converts PDF figures to PNG for inline rendering. Same `brew install poppler` provides this. Without it, PDF figures degrade to `[Figure N: caption]` text.
 - A modern terminal with 24-bit colour and OSC 52 / OSC 8 support recommended (iTerm2, Kitty, WezTerm, modern macOS Terminal). Plain `xterm` works but loses styling fidelity.
 - **Optional: tmux passthrough** — for inline pixel graphics inside tmux, add `set -g allow-passthrough on` and `set -g focus-events on` to `~/.tmux.conf`. Without this, figures fall back to text placeholders even on Kitty-protocol-capable terminals.

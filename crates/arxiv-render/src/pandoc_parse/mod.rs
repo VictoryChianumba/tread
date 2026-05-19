@@ -1,9 +1,10 @@
 // Pandoc-based LaTeX parser.
 //
 // Runs `pandoc -f latex -t json` as a subprocess, walks the resulting AST, and
-// emits Vec<Block> — the same type produced by parse.rs.  The caller tries this
-// path first; if Pandoc is unavailable or returns nothing, it falls back to the
-// hand-rolled parser.
+// emits Vec<Block>.  This is the FALLBACK path; the primary path is
+// `ar5iv_parse::to_blocks` against ar5iv's LaTeXML HTML.  Routing in
+// `tread::paper::open_arxiv`: try ar5iv first, drop to this module only
+// when ar5iv returned nothing usable.  Requires `pandoc` on PATH.
 
 use doc_model::{Block, InlineSpan};
 use serde_json::Value;
@@ -278,7 +279,7 @@ fn extract_author_names(author_meta: &Value) -> Vec<String> {
 /// so that headers carry their LaTeX-style number prefix ("1  Introduction",
 /// "2.1  Background", "2.1.3  Detailed Steps"). Pandoc emits unnumbered headers
 /// (`\section*{}` → `class="unnumbered"`); those are skipped here and rendered
-/// without a prefix. Mirrors the legacy parser convention at `parse.rs:805`.
+/// without a prefix.
 struct SectionCounters {
     sec: [u32; 3],
     table: u32,

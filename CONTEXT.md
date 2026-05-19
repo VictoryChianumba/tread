@@ -26,13 +26,18 @@ same surface in a `ReaderRuntime`.
 ```
 arXiv ID
   │
-  ▼  fetch: e-print tarball + PDF (arxiv-render::fetch)
+  ▼  fetch: ar5iv HTML (arxiv-render::fetch::fetch_ar5iv) — primary
+  │         fallback: e-print tarball (fetch::fetch_source) + PDF
   │
-  ▼  parse: Pandoc JSON → Block (arxiv-render::pandoc_parse)
-  │         fallback: hand-rolled LaTeX (arxiv-render::parse)
+  ▼  parse:
+  │   primary  — ar5iv (LaTeXML HTML) → Block (arxiv-render::ar5iv_parse)
+  │   fallback — Pandoc JSON → Block (arxiv-render::pandoc_parse)
+  │              used only when ar5iv hasn't processed this paper or
+  │              the parser couldn't make sense of its output
   │
   ▼  table placement: PDF anchors lift Block::Matrix groups to PDF-rendered
-  │   position (arxiv-render::pdf_anchors, ::placement)
+  │   position (arxiv-render::pdf_anchors, ::placement) — Pandoc path only;
+  │   ar5iv source already has tables in render order
   │
   ▼  Vec<Block>  ─── doc-model boundary ───
   │
@@ -42,6 +47,7 @@ arXiv ID
   ▼  Reader owns blocks, LayoutCache, cursor, mode, persistence
   │
   ├─► render: ratatui draw pass writes the character-cell buffer
+  │   (split by region — see ADR-0006)
   │
   └─► images: post-draw Kitty `a=p` placements for VisualLineKind::Image
                 rows (does not pass through the ratatui buffer; see ADR-0003)
@@ -59,7 +65,7 @@ Two side outputs of layout are derived from `Block` directly, not from
 | Crate | Role | Has I/O? |
 |---|---|---|
 | `doc-model` | `Block`, `VisualLine`, `build_visual_lines`, figure layout math | no |
-| `arxiv-render` | fetch, Pandoc/legacy parser, PDF anchor extraction, placement | yes |
+| `arxiv-render` | fetch (ar5iv HTML + tarball + PDF), ar5iv parser (primary), Pandoc parser (fallback), PDF anchor extraction, placement | yes |
 | `tread` | reader runtime, render, images, persistence, embed surface | yes |
 | `math-render` | display + inline math; thin wrapper around `tui-math` | no |
 | `ui-theme` | `Theme`, `ThemeId` (16 themes), shared with `trench` | no |
@@ -105,8 +111,11 @@ worktree. Treat them as read-only unless a change is explicitly cross-cutting.
   bibitems) handed to `Reader::new_with_bibitems`.
 - **Reader** — owns `blocks`, the `LayoutCache`, cursor, mode,
   bookmarks, highlights, search state, popup, preview state, and
-  persistence. The public surface is wide today — see the audit; this
-  is on the deepening backlog.
+  persistence. Field surface deepened across six seams (ADR-0004
+  mode/cursor/voice/bookmarks; ADR-0008 read-mostly closures + popup +
+  figure-preview triple; ADR-0009 LayoutCache projections + count_buf).
+  Today's public fields are read-only collections and simple toggles
+  with no remaining multi-field invariants.
 - **LayoutCache** — derived from `(blocks, width, height, text_only)`.
   Holds `visual_lines`, `sections`, `label_lines`, `bib_entries`,
   `bib_entry_lines`. Rebuilt through `rebuild_layout` with a
@@ -137,9 +146,11 @@ worktree. Treat them as read-only unless a change is explicitly cross-cutting.
   dedicated side pane set this; captions remain as prose blocks so
   `]f` / `[f` still have something to step through.
 - **Mode** — Normal / Insert-like states are absent; tread is read-only.
-  Modes are Normal / Visual{Char,Line} / Search / Command / AwaitingChar /
-  AwaitingMarkName / AwaitingG. `Search` and `Command` share the bottom
-  prompt slot (different prefix glyph).
+  Modes are Normal / Visual{Char,Line} / Search / Command /
+  AwaitingChar / AwaitingMarkName / AwaitingG / AwaitingBracket /
+  AwaitingOperator / AwaitingTextObject.  `Search` and `Command` share
+  the bottom prompt slot (different prefix glyph).  All transitions
+  route through `state/mode.rs` per ADR-0004 Seam 1.
 - **CommandResult** — what an Ex-command returns to the event loop:
   `Quit`, `ChangeTheme(new)`, `OpenHelp`, `Error(msg)`, or `None`.
 - **HighlightSet** — persistent character-range highlights stored at
@@ -183,10 +194,16 @@ worktree. Treat them as read-only unless a change is explicitly cross-cutting.
 
 ### Parsing & placement (`arxiv-render`)
 
-- **Pandoc parser** — primary path. Walks Pandoc JSON AST to emit
-  `Block`s. Lives in `pandoc_parse.rs`. Requires `pandoc` on PATH.
-- **legacy parser** — fallback hand-rolled LaTeX parser used when
-  Pandoc is missing. `parse.rs`.
+- **ar5iv parser** — primary path.  Fetches the LaTeXML-rendered HTML
+  from `ar5iv.labs.arxiv.org` and walks the DOM to emit `Block`s.
+  No external binary required; only an HTTPS round-trip.  Lives in
+  `ar5iv_parse.rs`.  Coverage is not 100% — for papers ar5iv hasn't
+  processed yet, the fallback fires.
+- **Pandoc parser** — fallback path.  Fetches the e-print tarball,
+  runs `pandoc -f latex -t json`, walks the AST to emit `Block`s.
+  Lives in `pandoc_parse/` (split across `mod.rs`, `figure.rs`,
+  `inline.rs`, `table.rs`, `preprocess.rs`, `spec.rs` per ADR-0007).
+  Requires `pandoc` on `PATH`.
 - **PDF anchor extraction** — runs `pdftotext` over the PDF, locates
   per-table placement anchors, and reports rendered (page, y) for
   each table. `pdf_anchors.rs`.
@@ -234,3 +251,9 @@ Touch only with a cross-crate plan:
 - [ADR-0001 — Figure model](docs/adr/0001-figure-model.md)
 - [ADR-0002 — Preview pane model](docs/adr/0002-preview-pane-model.md)
 - [ADR-0003 — Terminal image strategy](docs/adr/0003-terminal-image-strategy.md)
+- [ADR-0004 — Reader public surface (Seams 1–4)](docs/adr/0004-reader-public-surface.md)
+- [ADR-0005 — doc-model internal split](docs/adr/0005-doc-model-internal-split.md)
+- [ADR-0006 — render region split](docs/adr/0006-render-region-split.md)
+- [ADR-0007 — pandoc_parse split](docs/adr/0007-pandoc-parse-split.md)
+- [ADR-0008 — Reader Seam 5](docs/adr/0008-reader-seam-5.md)
+- [ADR-0009 — Reader Seam 6](docs/adr/0009-reader-seam-6.md)

@@ -8,6 +8,13 @@ preview pane, `ReaderRuntime`, `LayoutCache`, `FigureIndex`, first-class
 `FigurePreviewState`, and split inline/preview image invalidation. Re-audit
 before using the table below as an implementation queue.
 
+2026-05-19 file-path note: every `arxiv-render/src/pandoc_parse.rs:NNN`
+reference below points at the pre-split layout. That file is now
+`pandoc_parse/mod.rs` plus five siblings (`figure.rs`, `inline.rs`,
+`table.rs`, `preprocess.rs`, `spec.rs`) per ADR-0007. Likewise
+`arxiv-render/src/parse.rs` (the hand-rolled fallback parser) was
+removed in commit `0a60ea7` — references to it are historical.
+
 Current spot-checks:
 
 - B1 mixed display math appears resolved for the Pandoc path.
