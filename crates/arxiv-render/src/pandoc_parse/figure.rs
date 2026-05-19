@@ -19,7 +19,8 @@
 use doc_model::{Block, HeaderCell, ImageItem};
 use serde_json::Value;
 
-use super::{SectionCounters, TableSpec, extract_caption_text, walk_inlines_text};
+use super::inline::walk_inlines_text;
+use super::{SectionCounters, TableSpec, extract_caption_text};
 
 /// Lift one Pandoc `Figure` node into a `Vec<Block>` consisting of:
 /// - an optional `Block::Anchor` for `\label{fig:X}` jumps
