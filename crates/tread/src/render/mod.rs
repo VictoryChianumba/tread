@@ -47,7 +47,7 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
     if *reader.mode() == Mode::Command {
         overlays::draw_command_bar(frame, reader, search_area.unwrap(), t);
     }
-    if let Some(popup) = &reader.popup {
+    if let Some(popup) = reader.popup() {
         overlays::draw_text_popup(frame, area, t, popup);
     }
     if reader.help_visible {

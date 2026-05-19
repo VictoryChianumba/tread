@@ -379,8 +379,8 @@ impl Reader {
         // Any keystroke clears the previous command's error and dismisses
         // any open popup so it doesn't linger across input.
         self.cmd_error = None;
-        if self.popup.is_some() {
-          self.popup = None;
+        if self.popup().is_some() {
+          self.close_popup();
           return ReaderAction::Continue;
         }
         // Clone the active mode out of the borrow so we can call

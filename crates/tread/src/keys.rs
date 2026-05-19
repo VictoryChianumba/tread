@@ -514,10 +514,7 @@ fn popup_citation_at_cursor(reader: &mut Reader) {
     .unwrap_or_else(|| "(no entry available)".to_string());
   // Wrap to ~60 chars for readability in the popup.
   let lines: Vec<String> = wrap_for_popup(&entry, 60);
-  reader.popup = Some(crate::state::PopupContent {
-    title: format!("[{key}]"),
-    lines,
-  });
+  reader.open_popup(format!("[{key}]"), lines);
 }
 
 fn wrap_for_popup(text: &str, width: usize) -> Vec<String> {

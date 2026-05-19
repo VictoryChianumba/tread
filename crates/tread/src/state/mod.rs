@@ -270,8 +270,11 @@ pub struct Reader {
     /// One-line error message shown in the status line after a command
     /// failed (e.g. unknown command, unknown theme).  Cleared on next event.
     pub cmd_error: Option<String>,
-    /// Active modal popup (e.g. `:marks` listing).  Any keystroke dismisses.
-    pub popup: Option<PopupContent>,
+    /// Active modal popup (e.g. `:marks` listing).  Any keystroke
+    /// dismisses (handled centrally in the event loop).  Private; opens
+    /// route through `open_popup` so title + lines arrive atomically.
+    /// Read via `Reader::popup()`.
+    popup: Option<PopupContent>,
     /// Resolved on-disk path for every `Block::Image` in the document,
     /// keyed by its `kitty_id`.  Built once at construction; consulted
     /// post-draw to load PNG bytes for terminals that speak the Kitty
@@ -556,6 +559,27 @@ impl Reader {
     /// The Command-mode key handler is the only writer.
     pub fn cmd_buf(&self) -> &str {
         &self.cmd_buf
+    }
+
+    /// Active modal popup, if one is open.  `None` outside an explicit
+    /// `:marks` / `:highlights` / `:about` / `:placement` invocation.
+    /// The event loop centralizes dismissal: any keystroke calls
+    /// `close_popup` before forwarding to the mode handler.
+    pub fn popup(&self) -> Option<&PopupContent> {
+        self.popup.as_ref()
+    }
+
+    /// Open a modal popup with `title` and `lines`.  Replaces any
+    /// previously-open popup atomically — callers don't have to
+    /// remember to clear the old one first.
+    pub fn open_popup(&mut self, title: String, lines: Vec<String>) {
+        self.popup = Some(PopupContent { title, lines });
+    }
+
+    /// Dismiss the popup (if any).  Idempotent.  Called by the event
+    /// loop on every keystroke when a popup is open.
+    pub fn close_popup(&mut self) {
+        self.popup = None;
     }
 
     /// Append a typed character to the `:`-command line.  Called from

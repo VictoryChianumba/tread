@@ -274,7 +274,7 @@ fn cmd_marks(reader: &mut Reader, _: &[&str]) -> ReaderAction {
       format!("  {letter}    line {line:>5}    {snippet}")
     }).collect()
   };
-  reader.popup = Some(PopupContent { title: "Marks".to_string(), lines });
+  reader.open_popup("Marks".to_string(), lines);
   ReaderAction::Continue
 }
 
@@ -320,7 +320,7 @@ fn cmd_highlights(reader: &mut Reader, _: &[&str]) -> ReaderAction {
         h.block_idx, h.byte_start, h.byte_end, snippet)
     }).collect()
   };
-  reader.popup = Some(PopupContent { title: "Highlights".to_string(), lines });
+  reader.open_popup("Highlights".to_string(), lines);
   ReaderAction::Continue
 }
 
@@ -341,7 +341,7 @@ fn cmd_about(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   if lines.is_empty() {
     lines.push("(no metadata available)".to_string());
   }
-  reader.popup = Some(PopupContent { title: "About".to_string(), lines });
+  reader.open_popup("About".to_string(), lines);
   ReaderAction::Continue
 }
 
@@ -412,7 +412,7 @@ fn cmd_placement(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   if lines.is_empty() {
     lines.push("(no Matrix blocks in document)".to_string());
   }
-  reader.popup = Some(PopupContent { title: "Table placement".to_string(), lines });
+  reader.open_popup("Table placement".to_string(), lines);
   ReaderAction::Continue
 }
 
