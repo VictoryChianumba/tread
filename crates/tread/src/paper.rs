@@ -285,13 +285,14 @@ fn fetch_paper_inner(
 
 /// Slow-path parser kept around for papers ar5iv hasn't processed
 /// (or for which it returned an empty body).  Fetches the e-print
-/// tarball, runs the Pandoc → block walker, and extracts bibitems
-/// from the LaTeX `\bibitem` macros directly.
+/// tarball, runs the Pandoc parser on it, and extracts bibitems
+/// from the LaTeX `\bibitem` macros directly.  Surfaces the Pandoc
+/// error so the caller sees why both paths failed.
 fn fallback_tarball_parse(
   id: &str,
   force_refresh: bool,
 ) -> Result<(Vec<Block>, HashMap<String, String>, std::path::PathBuf), String> {
-  use arxiv_render::{fetch, parse};
+  use arxiv_render::{fetch, pandoc_parse};
 
   let fetched = bench::time("fetch_source", || {
     if force_refresh {
@@ -305,7 +306,7 @@ fn fallback_tarball_parse(
   let bibitems = bench::time("extract_bibitems", || {
     arxiv_render::extract_bibitems(&sources)
   });
-  let blocks = bench::time("parse_to_blocks", || parse::to_blocks(sources));
+  let blocks = bench::time("parse_to_blocks", || pandoc_parse::try_pandoc(&sources))?;
   Ok((blocks, bibitems, asset_dir))
 }
 

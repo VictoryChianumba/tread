@@ -1,4 +1,4 @@
-use arxiv_render::{fetch, parse};
+use arxiv_render::{fetch, pandoc_parse};
 use doc_model::build_visual_lines;
 
 fn main() {
@@ -47,7 +47,13 @@ fn main() {
 
     eprintln!("found {} .tex file(s); parsing ...", fetched.tex.len());
 
-    let mut blocks = parse::to_blocks(fetched.tex);
+    let mut blocks = match pandoc_parse::try_pandoc(&fetched.tex) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: pandoc parse failed: {e}");
+            std::process::exit(1);
+        }
+    };
     // The debug viewer only dumps text — pixel graphics never apply, so
     // collapse Image/ImageRow to caption lines for cleaner output.
     arxiv_render::degrade_images_to_captions(&mut blocks);

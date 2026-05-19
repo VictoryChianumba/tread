@@ -99,7 +99,7 @@ pub fn try_pandoc(sources: &[(String, String)]) -> Result<Vec<Block>, String> {
     // (Div arm with class="thebibliography" replaces inner content).
     // Threaded via thread-locals to avoid plumbing through every walker
     // signature; cleared on scope exit.
-    let bibitems_ordered = crate::parse::extract_bibitems_ordered(sources);
+    let bibitems_ordered = crate::bibitems::extract_bibitems_ordered(sources);
     let cite_numbers: std::collections::HashMap<String, usize> = bibitems_ordered
         .iter()
         .enumerate()

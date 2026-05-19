@@ -1,12 +1,12 @@
 pub mod ar5iv_parse;
+pub mod bibitems;
 pub mod bibtex;
 pub mod fetch;
 pub mod pandoc_parse;
-pub mod parse;
 pub mod pdf_anchors;
 pub mod placement;
 
-pub use parse::{extract_bibitems, to_blocks};
+pub use bibitems::extract_bibitems;
 pub use placement::lift_tables;
 
 /// Replace every `Block::Figure` with a plain caption line.  The
