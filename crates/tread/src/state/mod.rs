@@ -100,81 +100,6 @@ impl LayoutCache {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ReflowAnchor {
-    block_idx: usize,
-    line_in_block: usize,
-    byte_in_block: usize,
-    cursor_y: usize,
-}
-
-impl ReflowAnchor {
-    fn capture(reader: &Reader) -> Option<Self> {
-        let vl = reader.visual_lines.get(reader.current_line())?;
-        let byte_in_block = if vl.block_byte_end > vl.block_byte_start {
-            let max_byte = vl.block_byte_end.saturating_sub(1);
-            vl.block_byte_start
-                .saturating_add(reader.cursor_x)
-                .min(max_byte)
-        } else {
-            vl.block_byte_start
-        };
-        Some(Self {
-            block_idx: vl.block_idx,
-            line_in_block: vl.line_in_block,
-            byte_in_block,
-            cursor_y: reader.cursor_y,
-        })
-    }
-
-    fn restore(self, reader: &mut Reader) -> bool {
-        let Some((target_line, cursor_x)) = reader
-            .visual_lines
-            .iter()
-            .enumerate()
-            .find_map(|(idx, vl)| {
-                if vl.block_idx == self.block_idx
-                    && vl.block_byte_end > vl.block_byte_start
-                    && self.byte_in_block >= vl.block_byte_start
-                    && self.byte_in_block < vl.block_byte_end
-                {
-                    Some((idx, self.byte_in_block - vl.block_byte_start))
-                } else {
-                    None
-                }
-            })
-            .or_else(|| {
-                reader
-                    .visual_lines
-                    .iter()
-                    .enumerate()
-                    .find(|(_, vl)| {
-                        vl.block_idx == self.block_idx && vl.line_in_block == self.line_in_block
-                    })
-                    .map(|(idx, _)| (idx, 0))
-            })
-            .or_else(|| {
-                reader
-                    .visual_lines
-                    .iter()
-                    .enumerate()
-                    .find(|(_, vl)| vl.block_idx == self.block_idx)
-                    .map(|(idx, _)| (idx, 0))
-            })
-        else {
-            return false;
-        };
-
-        let ch = reader.content_height();
-        let max_offset = reader.total_lines().saturating_sub(ch);
-        reader.offset = target_line.saturating_sub(self.cursor_y).min(max_offset);
-        reader.cursor_y = target_line.saturating_sub(reader.offset);
-        reader.cursor_x = cursor_x;
-        reader.desired_column = cursor_x;
-        true
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FindKind {
     /// `f<c>` — forward to next occurrence.
@@ -903,11 +828,6 @@ impl Reader {
             }
             return;
         }
-        let anchor = if self.pending_progress_offset.is_none() {
-            ReflowAnchor::capture(self)
-        } else {
-            None
-        };
         self.width = w;
         self.height = h;
         self.rebuild_layout(LayoutRebuildReason::Resize);
@@ -920,10 +840,6 @@ impl Reader {
         if let Some(saved_offset) = self.pending_progress_offset.take() {
             let max_offset = self.total_lines().saturating_sub(1);
             self.offset = saved_offset.min(max_offset);
-        } else if let Some(anchor) = anchor {
-            if anchor.restore(self) {
-                return;
-            }
         }
         self.clamp_position();
     }
@@ -1047,26 +963,14 @@ impl Reader {
         if self.text_only == value {
             return;
         }
-        let anchor = ReflowAnchor::capture(self);
         self.text_only = value;
         self.rebuild_layout(LayoutRebuildReason::TextOnlyToggle);
-        if let Some(anchor) = anchor {
-            if anchor.restore(self) {
-                return;
-            }
-        }
         self.clamp_position();
     }
 
     pub fn toggle_toc(&mut self) {
-        let anchor = ReflowAnchor::capture(self);
         self.toc_visible = !self.toc_visible;
         self.rebuild_layout(LayoutRebuildReason::TocToggle);
-        if let Some(anchor) = anchor {
-            if anchor.restore(self) {
-                return;
-            }
-        }
         self.clamp_position();
     }
 
@@ -1310,27 +1214,6 @@ mod tests {
         ]
     }
 
-    fn styled_line_doc(text: &str) -> Vec<Block> {
-        vec![Block::StyledLine(vec![doc_model::InlineSpan::plain(text)])]
-    }
-
-    fn line_covering_byte(reader: &Reader, block_idx: usize, byte: usize) -> Option<usize> {
-        reader
-            .visual_lines
-            .iter()
-            .enumerate()
-            .find_map(|(idx, vl)| {
-                if vl.block_idx == block_idx
-                    && byte >= vl.block_byte_start
-                    && byte < vl.block_byte_end
-                {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-    }
-
     #[test]
     fn text_only_filters_image_visual_lines() {
         let mut reader = Reader::new(doc_with_one_image(), 80, 24);
@@ -1529,62 +1412,6 @@ mod tests {
                 .map(|vl| vl.text.chars().count()),
             Some(reader.content_width()),
             "preview mode should wrap text to the left reader pane"
-        );
-    }
-
-    #[test]
-    fn resize_preserves_current_source_position_after_reflow() {
-        let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon";
-        let target_byte = text.find("lambda").expect("target word");
-        let mut reader = Reader::new(styled_line_doc(text), 30, 24);
-        let target_line = line_covering_byte(&reader, 0, target_byte)
-            .expect("target byte should resolve before resize");
-        reader.jump_to_line(target_line);
-        let line_start = reader.visual_lines[target_line].block_byte_start;
-        reader.set_cursor_x(target_byte - line_start);
-
-        reader.resize(80, 24);
-
-        let landed = reader.visual_lines[reader.current_line()].clone();
-        assert_eq!(landed.block_idx, 0);
-        assert!(
-            target_byte >= landed.block_byte_start && target_byte < landed.block_byte_end,
-            "current line after resize should still cover source byte {target_byte}, got {:?}",
-            landed
-        );
-    }
-
-    #[test]
-    fn preview_toggle_preserves_current_source_position_after_reflow() {
-        let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon";
-        let target_byte = text.find("lambda").expect("target word");
-        let mut blocks = styled_line_doc(text);
-        blocks.push(Block::Figure {
-            rows: vec![vec![doc_model::ImageItem {
-                path: std::path::PathBuf::from("preview.png"),
-                kitty_id: 9,
-                dims: Some((100, 100)),
-            }]],
-            alt: "caption".to_string(),
-            figure_id: 1,
-            column_gaps_after: Vec::new(),
-            header_rows: Vec::new(),
-        });
-        let mut reader = Reader::new(blocks, 80, 24);
-        let target_line = line_covering_byte(&reader, 0, target_byte)
-            .expect("target byte should resolve before preview");
-        reader.jump_to_line(target_line);
-        let line_start = reader.visual_lines[target_line].block_byte_start;
-        reader.set_cursor_x(target_byte - line_start);
-
-        reader.set_figure_preview_active(true);
-
-        let landed = reader.visual_lines[reader.current_line()].clone();
-        assert_eq!(landed.block_idx, 0);
-        assert!(
-            target_byte >= landed.block_byte_start && target_byte < landed.block_byte_end,
-            "current line after preview reflow should still cover source byte {target_byte}, got {:?}",
-            landed
         );
     }
 

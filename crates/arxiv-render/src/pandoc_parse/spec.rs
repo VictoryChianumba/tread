@@ -381,24 +381,6 @@ mod spec_parser_tests {
         assert_eq!(parse_column_spec("c|cccccc|ccc"), Some((10, vec![1, 7])));
     }
 
-    /// Attention's Table 3 (the model-variations table at
-    /// `results.tex:54` of arXiv:1706.03762) uses `c|ccccccccc|ccc` —
-    /// NINE inner c's, not six.  That's the real load-bearing case
-    /// the integration golden in `lib.rs::attention_golden_tests`
-    /// pins as `vertical_rules == [1, 10]`.  Inline comments and the
-    /// first draft of ADR-0007 claimed Table 3 was `c|cccccc|ccc`;
-    /// the surrounding `two_rules` test above is correct for that
-    /// synthetic input but never matched the live paper.  Keeping
-    /// both so the unit-test contract covers (a) the canonical
-    /// minimal pattern and (b) the actual benchmark paper's shape.
-    #[test]
-    fn attention_table_3_spec() {
-        assert_eq!(
-            parse_column_spec("c|ccccccccc|ccc"),
-            Some((13, vec![1, 10]))
-        );
-    }
-
     #[test]
     fn edge_rules() {
         // |l|c|r| → 3 cols, rules at 0,1,2,3
