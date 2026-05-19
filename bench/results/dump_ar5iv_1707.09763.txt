@@ -1,0 +1,784 @@
+# DIFFERENTIAL ALGEBRA 
+AND 
+MATHEMATICAL PHYSICS 
+
+J.-F. Pommaret CERMICS, Ecole des Ponts ParisTech, 6/8 Av. Blaise Pascal, 77455 Marne-la-Vallée Cedex 02, France E-mail: jean-francois.pommaret@wanadoo.fr URL: http://cermics.enpc.fr/∼pommaret/home.html
+
+ABSTRACT  
+
+Many equations of mathematical physics are described by differential polynomials, that is by polynomials in the derivatives of a certain number of functions. However, up to the knowledge of the author, differential algebra in a modern setting has never been applied to study the specific algebraic feature of such equations. The purpose of this short but difficult paper is to revisit a few domains like general relativity, conformal geometry and contact geometry in the light of a modern approach to nonlinear systems of partial differential equations, using new methods from Differential Geometry (D.C. Spencer, 1970), Differential Algebra (J.F. Ritt, 1950 and E. Kolchin, 1973) and Algebraic Analysis (M. Kashiwara, 1970). Identifying the differential indeterminates of Ritt and Kolchin with the jet coordinates of Spencer, the idea is to study Differential Duality by using only linear differential operators with coefficients in a differential field. In particular, the linearized second order Einstein equations are parametrizing the first order Cauchy stress equations but cannot themselves be parametrized. In the framework of Homological Algebra, this result is not coherent with the vanishing of certain first and second extension modules. As a byproduct, we shall prove that gravitation and electromagnetism must only depend on the second order jets (elations) of the system of conformal Killing equations. Finally, we shall use these new methods in order to study contact transformations in arbitrary odd dimension and apply these results to
+the study of Hamilton-Jacobi equations in mechanics.
+
+KEY WORDS  Nonlinear partial differential equations, Differential algebra, Riemannian stucture, Conformal structure, Contact structure, Hamilton-Jacobi equation, General relativity, Einstein equations, Elastic waves, Lie group, Lie pseudogroup, Differential Galois theory,
+Spencer operator, Algebraic Analysis, Differential modules, Homological algebra, Extension modules.  
+
+1) INTRODUCTION  
+
+Let us consider a manifold X of dimension n with local coordinates x=(xⁱ)=(x¹,...,xⁿ), tangent bundle T, cotangent bundle T*, vector bundle SqT* of q-symmetric covariant tensors and vector bundle ʳT* of r-skewsymmetric covariant tensors or r-forms. The group of isometries y=f(x) of the non-degenerate metric ω with det(ω)≠ 0 on X is defined by the nonlinear first order system of general finite Lie equations in Lie form:  
+    ωₖₗ(f(x))∂ᵢfᵏ(x)∂ⱼfˡ(x)=ωᵢⱼ(x)
+
+Linearizing at the identity transformation y=x, we may introduce the corresponding Killing operator T→ S₂T*:ξ→Dξ=L(ξ)ω=Ω, which involves the Lie derivative L and provides twice the so-called infinitesimal deformation tensor of continuum mechanics when ω is the Euclidean metric. We may consider the linear first order system of general infinitesimal Lie equations in Medolaghi form, also called system of Killing equations:  
+    Ωᵢⱼ≡(L(ξ)ω)ᵢⱼ≡ωᵣⱼ(x)∂ᵢξʳ+ωᵢᵣ(x)∂ⱼξʳ+ξʳ∂ᵣωᵢⱼ(x)=0
+
+which is in fact a family of systems only depending on the geometric object ω and its derivatives. Introducing the Christoffel symbols γ, we may differentiate once and add the operator L(ξ)γ=Γ∈ S₂T*⊗ T with the well known Levi-Civita isomorphism j₁(ω)=(ω,∂ₓω)≃(ω,γ) in order to obtain the linear second order system of general infinitesimal Lie equations in Medolaghi form:  
+    Γᵏᵢⱼ≡(L(ξ)γ)ᵏᵢⱼ≡∂ᵢⱼξᵏ+γᵏᵣⱼ(x)∂ᵢξʳ+γᵏᵢᵣ(x)∂ⱼξʳ-γʳᵢⱼ(x)∂ᵣξᵏ+ξʳ∂ᵣγᵏᵢⱼ(x)=0
+
+We have thus linearized a nonlinear differential algebraic system in order to obtain a linear system with coefficients in the differential field ℚ(ω,∂ω,...) along the idea of E. Vessiot [65]. This system is formally integrable if and only if ω has a constant Riemannian curvaure. Similarly, introducing the Jacobian determinant Δ(x)=det(∂ᵢfᵏ(x)), the group of conformal transformations of the metricω may be defined by the nonlinear first order system of general finite Lie equations in Lie form:  
+    ωₖₗ(f(x))Δ⁽⁻²⁄ⁿ⁾(x)∂ᵢfᵏ(x)∂ⱼfˡ(x)=ωᵢⱼ(x)
+
+while introducing the metric density ωᵢⱼ=| det(ω)|⁽⁻¹⁄ⁿ⁾ωᵢⱼ⇒ det(ω)=± 1 as a new geometric object, rather than by eliminating a conformal factor as usual. The conformal Killing operator ξ→Dξ=L(ξ)ω=Ω may be defined by linearization as above and we obtain the first order system of general infinitesimal Lie equations in Medolaghi form, also called system of conformal Killing equations:  
+    Ωᵢⱼ≡ωᵣⱼ(x)∂ᵢξʳ+ωᵢᵣ(x)∂ⱼξʳ-2/nωᵢⱼ(x)∂ᵣξʳ+ξʳ∂ᵣωᵢⱼ(x)=0
+
+as a system with coefficients in the differential field ℚ(ω,∂ω,...). We may introduce the trace tr(Ω)=ωⁱʲΩᵢⱼ with standard notations and obtain therefore tr(Ω)=0 because Ωᵢⱼ=| det(ω)|⁽⁻¹⁄ⁿ⁾(Ωᵢⱼ-1/nωᵢⱼtr(Ω)). This system becomes formally interable if and only if the corresponding Weyl tensor vanishes.  
+
+The reader may look at [31,32,33,34,44] for finding examples of Lie groups or Lie pseudogroups of transformations
+along the approach initiated by E. Vessiot in 1903 [53]. 
+
+In classical elasticity, the stress tensor density σ=(σⁱʲ=σʲⁱ) existing inside an elastic body is a symmetric 2-tensor density introduced by A. Cauchy in 1822. Integrating by parts the implicit summation -1/2σⁱʲΩᵢⱼ, we obtain the Cauchy operator σ→∂ᵣσⁱʳ+γⁱᵣₛσʳˢ=fⁱ. When ω is the euclidean metric, the corresponding Cauchy stress equations can be written as ∂ᵣσⁱʳ=fⁱ where the right member describes the local density of forces applied to the body, for example gravitation. With zero second member, we study the possibility to ”parametrize ” the system of PD equations ∂ᵣσⁱʳ=0, namely to express its general solution by means of a certain number of arbitrary functions or potentials, called stress functions. Of course, the problem is to know about the number of such functions and the order of the parametrizing operator. For n=1,2,3 one may introduce the Euclidean metric ω=(ωᵢⱼ=ωⱼᵢ) while, for n=4, one may consider the Minkowski metric. A few definitions used thereafter will be provided later on. 
+
+When n=2, the stress equations become ∂₁σ¹¹+∂₂σ¹²=0,∂₁σ²¹+∂₂σ²²=0. Their second order parametrization σ¹¹=∂₂₂φ,σ¹²=σ²¹=-∂₁₂φ,σ²²=∂₁₁φ has been provided by George Biddell Airy (1801-1892) in 1863 [1]. It can be simply recovered in the following manner:  
+    []rcl∂₁σ¹¹-∂₂(-σ¹²)=0 ⇒ 14.22636pt∃φ, σ¹¹=∂₂φ,σ¹²=-∂₁φ ∂₂σ²²-∂₁(-σ²¹)=0 ⇒ 14.22636pt∃ψ, σ²²=∂₁ψ,σ²¹=-∂₂ψ σ¹²=σ²¹⇒∂₁φ-∂₂ψ=0 ⇒ 14.22636pt∃φ, φ=∂₂φ,ψ=∂₁φ
+
+We get the linear second order system:  
+    []rllσ¹¹ ≡∂₂₂φ=0 -σ¹² ≡∂₁₂φ=0 σ²² ≡∂₁₁φ=0$[]ll1 2 1 • 1 •$
+
+which is involutive with one equation of class 2, 2 equations of class 1 and it is easy to check that the 2 corresponding first order CC are just the stress equations. 
+
+When constructing a long prismatic dam with concrete as in [12,13] or in the Introduction of [36], we may transform a problem of 3-dimensional elasticity into a problem of 2-dimensional elasticity by supposing that the axis x³ of the dam is perpendicular to the river with Ωᵢⱼ(x¹,x²),∀ i,j=1,2 and Ω₃₃=0 because of the rocky banks of the river are supposed to be fixed. We may introduce the two Lamé constants (λ,μ) and the Poisson coefficient ν=λ/2(λ+μ) in order to describe the usual constitutive relations of an homogeneous isotropic medium as follows (care: n=3⇒ n=2):  
+    σ=1/2λ tr(Ω) ω+μ Ω, tr(Ω)=Ω₁₁+Ω₂₂11.38109pt⇒11.38109ptμ Ω=σ-λ/2(λ+μ) tr(σ) ω, tr(σ)=σ¹¹+σ²²
+
+even though σ³³=1/2λ(Ω₁₁+Ω₂₂)=1/2λ tr(Ω)⇒σ³³=ν(σ¹¹+σ²²)≠ 0. Let us consider the right square of the diagram below with locally exact rows:  
+    []ccccc2 Killing 3 Riemann 1 ⋮  ↓↑  ⋮ 2 Cauchy 3 Airy 1
+
+Taking into account the formula (5.1.4) of [15] for the linearization of the only component of the Riemann tensor at ω when n=2 and substituting the Airy parametrization, we obtain:  
+    tr(R)≡ d₁₁Ω₂₂+d₂₂Ω₁₁-2d₁₂Ω₁₂=08.53581pt⇒8.53581ptμ tr(R)≡λ+2μ/2(λ+μ)ΔΔφ=08.53581pt⇒8.53581ptΔΔφ=0
+
+where the linearized scalar curvature tr(R) is allowing to define the Riemann operator in the previous diagram, namely the only compatibility condition (CC) of the Killing operator. Using now the left square of the previous diagram, we may also substitute the Airy parametrization in the Cauchy stress equations and get, when f=g (gravity)(care: n=3):  
+
+It remains to exhibit an arbitrary homogeneous polynomial solution of degree 3 and to determine its 4 coefficients by the boundary pressure conditions on the upstream and downstream walls of the dam. Of course, the Airy potential φ has nothing to do with the perturbation Ω of the metric ω and the Airy parametrization is nothing else but the formal adjoint of the Riemann operator, linearization of the Riemann tensor at ω, expressing the second order compatibility conditions (CC) of the inhomogeneous system Dξ=Ω. Also, as we discover at once, the origin of elastic waves is shifted by one step backwards, from the right square to the left square of the diagram. Indeed, using inertial forces f=ρ ∂²ξ/∂ t² for a medium with mass ρ per unit volume in the right member of Cauchy stress equations because of Newton law, we discover the existence of two types of elastic waves, namely the longitudinal and transversal waves with different speeds vT<vL that are really existing because they are responsible for earthquakes [36]:  
+    []rcrcl∇.ξ=0 28.45274pt⇒ μ△ξ=f 28.45274pt⇒ vT=√μ/ρ ∇=0 28.45274pt⇒ (λ+2μ)△ξ=f 28.45274pt⇒ vL=√λ+2μ/ρ
+
+
+It is this comment that pushed the author to use the formal adjoint of an operator, knowing already that an operator and its (formal) adjoint have the same differential rank. In the case of the conformal Killing operator, the second order CC are generated by the Weyl operator, linearization of the Weyl tensor at ω when n≥ 4. The particular situation n=3 will be studied and its corresponding 5 third order CC are not known after one century [44]. Finally, the Bianchi operator describing the CC of the Riemann operator does not appear in this scheme.  
+
+Summarizing what we have just said, the study of elastic waves in continuum mechanics only depends on group theory because it has only to do with one differential sequence and its formal adjoint, combined together by means of constitutive relations. We have proved in many books [33,34,] and in [41,42,44] that the situation is similar for Maxwell equations, a result leading therefore to revisit the mathematical foundations of both General Relativity (GR) and Electromagnetism (EM), thus also of Gauge Theory (GT).  
+
+The first motivation for studying the methods used in this paper has been a 1000 challenge proposed in 1970 by J. Wheeler in the physics department of Princeton University while the author of this paper was a student of D.C. Spencer in the closeby mathematics department:  
+
+Is it possible to express the generic solutions of Einstein equations in vacuum by means of the derivatives of a certain number of arbitrary functions like the potentials for Maxwell equations ?. 
+
+During the next 25 years and though surprising it may look like, no progress has been made towards any solution and we found the negative solution of this challenge in 1995 [35]. Then, being already in contact with M.P. Malliavin as I gave a seminar on the ”Deformation Theory of Algebraic and Geometric Structures ” [24,44], I presented in 1995 a seminar at IHP in Paris, proving the impossibility to parametrize Einstein equations, a result I just found. One of the participants called my attention on a recently published translation from japanese of the 1970 master thesis of M. Kashiwara that he just saw on display in the library of the Institute [21]. This has been the true starting of the story because I discovered that the duality involved in the preceding approach to physics was only a particular example of a much more sophisticated framework having to do with homological algebra [2,7,27,36,50].  
+
+Let us explain this point of view by means of an elementary example. With ∂₂₂ξ=η²,∂₁₂ξ=η¹ for D, we get ∂₁η²-∂₂η¹=ζ for the CC D₁. Then ad(D₁) is defined by μ²=-∂₁λ,μ¹=∂₂λ while ad(D) is defined by ν=∂₁₂μ¹+∂₂₂μ² but the CC of ad(D₁) are generated by ν′=∂₁μ¹+∂₂μ². Using operators, we have the two differential sequences: 
+    []cccclξ D η D₁ ζ ν ad(D) μ ad(D₁) λ      5.69054ptν′
+
+where D₁ generates the CC of D in the upper sequence but ad(D) does not generate the CC of ad(D₁) in the lower sequence, even though D₁∘D=0⇒ ad(D)∘ ad(D₁)=0, contrary to what happened in the previous diagram. We shall see that this comment brings the need to introduce the first extension module ext¹(M) of the differential module M determined by D.  
+
+In the meantime, following U. Oberst [28,29], a few persons were trying to adapt these methods to control theory and, thanks to J.L. Lions, I have been able to advertise about this new approach in a european course, held with succes during 6 years [34] and continued for 5 other years in a slightly different form [37]. By chance I met A. Quadrat, a good PhD student interested by control and computer algebra and we have been staying alone because the specialists of Algebraic Analysis were pure mathematicians, not interested at all by applications. As a byproduct, it is rather strange to discover that the impossibility to parametrize Einstein equations, that we shall prove in Section 4, has never been acknowledged by physicists but can be found in a book on control because it is now known that a control system is controllable if and only if it is parametrizable [37,56].  
+
+The following example of a double pendulum will prove that this result, still not acknowledged today by engineers, is not evident at all. For this, let us consider two pendula of respective length l₁ and l₂ attached at the ends of a rigid bar sliding horizontally with a reference position x(t). If the pendula move with a respective (small) angle θ₁(t) and θ₂(t) with respect to the vertical, it is easy to prove from the Newton principle that the equations of the movements does not depend on the respective masses m₁ and m₂ of the pendula but only depend on the respective lengths and gravity g along the two formulas:  
+    d²x+l₁d²θ₁+gθ₁=0,56.9055ptd²x+l₂d²θ₂+gθ₂=0
+
+where d=dₜ is the standard time derivative. It is experimentally visible and any reader can check it with a few dollars, that the system is controllable, that is the angles can reach any prescribed (small) values in a finite time when starting from equilibrium, if and only if l₁≠ l₂ and, in this case, we have the following (injective) 4ᵗʰ order parametrization:  
+    -l₁l₂d⁴φ-g(l₁+₂)d²φ-g²φ=x,28.45274ptl₂d⁴φ+gd²φ=θ₁,28.45274ptl₁d⁴φ+gd²φ=θ₂
+
+0f course, if l₁=l₂=l, the system cannot be controllable because, setting θ=θ₁-θ₂, we obtain by substractionld²θ+gθ=0 and thus θ(0)=0,dθ(0)=0⇒θ(t)=0.  
+
+We end this Introduction explaining on a simple example why the second extension module ext²(M) must also be considered, especially in the study of Einstein equations, though surprising it may look like. To make a comparison, let us consider the following well known Poincaré sequence:  
+    ⁰T*d¹T*d²T*d...dⁿ⁻¹T*dⁿT*→ 0
+
+where d:ω=ωIdxᴵ→∂ᵢωIdxⁱdxᴵ is the exterior derivative. When n=3, we have:  
+    []ccc19.91692pt⁰T* d ¹T* d ²T* d ³T*→ 0 ⟺ 19.91692ptφgradξcurlηdivζ→ 0    0←³T*ad(d)²T*ad(d)¹T*ad(d)⁰T* ⟺ 11.38109pt0←θdivνcurlμgradλ
+
+From their definition it follows that div is parametrized by curl while curl is parametrized by grad. Also, in local coordinates, we have ad(div)=-grad,ad(curl)=curl,ad(grad)=-div and the adjoint sequence is also the Poincaré sequence up to the sign. Let us nevertheless consider the new (minimal) parametrization of div obtained by setting ξ³=0, namely [45,46]:  
+    d₂ξ³-d₃ξ²=η¹,5.69054ptd₃ξ¹-d₁ξ³=η²,5.69054ptd₁ξ²-d₂ξ¹=η³⇒-d₃ξ²=η¹,5.69054ptd₃ξ¹=η²,5.69054ptd₁ξ²-d₂ξ¹=η³
+
+If we define the differential rank of an operator by the maximum number of differentially independent second member, this is clearly an involutive differential operator with differential rank equal to 2 because (ξ¹,ξ²) can be given arbitrarily and thus (η¹,η²) can be given arbitrarily or, equivalently, because the differential rank of div is of course equal to 1 as div has no CC. Now, the involutive system d₃ξ²=0,d₃ξ¹=0,d₁ξ²-d₂ξ¹=0 canot be parametrized by one arbitrary function because both ξ¹ and ξ² are autonomous in the sense that they both satisfy to at least one partial differential equation (PDE). Accordingly, we discover that div can be parametrized by the curl through 3 arbitrary functions (ξ¹,ξ²,ξ³) where ξ³ may be given arbitrarily, the curl being itself parametrized by the grad, but div can also be parametrized by another operator with less arbitrary functions or potentials which, in turn, cannot be parametrized again. Such a situation is similar to the one met in hunting rifles that may have one, two or more trigger mechanisms that can be used successively. It happens that the possibility to have one parametrization of div is an intrinsic property described by the vanishing of ext¹(M) where the differential module M is determined by grad while the property to have two successive parametrizations is an intrinsic property described by the vanishing of ext¹(M) as we just said plus the vanishing of ext²(M), and so on. It follows that certain parametrizations are ” better ” than others and no student should even imagine the minimal parametrization of div that we have presented above. A similar procedure has been adopted by J.C. Maxwell [25] and G. Morera [26] when they modified the parametrization of the Cauchy stress equations obtained by E. Beltrami in 1892 (See [3, 9,10,43,47,48] for more details).  
+
+We now treat the case dim(X)=3 as the case dim(X)=n=2p+1≥ 5 will need much more work (See [39] for more details). Let us introduce the so-called contact 1-form α=dx¹-x³dx² and consider the Lie pseudogroup Γ⊂ aut(X) of (local) transformations preserving α up to a function factor, that is Γ=f∈ aut(X)|j₁(f)⁻¹(α)=ρα where again jq(f) is a symbolic way for writing out the derivatives of f up to order q and α transforms like a 1-covariant tensor. It may be tempting to look for a kind of ”object ” the invariance of which should characterize Γ. Introducing the exterior derivative dα=dx²dx³ as a 2-form, we obtain the volume 3-form αdα=dx¹dx²dx³. As it is well known that the exterior derivative commutes with any diffeomorphism, we obtain sucessively: 
+    j₁(f)⁻¹(dα)=d(j₁(f)⁻¹(α))=d(ρα)=ρ dα+dρ⇒ j₁(f)⁻¹(αdα)=ρ²(αdα)
+
+As the volume 3-form αdα transforms through a division by the Jacobian determinant Δ=∂(f¹,f²,f³)/∂(x¹,x²,x³)≠ 0 of the transformation y=f(x) with inverse x=f⁻¹(y)=g(y), the desired object is thus no longer a 1-form but a 1-form density ω=(ω₁,ω₂,ω₃) transforming like a 1-form but up to a division by the square root of the Jacobian determinant. We obtain the nonlinear differential algebraic system of general finite Lie equations in Lie form:  
+    ωₖ(y)(∂(y¹,...,yⁿ)/∂(x¹,...,xⁿ))⁽⁻¹⁄²⁾yᵏᵢ=ωᵢ(x)
+
+It follows that the infinitesimal contact transformations are vector fields ξ∈ T=T(X) the tangent bundle of X, satisfying the 3 so-called first order system of general infinitesimal Lie equations in Medolaghi form:  
+    Ωᵢ≡(L(ξ)ω)ᵢ≡ωᵣ(x)∂ᵢξʳ-(1/2)ωᵢ(x)∂ᵣξʳ+ξʳ∂ᵣωᵢ(x)=0
+
+When ω=(1,-x³,0), we obtain the special involutive system (See below for details):  
+    ∂₃ξ³+∂₂ξ²+2x³∂₁ξ²-∂₁ξ¹=0,∂₃ξ¹-x³∂₃ξ²=0,∂₂ξ¹-x³∂₂ξ²+x³∂₁ξ¹-(x³)²∂₁ξ²-ξ³=0
+
+with 2 equations of class 3 and 1 equation of class 2, a result leading thus to only 1 compatibility conditions (CC) for the second members. Equivalently, we have the system:  
+    []cclΩ₃ ≡ ξ¹₃-x³ξ²₃=0 Ω₂ ≡ ξ¹₂-x³ξ²₂+1/2x³(ξ¹₁+ξ²₂+ξ³₃)-ξ³=0 Ω₁ ≡ ξ¹₁-x³ξ²₁-1/2(ξ¹₁+ξ²₂+ξ³₃)=0
+
+For an arbitrary ω, we may ask about the differential conditions on ω such that all the equations of order r+1 are only obtained by differentiating r times the first order equations, exactly like in the special situation just considered where the system is involutive. We notice that, in a symbolic way, ωdω is now a scalar c(x) providing the zero order equation ξʳ∂ᵣc(x)=0 and the condition is c(x)=c=cst. The integrability condition (IC) is the Vessiot structure equation:  
+    I(j₁(ω))≡ω₁(∂₂ω₃-∂₃ω₂)+ω₂(∂₃ω₁-∂₁ω₃)+ω₃(∂₁ω₂-∂₂ω₁)=c
+
+involving the only structure constant c like the Riemannian structure.  For ω=(1,-x³,0), we get c=1. If we choose ω=(1,0,0) leading to c=0, we may define Γ=f∈ aut(X)|j₁(f)⁻¹(ω)=ω with infinitesimal transformations satisfying the involutive system: 
+    ∂₃ξ³+∂₂ξ²-∂₁ξ¹=0,8.53581pt∂₃ξ¹=0,8.53581pt∂₂ξ¹=0
+
+with again 2 equations of class 3 and 1 equation of class 2. The equivalence problem j₁(f)⁻¹(ω)=ω cannot be solved even locally because this system cannot have any invertible solution. Indeed, studying the system j₁(g)⁻¹(ω)=ω, we have to solve:  
+    ∂ g¹/∂ y²+y³∂ g¹/∂ y¹=0,∂ g¹/∂ y³=0⇒∂ g¹/∂ y¹=0,∂ g¹/∂ y²=0,∂ g¹/∂ y³=0
+
+by using crossed derivatives. 
+
+Using now the definition of contact transformations, we have the three equations:  
+    (L(ξ)α)ᵢ≡αᵣ∂ᵢξʳ+ξʳ∂ᵣαᵢ=ρ(x)αᵢ
+
+Eliminating the arbitrary factor ρ(x), we obtain the two linearly independent infinitesimal Lie equations:  
+    []lclα₂αᵣ∂₃ξʳ-α₃αᵣ∂₂ξʳ+(α₂∂ᵣα₃-α₃∂ᵣα₂)ξʳ = 0    α₃αᵣ∂₁ξʳ-α₁αᵣ∂₃ξʳ+(α₃∂ᵣα₁-α₁∂ᵣα₃)ξʳ = 0
+
+which are nevertheless not in the Medolaghi form because the 1-form α is not a geometric object.  Multiplying on the left the first equation by the test function λ¹ and the second by the test function λ² and integrating by part, we obtain for example, separating the terms involving only λ₁ from the terms involving onlyλ²:  
+    []lclξ¹ → -∂₃(α₁α₂λ¹)+∂₂(α₁α₃λ¹)+(α₂∂₁α₃-α₃∂₁α₂)λ¹ ξ² → ... ξ³ → -∂₃(α₂α₃λ¹)+∂₂((α₃)²λ¹)+(α₂∂₃α₃-α₃∂₃α₂)λ¹
+
+and:  
+    []lclξ¹ → -∂₁(α₁α₃λ²)+∂₃((α₁)²λ²)+(α₃∂₁α₁-α₁∂₁α₃)λ² ξ² → ... ξ³ → -∂₁((α₃)²λ²)+∂₃(α₁α₃λ²)+(α₃∂₃α₁-α₁∂₃α₃)λ²
+
+that we may rewrite respectively as:  
+    []c-(α₁α₂)∂₃λ¹+(α₁α₃)∂₂λ¹-(α₁(∂₂α₃-∂₃α₂)-α₂(∂₃α₁-∂₁α₃)-α₃(∂₁α₂-∂₂α₁))λ¹ ... -(α₂α₃)∂₃λ¹+(α₃)²∂₂λ¹+2α₃(∂₂α₃-∂₃α₂)λ¹
+
+and:  
+    []c-(α₁α₃)∂₁λ²+(α₁)²∂₃λ²+2α₁(∂₃α₁-∂₁α₃)λ² ... -(α₃)²∂₁λ²+(α₁α₃)∂₃λ²+2α₃(∂₃α₁-∂₁α₃)λ²
+
+
+Multiplying each first row on the left by -α₃, then each third row on the left by α₁ in order to eliminate the derivatives of λ, adding and collecting the results, we discover that λ² strikingly disappears and we only obtain for the kernel of the adjoint operator:  
+    α₃[α₁(∂₂α₃-∂₃α₂)+α₂(∂₃α₁-∂₁α₃)+α₃(∂₁α₂-∂₂α₁)]λ¹=0
+
+that is α₃I(j₁(α))λ¹=0 and all the possible permutations. As α≠ 0, then one at least of the three components must not vanish and may even be supposed to be equal to 1 because α is defined uo to a function factor. We get therefore I(j₁(α))λ=0, that is cλ=0 whenever the system is formally integrable. We let the reader treat directly the standard
+case with α₃=0 (care):  
+    α=dx¹-x³dx²⇒∂₃ξ¹-x³∂₃ξ²=0,∂₂ξ¹-x³∂₂ξ²+x³(∂₁ξ¹-x³∂₁ξ²)-ξ³=0⇒ c=1⇒λ=0
+
+Though it is rather surprising at first sight, let us now explain why we shall need non trivial homological algebra in order to understand the previous results. Indeed, the last system R₁ is neither formally integrable nor involutive, even though it has an involutive symbol g₁ defined by:  
+    ξ¹₃-x³ξ²₃=0,28.45274ptξ¹₂-x³ξ²₂+x³ξ¹₁-(x³)²ξ²₁=0
+
+It is now easy to check that the system R⁽¹⁾₁⊂ J₁(T) defined by the 3 PD equations:  
+    []lclΦ³≡ξ³₃+ξ²₂+2x³ξ²₁-ξ¹₁ = 0 Φ²≡ξ¹₃-x³ξ²₃ = 0 Φ¹≡ξ¹₂-x³ξ²₂+x³ξ¹₁-(x³)²ξ²₁-ξ³ = 0$[]lll1 2 3 1 2 3 1 2 •$
+
+is involutive with 2 equations of class 3 and 1 equation of class 2. Taking into account the relations Φ¹=Ω₂+x³Ω₁,Φ²=Ω₃,Φ³=-2Ω₁ and substituting, we obtain the only first order CC:  
+    d₃Φ¹-d₂Φ²-x³d₁Φ²+Φ³=0⟺(d₂Ω₃-d₃Ω₂)-x³(d₃Ω₁-d₁Ω₃)+Ω₁=0
+
+and we recognize the linearization of the Vessiot structure equation, following exactly the same procedure as the one used previously for the linearization of the constant Riemannian curvature. However, in this new framework, we shall now prove and illustrate the following Lemma and striking Theorem (See next Sections for the definitions):  
+
+LEMMA 1.1: A (formally) surjective linear differential operator D defined over a differential field K is defining a projective and thus torsion-free differential module M if and only if its (formal) adjoint is (formally) injective.  
+
+Proof: In this specific situation, let us consider the finite free presentation over D=K[d]:  
+    0→ F₁DF₀pM→ 0
+
+If M is projective, then it is well known that that such a sequence splits (See [2,7,17,27,36,50] for more details or [23], Lemma 3.3, p 212). Then, applying homD(•,D) we get again the new splitting sequence:  
+    0←F₁*D*F₀*p*M*← 0
+
+and obtain ker(ad(D))=0 in the operator sense or rather coker(D*)=0 in the module sense.  Conversely,we have already exhibited the long exact dual sequence:  
+    0← N←F₁*D*F₀*p*M*← 0
+
+Accordingly, if N=0, as the dual F* of a free differential module F is again a free differential module, thus a projective module, this sequence splits and M* is thus a projective module.  Applying again homD(•,D), we have the commutative and exact diagram:  
+    []rcccccl0→ F₁ D F₀ p M → 0  ↓  ↓  ↓  0→  F₁** D**  F₀** p**  M** → 0
+
+Using the isomorphism F≃ F** when F has finite rank over D, we obtain an isomorphism M≃ M**. As M* is projective because F*₀≃ F₁*⊕ M*, then M** is also projective and thus M is projective.                                                                                                          Q.E.D.  
+
+EXAMPLE 1.2: In the preceding contact situation, the system R₁ is defined by 2 equations only while the system R⁽¹⁾₁ is defined by 3 equations that we have provided. Accordingly, with K=ℚ(x¹,x²,x³) and D=K[d]=K[d₁,d₂,d₃], we obtain the free presentation 0→ D²→ D³→ M→ 0 and we have seen that c≠ 0⇒λ=0. The parametrization:  
+    ξ¹=φ-x³∂₃φ, ξ²=-∂₃φ, ξ³=∂₂φ+x³∂₁φ ⇒ φ=α(ξ) ⇒ L(ξ)α=∂₁φ α
+
+by means of an arbitrary function φ is well known and proves that M≃ D. On the contrary, if we choose ω=(1,0,0), then the system of special Medolaghi equations that we have exhibited shows that ξ¹ is a torsion element and this system cannot be parametrized.  
+
+THEOREM 1.3: The possibility to parametrize the system of general Medolaghi equations only depends on the structure constant c.  
+
+Proof: For any geometric object ω of order q and the corresponding system Rq(ω) of general Medolaghi equations, let us now define an equivalence relation ω∼ω⟺ Rq(ω)=Rq(ω). In the contact situation, we have first to study when we have ωᵣξʳᵢ-1/2ωᵢξʳᵣ=0⟺ωᵣξʳᵢ-1/2ωᵢξʳᵣ. Though it looks like to be a simple algebraic problem, one needs an explicit computation or computer algebra and we prefer to use another more powerful technique ([39], p 688). Introducing the completely skewsymmetrical symbol ε=(εⁱ₁ⁱ₂ⁱ₃) where εⁱ₁ⁱ₂ⁱ₃=1 if (i₁i₂i₃) is an even permutation of (123) or -1 if it is an odd permutation and 0 otherwise, let us introduce the skewsymmetrical 2-contravariant density ωⁱʲ=εⁱʲᵏωₖ. Then one can rewrite the system of general infinitesimal Lie equations R₁(ω) as :  
+    -ωʳʲ(x)ξⁱᵣ-ωⁱʳ(x)ξʲᵣ-1/2ωⁱʲ(x)ξʳᵣ+ξʳ∂ᵣωⁱʲ(x)=0
+
+and we may exhibit a section ξⁱᵣ=ωⁱˢAᵣₛ with Aᵣₛ=Aₛᵣ and thus ξʳᵣ=0. It is important to notice that det(ω)=0 when n=2p+1, contrary to the Riemann or symplectic case and ω cannot therefore be used in order to raise or lower indices. As we must have R⁰₁=R⁰₁ where the isotropy R⁰₁ is defined by the short exact sequence 0→ R⁰₁→ R₁π¹₀→T→ 0, the same section must satisfy (ωʳʲωⁱˢ+ωⁱʳωʲˢ)Aᵣₛ=0,∀ Aᵣₛ=Aₛᵣ, and we must have (ωʳʲωⁱˢ+ωⁱʳωʲˢ)+(ωˢʲωⁱʳ+ωⁱˢωʲʳ)=0. Setting s=j, we get ωʳʲωⁱʲ=ωⁱʲωʳʲ⇒ωⁱʲ(x)=a(x)ωⁱʲ(x). Substituting and substracting, we get ωⁱʲ(x)ξʳ∂ᵣa(x)=0⇒ a(x)=a=cst≠ 0 because ω≠ 0 and one of the components at least must be nonzero. Accordingly, the normalizer N(Θ)=ξ∈ T|L(ξ)ω=Aω,Ac=0 and Θ is of codimension 1 in its normalizer if c=0 or N(Θ)=Θ if c≠ 0. For example, in the case of a contact structure with c=1, we have N(Θ)=Θ but, when ω=(1,0,0)⇒ c=0, we have to eliminate the constant A among the equations ∂₃ξ³+∂₂ξ²-∂₁ξ¹=-2A,∂₃ξ¹=0,∂₂ξ¹=0 and we may add the infinitesimal generator xⁱ∂ᵢ of a dilatation providing A=-1/2. As we have already seen, the parametrization is only existing for c≠ 0. This is an ”open property ” because ω=aω,a=cst⇒c=a²c and thus any nonzero value of c can be reached because a≠ 0.
+                                                                                                        Q.E.D.  
+
+However, no one of the previous results can be extended to an arbitrary n=2p+1≥ 5.  
+
+It is clear from the beginning of this Introduction that an isometry is a solution of a nonlinear system in Lie form [31,34,44] and that we have linearized this system at the identity transformation in order to study elastic waves. However, in general, no explicit solution may be known but most nonlinear systems of OD or PD equations of mathematical physics (constant riemannian curvature is a good example in [14]) are defined by differential polynomials. This is particularly clear for riemannian, conformal, complex, contact, symplectic or unimodular structures on manifolds [44]. Hence, in Section 2 we shall provide the main results that exist in the formal theory of systems of nonlinear PD equations in order to construct a formal linearization. The proof of many results is quite difficult as it involves delicate chases in 3-dimensional diagrams [31,34,36]. In physics, the linear system obtained may have coefficients in a certain differential field and we shall need to revisit differential algebra in Section 3 because Spencer and Kolchin never clearly understood that their respective works could be combined. It will follow that the linear systems will have coefficients in a differential field K and we shall have to introduce the ring D=K[d]=K[d₁,...,dₙ] of differential operators with coefficients in K, which is even an integral domain. This fact will be particularly useful in order to revisit differential duality in Section 4 before applying it to the study of conformal structures in Section 5, caring separately about the cases n=3,n=4 and n≥ 5, then to contact structures in Section 6, caring also separately about the cases n=3 and n≥ 5, finally concluding in the last Section 7. 
+
+2) DIFFERENTIAL GEOMETRY  
+
+If X is a manifold with local coordinates (xⁱ) for i=1,...,n=dim(X), let E be a fibered manifold over X with dimX(E)=m, that is a manifold with local coordinates (xⁱ,yᵏ) for i=1,...,n and k=1,...,m simply denoted by (x,y), projection π:E→ X:(x,y)→(x) and changes of local coordinates x=φ(x),y=ψ(x,y). If E and F are two fibered manifolds over X with respective local coordinates (x,y) and (x,z), we denote by E×XF the fibered product of E and F over X as the new fibered manifold over X with local coordinates (x,y,z). We denote by f:X→E:(x)→(x,y=f(x)) a global section of E, that is a map such that π∘ f=idX but local sections over an open set U⊂ X may also be considered when needed. Under a change of coordinates, a section transforms like f(φ(x))=ψ(x,f(x)) and the derivatives transform like: 
+    ∂fˡ/∂xʳ(φ(x))∂ᵢφʳ(x)=∂ψˡ/∂ xⁱ(x,f(x))+∂ψˡ/∂ yᵏ(x,f(x))∂ᵢfᵏ(x)
+
+We may introduce new coordinates (xⁱ,yᵏ,yᵏᵢ) transforming like: 
+    yˡᵣ∂ᵢφʳ(x)=∂ψˡ/∂ xⁱ(x,y)+∂ψˡ/∂ yᵏ(x,y)yᵏᵢ
+
+We shall denote by Jq(E) the q-jet bundle of E with local coordinates (xⁱ,yᵏ,yᵏᵢ,yᵏᵢⱼ,...)=(x,yq) called jet coordinates and sections fq:(x)→(x,fᵏ(x),fᵏᵢ(x),fᵏᵢⱼ(x),...)=(x,fq(x)) transforming like the sections jq(f):(x)→(x,fᵏ(x),∂ᵢfᵏ(x),∂ᵢⱼfᵏ(x),...)=(x,jq(f)(x)) where both fq and jq(f) are over the section f of E. It will be useful to introduce a multi-index μ=(μ₁,...,μₙ) with length |μ|=μ₁+...+μₙ and to set μ+1ᵢ=(μ₁...,μᵢ₋₁,μᵢ+1,μᵢ₊₁,...,μₙ). Finally, a jet coordinate yᵏμ is said to be of class i if μ₁=...=μᵢ₋₁=0,μᵢ≠ 0. As the background will always be clear enough, we shall use the same notation for a vector bundle or a fibered manifold and their sets of sections [31,36]. We finally notice
+that Jq(E) is a fibered manifold over X with projection πq while Jq₊ᵣ(E) is a fibered manifold over Jq(E) with projection πq⁺ʳq,∀ r≥ 0 [, , ]. 
+
+DEFINITION 2.1: A (nonlinear) system of order q on E is a fibered submanifold Rq⊂ Jq(E) and a global or local solution of Rq is a section f of E over X or U⊂ X such that jq(f) is a section of Rq over X or U⊂ X. 
+
+DEFINITION 2.2: When the changes of coordinates have the linear form x=φ(x),y=A(x)y, we say that E is a vector bundle over X. Vector bundles will be denoted by capital letters C,E,F and will have sections denoted by ξ,η,ζ. In particular, we shall denote as usual by T=T(X) the tangent bundle of X, by T*=T*(X) the cotangent bundle, by ʳT* the bundle of r-forms and by SqT* the bundle of q-symmetric covariant tensors. When the changes of coordinates have the form x=φ(x),y=A(x)y+B(x) we say that E is an affine bundle over X and we define the associated vector bundle E over X by the local coordinates (x,v) changing like x=φ(x),v=A(x)v.  
+
+DEFINITION 2.3: If the tangent bundle T(E) has local coordinates (x,y,u,v) changing like uʲ=∂ᵢφʲ(x)uⁱ,vˡ=∂ψˡ/∂ xⁱ(x,y)uⁱ+∂ψˡ/∂ yᵏ(x,y)vᵏ, we may introduce the vertical bundle V(E)⊂ T(E) as a vector bundle over E with local coordinates (x,y,v) obtained by setting u=0 and changes vˡ=∂ψˡ/∂ yᵏ(x,y)vᵏ. Of course, when E is an affine bundle over X with associated vector bundle E over X, we have V(E)=E×XE. With a slight abuse of language, we shall set E=V(E) as a vector bundle over E. 
+
+For a later use, if E is a fibered manifold over X and f is a section of E, we denote by f⁻¹(V(E)) the reciprocal image of V(E) by f as the vector bundle over X obtained when replacing (x,y,v) by (x,f(x),v) in each chart. A similar construction may also be done for any affine bundle over E. Loking at the transition rules of Jq(E), we deduce easily the following results:  
+
+PROPOSITION 2.4: Jq(E) is an affine bundle over Jq₋₁(E) modeled on SqT*⊗EE but we shall not specify the tensor product in general.  
+
+PROPOSITION 2.5: There is a canonical isomorphism V(Jq(E))≃ Jq(V(E))=Jq(E) of vector bundles over Jq(E) given by setting vμk=v,μk at any order and a short exact sequence:  
+    0→ SqT*⊗ E→ Jq(E)πqq₋₁Jq₋₁(E)→ 0
+
+of vector bundles over Jq(E) allowing to establish a link with the formal theory of linear systems.  
+
+PROPOSITION 2.6: There is an exact sequence:  
+    0→Ejq₊₁Jq₊₁(E)DT*⊗ Jq(E)
+
+where Dfq₊₁=j₁(fq)-fq₊₁ is over fq with components (Dfq₊₁)ᵏμ,ᵢ=∂ᵢfᵏμ-fᵏμ₊₁ᵢ is called the (nonlinear) Spencer operator. As Jq₊₁(E)⊂ J₁(Jq(E)), there is an induced exact sequence:  
+    0→EjqJq₊₁(E)D₁T*⊗ Jq(E)/Sq₊₁T*⊗ E
+
+where D₁ is called the first Spencer operator.  
+
+DEFINITION 2.7: If Rq⊂ Jq(E) is a system of order q on E, then Rq₊₁=ρ₁(Rq)=J₁(Rq)∩ Jq₊₁(E)⊂ J₁(Jq(E)) is called the first prolongation ofRq and we may define the subsets Rq₊ᵣ. In actual practice, if the system is defined by PDE Φτ(x,yq)=0 the first prolongation is defined by adding the PDE dᵢΦτ≡∂ᵢΦτ+yᵏμ₊₁ᵢ∂Φτ/∂ yᵏμ=0. accordingly, fq∈Rq⟺Φτ(x,fq(x))=0 and fq₊₁∈Rq₊₁⟺∂ᵢΦτ+fᵏμ₊₁ᵢ(x)∂Φτ/∂ yᵏμ=0 as identities on X or at least over an open subset U⊂ X. Differentiating the first relation with respect to xⁱ and substracting the second, we finally obtain:  
+    (∂ᵢfᵏμ(x)-fᵏμ₊₁ᵢ(x))∂Φτ/∂ yᵏμ=0⇒ Dfq₊₁∈ T*⊗ Rq
+
+and the Spencer operator restricts to D:Rq₊₁→ T*⊗ Rq. We set R⁽¹⁾q₊ᵣ=πq⁺ʳ⁺¹q₊ᵣ(Rq₊ᵣ₊₁).  
+
+DEFINITION 2.8: The symbol of Rq is the family gq=Rq∩ SqT*⊗ E of vector spaces over Rq. The symbol gq₊ᵣ of Rq₊ᵣ only depends on gq by a direct prolongation procedure. We may define the vector bundle F₀ over Rq by the short exact sequence 0→ Rq→ Jq(E)→ F₀→ 0 and we have the exact induced sequence 0→ gq→ SqT*⊗ E→ F₀ . 
+
+Setting aτμₖ(x,yq)=∂Φτ/∂ yᵏμ(x,yq) whenever |μ|=q and (x,yq)∈Rq, we obtain:  
+    gq=vᵏμ∈ SqT*⊗ E| aτμₖ(x,yq)vᵏμ=0,|μ|=q,(x,yq)∈Rq
+
+    ⇒ gq₊ᵣ=ρᵣ(gq)=vᵏμ₊ν∈ Sq₊ᵣT*⊗ E| aτμₖ(x,yq)vᵏμ₊ν=0,|μ|=q,|ν|=r,(x,yq)∈Rq
+
+In general, neither gq nor gq₊ᵣ are vector bundles over Rq.  
+
+On ˢT* we may introduce the usual bases dxᴵ=dxⁱ₁...dxⁱₛ where we have setI=(i₁<...<iₛ). In a purely algebraic setting, one has:  
+
+PROPOSITION 2.9: There exists a map δ:ˢT*⊗ Sq₊₁T*⊗ E→ˢ⁺¹T*⊗ SqT*⊗ E which restricts to δ:ˢT*⊗ gq₊₁→ˢ⁺¹T*⊗ gq and δ²=δ∘δ=0. 
+
+Proof: Let us introduce the family of s-forms ω=ωᵏμ=vᵏμ,Idxᴵ and set (δω)ᵏμ=dxⁱωᵏμ₊₁ᵢ. We obtain at once (δ²ω)ᵏμ=dxⁱdxʲωᵏμ₊₁ᵢ₊₁ⱼ=0 and aτμₖ(δω)ᵏμ=dxⁱ(aτμₖωᵏμ₊₁ᵢ)=0.                                                                                                          Q.E.D.  
+
+The kernel of each δ in the first case is equal to the image of the preceding δ but this may no longer be true in the restricted case and we set: 
+
+DEFINITION 2.10: Let Bˢq₊ᵣ(gq)⊆ Zˢq₊ᵣ(gq) and Hˢq₊ᵣ(gq)=Zˢq₊ᵣ(gq)/Bˢq₊ᵣ(gq) with H¹(gq)=H¹q(gq) be the coboundary space im(δ), cocycle space ker(δ) and cohomology space at ˢT*⊗ gq₊ᵣ of the restricted δ-sequence which only depend on gq and may not be vector bundles. The symbol gq is said to be s-acyclic if H¹q₊ᵣ=...=Hˢq₊ᵣ=0,∀ r≥ 0, involutive if it is n-acyclic and finite type if gq₊ᵣ=0 becomes trivially involutive for r large enough. In particular, if gq is involutive and finite type, then gq=0. Finally, SqT*⊗ E is involutive for any q≥ 0 if we set S₀T*⊗ E=E.  
+
+Having in mind the example of xyₓ-y=0⇒ xyₓₓ=0 with rank changing at x=0, we have:  
+
+PROPOSITION 2.11: If gq is 2-acyclic and gq₊₁ is a vector bundle over Rq, then gq₊ᵣ is a vector bundle over Rq,∀ r≥ 1.  
+
+Proof: We may define the vector bundle F₁ over Rq by the following ker/coker exact sequence where we denote by h₁⊆ T*⊗ F₀ the image of the central map:  
+    0→ gq₊₁→ Sq₊₁T*⊗ E→ T*⊗ F₀→ F₁→ 0
+
+and we obtain by induction on r the following commutative and exact diagram of vector bundles over Rq:  
+    []lccccccc 0  0  0  0  ↓  ↓  ↓  ↓ 0→ gq₊ᵣ₊₁ → Sq₊ᵣ₊₁T*⊗ E → Sᵣ₊₁T*⊗ F₀ → SᵣT*⊗ F₁  ↓δ  ↓δ  ↓δ  ↓δ 0→ T*⊗ gq₊ᵣ → T*⊗ Sq₊ᵣT*⊗ E → T*⊗ SᵣT*⊗ F₀ → T*⊗ Sᵣ₋₁T*⊗ F₁  ↓δ  ↓δ  ↓δ   0→ ²T*⊗ gq₊ᵣ₋₁ → ²T*⊗ Sq₊ᵣ₋₁T*⊗ E → ²T*⊗ Sᵣ₋₁T*⊗ F₀    ↓δ  ↓δ      ³T*⊗ Sq₊ᵣ₋₂T*⊗ E = ³T*⊗ Sq₊ᵣ₋₂T*⊗ E
+
+where all the maps have been given after Definition 2.9. The image of the central map of the top row is hᵣ₊₁=ρᵣ(h₁) and a chase proves that h₁ is (s-1)-acyclic whenever gq is s-acyclic by extending the diagram. The proposition finally follows by upper-semicontinuity from the relation:  
+    dim(gq₊ᵣ₊₁)+dim(hᵣ₊₁)=m dim(Sq₊ᵣ₊₁T*)
+
+Q.E.D.   
+
+LEMMA 2.12: If gq is involutive and gq₊₁ is a vector bundle over Rq, then gq is also a vector bundle overRq. In this case, changing linearly the local coordinates if necessary, we may look at the maximum number β of equations that can be solved with respect to vᵏₙ...ₙ and the intrinsic number α=m-β indicates the number of y that can be given arbitrarily.  
+
+Using the exactness of the top row in the preceding diagram and a delicate 3-dimensional chase, we have (See [31] and [36],p336 for the details):  
+
+THEOREM 2.13: If Rq⊂ Jq(E) is a system of order q on E such that gq₊₁ is a vector bundle over Rq and gq is 2-acyclic, then there is an exact sequence:  
+    Rq₊ᵣ₊₁πq⁺ʳ⁺¹q₊ᵣRq₊ᵣκᵣSᵣT*⊗ F₁
+
+where κᵣ is called the r-curvature and κ=κ₀ is simply called the curvature of Rq.  
+
+We notice that Rq₊ᵣ₊₁=ρᵣ(Rq₊₁) and Rq₊ᵣ=ρᵣ(Rq) in the following commutative diagram:  
+    []cccRq₊ᵣ₊₁ πq⁺ʳ⁺¹q₊₁ Rq₊₁ 28.45274pt↓πq⁺ʳ⁺¹q₊ᵣ  19.91692pt↓πq⁺¹q R⁽¹⁾q₊ᵣ πq⁺ʳq R⁽¹⁾q ∩  ∩ Rq₊ᵣ πq⁺ʳq Rq
+
+We also have R⁽¹⁾q₊ᵣ⊆ρᵣ(R⁽¹⁾q) because we have successively:  
+    []cclR⁽¹⁾q₊ᵣ=πq⁺ʳ⁺¹q₊ᵣ(Rq₊ᵣ₊₁) = πq⁺ʳ⁺¹q₊ᵣ(Jᵣ(Rq₊₁)∩ Jq₊ᵣ₊₁(E))  ⊆ Jᵣ(πq⁺¹q)(Jᵣ(Rq₊₁))∩ Jq₊ᵣ(E)  = Jᵣ(R⁽¹⁾q)∩ Jq₊ᵣ(E)  = ρᵣ(R⁽¹⁾q)
+
+while chasing in the following commutative 3-dimensional diagram:  
+    []rcccc  Jᵣ(Rq₊₁)  Jᵣ(Jq₊₁(E))  ↗ ↓  ↗ Rq₊ᵣ₊₁   Jq₊ᵣ₊₁(E) ↓ ↓  Jᵣ(Rq)  Jᵣ(Jq(E))  ↗  ↓ ↗ Rq₊ᵣ   Jq₊ᵣ(E)
+
+with a well defined map Jᵣ(πq⁺¹q):Jᵣ(Jq₊₁(E))→ Jᵣ(Jq(E)). We finally obtain the following crucial Theorem and its Corollary (Compare to [31], p 72-74 or [36], p 340 to [16]):  
+
+THEOREM 2.14: Let Rq⊂ Jq(E) be a system of order q on E such that Rq₊₁ is a fibered submanifold of Jq₊₁(E). If gq is 2-acyclic and gq₊₁ is a vector bundle over Rq, then we have R⁽¹⁾q₊ᵣ=ρᵣ(R⁽¹⁾q) for all r≥ 0.  
+
+DEFINITION 2.15: A system Rq⊂ Jq(E) is said to be formally integrable if πq⁺ʳ⁺¹q₊ᵣ:Rq₊ᵣ₊₁→Rq₊ᵣ is an epimorphism of fibered manifolds for all r≥ 1 and involutive if it is formally integrable with an involutive symbol gq. We have the following useful test [16,31,52]:  
+
+COROLLARY 2.16: Let Rq⊂ Jq(E) be a system of order q on E such that Rq₊₁ is a fibered submanifold of Jq₊₁(E). If gq is 2-acyclic (involutive) and if the map πq⁺¹q:Rq₊₁→Rq is an epimorphism of fibered manifolds, then Rq is formally integrable (involutive).  
+
+This is all what is needed in order to study systems of algebraic ordinary differential (OD) or partial differential (PD) equations.  
+
+3) DIFFERENTIAL ALGEBRA  
+
+We now present in an independent manner two OD examples and two PD examples, among the best ones we know, showing the difficulties met when studying differential ideals and ask the reader to revisit them later on while reading the main Theorems. As only a few results will be proved, the interested reader may look at [32,34,36] for more details and compare to [20,22,49].  
+
+EXAMPLE 3.1: If k=ℚ, y is a differential indeterminate and dₓ is a formal derivation, we may set dₓy=yₓ,dₓyₓ=yₓₓ and so on in order to introduce the differential ring A=k[y,yₓ,yₓₓ,...]=ky. We consider the (proper) differential ideal a⊂ A generated by the differential polynomial P=y²ₓ-4y. We have dₓP=2yₓ(yₓₓ-2) and a cannot
+be a prime differential ideal. Hence, looking for the ”solutions ” of P=0, we must have either yₓ=0⇒ y=0 or yₓₓ=0 and thus y=(x+c)² where c should be a ”constant ” with no clear meaning. However, we have successively:  
+    []cclP∈a ⇒ yₓ(yₓₓ-2)∈a  ⇒ yₓyₓₓₓ+yₓₓ(yₓₓ-2)∈a  ⇒ (yₓ)²yₓₓₓ∈a  ⇒ yyₓₓₓ∈a  ⇒ yyₓₓₓₓ+yₓyₓₓₓ∈a  ⇒ yₓ(yₓₓₓ)²∈a  ⇒ 2yₓyₓₓₓyₓₓₓₓ+yₓₓ(yₓₓₓ)²∈a⇒ 2yₓyₓₓₓyₓₓₓₓ=-yₓₓ(yₓₓₓ)² mod(a)  ⇒ 4yₓₓyₓₓₓyₓₓₓₓ+2yₓ(yₓₓₓₓ)²+2yₓyₓₓₓyₓₓₓₓₓ+(yₓₓₓ)³∈a  ⇒ 4yₓₓ(yₓₓₓ)²yₓₓₓₓ+2yₓyₓₓₓ(yₓₓₓₓ)²+2yₓ(yₓₓₓ)²yₓₓₓₓₓ+(yₓₓₓ)⁴∈a  ⇒ 4yₓₓ(yₓₓₓ)²yₓₓₓₓ+2yₓyₓₓₓ(yₓₓₓₓ)²+(yₓₓₓ)⁴∈a  ⇒ 3yₓₓ(yₓₓₓ)²yₓₓₓₓ+(yₓₓₓ)⁴∈a  ⇒ -6yₓyₓₓₓ(yₓₓₓₓ)²=(yₓₓₓ)⁴∈a  ⇒ (yₓₓₓ)⁵∈a⇒ yₓₓₓ∈ rad(a)
+
+and thus a is neither prime nor perfect, that is equal to its radical, but rad(a) is perfect as it is the intersection of the prime differential ideal generated by y with the prime differential ideal generated by yₓ²-4y and yₓₓ-2, both containing yₓₓₓ.  
+
+EXAMPLE 3.2: With the notations of the previous Example, let us consider the (proper) differential ideal a⊂ A generated by the differential polynomial P=y²ₓ-4y³. We have dₓP=2yₓ(yₓₓ-6y²) and a cannot be prime differential ideal. Hence, looking for the ”solutions ” of P=0, we must have either yₓ=0⇒ y=0 or yₓ²-4y³=0 and yₓₓ-6y²=0. However, we have successively:  
+    []cclP∈a ⇒ yₓ(yₓₓ-6y²)∈(a)⇒(yₓ)²(yₓₓ-6y²)²∈a⇒ 4y³(yₓₓ-6y²)²∈a  ⇒ yₓₓ(yₓₓ-6y²)+yₓ(yₓₓₓ-12yyₓ)∈a  ⇒ yₓₓ(yₓₓ-6y²)²∈a  ⇒ (yₓₓ)²(yₓₓ-6y²)²-12y²yₓₓ(yₓₓ-6y²)²+36y⁴(yₓₓ-6y²)²∈a  ⇒ (yₓₓ-6y²)⁴∈a⇒ yₓₓ-6y²∈ rad(a)
+
+and thus a is neither prime or perfect as before but rad(a) is the prime differential ideal generated by yₓ²-4y³ and yₓₓ-6y².  
+
+EXAMPLE 3.3: If k=ℚ as before, y is a differential indeterminate and (d₁,d₂) are two formal derivations, let us consider the differential ideal generated by P₁=y₂₂-1/2(y₁₁)² and P₂=y₁₂-y₁₁ in ky. Using crossed derivatives, we get successively:  
+
+and thus a is neither prime nor perfect but rad(a) is a perfect differential ideal and even a prime differential ideal p because we obtain easily from the last section that the resisual differential ring ky/p≃ k[y,y₁,y₂,y₁₁] is a differential integral domain. Its quotient field is thus the differential field K=Q(ky/p)≃ k(y,y₁,y₂,y₁₁) with the rules:  
+    d₁y=y₁,d₁y₁=y₁₁,d₁y₁₁=0,d₂y=y₂,d₂y₁=y₁₁,d₂y₁₁=0
+
+as a way to avoid looking for solutions. The formal linearization is the linear system R₂⊂ J₂(E) obtained in the last section where it was defined over R₂, but not over K, by the two linear second order PDE:  
+    Y₂₂-y₁₁Y₁₁=0,28.45274ptY₁₂-Y₁₁=0
+
+changing slightly the notations for using the letter v only when looking at the symbols. It is at this point that the problem starts becauseR₂ is indeed a fibered manifold with arbitrary parametric jets (y,y₁,y₂,y₁₁) but R₃=ρ₁(R₂) is no longer a fibered manifold because the dimension of its symbol changes when y₁₁=1. We understand therefore that there should be a close link existing between formal integrability and the search for prime differential ideals or differential fields. The solution of this problem has been provided as early as in 1983 for studying the ”Differential Galois Theory ” but has never been acknowledged and is thus not known today ([32,34]). The idea is to add the third order PDE y₁₁₁=0 and thus the linearized PDE Y₁₁₁=0 obtaining therefore a third order involutive system well defined over K with symbol g₃=0. We invite the reader to treat similarly the two previous examples and to compare.  
+
+EXAMPLE 3.4: If k=ℚ as before, y is a differential indeterminate and (d₁,d₂) are two formal derivations, let us consider the differential ideal generated by P₁=y₂₂-1/3(y₁₁)³ and P₂=y₁₂-1/2(y₁₁)² in ky. Using crossed derivatives, we get successively:  
+    P₁,P₂∈a⇒ d₂P₂-d₁P₁+y₁₁d₁P₂=0⇒R₂8.53581ptinvolutive
+
+    ⇒ y₂₂₂-(y₁₁)³y₁₁₁=0,y₁₂₂-(y₁₁)²y₁₁₁=0,y₁₁₂-y₁₁y₁₁₁=0,...
+
+and thus dim(gq)=1,∀ q≥ 1. As the symbol g₂ is involutive, there is an infinite number of parametric jets (y,y₁,y₂,y₁₁,y₁₁₁,...) and thus ky/a≃ k[y,y₁,y₂,y₁₁,y₁₁₁,...] is a differential integral domain with d₂y₂=y₂₂=1/3(y₁₁)³,d₂y₁₁=y₁₁₂=y₁₁y₁₁₁,.... It follows that a=p is a prime differential ideal with rad(p)=p. The second order linearized system is:  
+    Y₂₂-(y₁₁)²Y₁₁=0,28.45274ptY₁₂-y₁₁Y₁₁=0
+
+is now well defined over the differential field K=Q(ky/p) and is involutive.  
+
+DEFINITION 3.5: A differential ring is a ring A with a finite number of commuting derivations (∂₁,...,∂ₙ) such that ∂ᵢ(a+b)=∂ᵢa+∂ᵢb,∂ᵢ(ab)=(∂ᵢa)b+a∂ᵢb that can be extended to derivations of the ring of quotients Q(A) by setting ∂ᵢ(a/s)=(s∂ᵢa-a∂ᵢs)/s²,∀ 0≠ s,a∈ A. We shall suppose from now on that A is even an integral domain and use the differential field K=Q(A). For example, if x¹,...,xⁿ are indeterminates over ℚ, then ℚ[x]=ℚ[x¹,...,xⁿ] is a differential ring for the standard(∂₁,...,∂ₙ) with quotient field ℚ(x).  
+
+If K is a differential field as above and (y¹,...,yᵐ) are indeterminates over K, we transform the polynomial ring Ky=limq→∞K[yq] into a differential ring by introducing as usual the formal derivations dᵢ=∂ᵢ+yᵏμ₊₁ᵢ∂/∂ yᵏμ and we shall set K<y>=Q(Ky).  
+
+DEFINITION 3.6: We say that a⊂ Ky is a differential ideal if it is stable by the dᵢ, that is if dᵢa∈a,∀ a∈a,∀ i=1,...,n. We shall also introduce the radical rad(a)=a∈ A|∃ r,aʳ∈a⊇a and say that a is a perfect (or radical) differential ideal if rad(a)=a. If S is any subset of A, we shall denote by S the differential ideal generated by S and introduce the (non-differential) ideal ρᵣ(S)=dνa| a∈ S,0≤|ν|≤ r in A.  
+
+LEMMA 3.7: If a⊂ A is differential ideal, then rad(a) is a differential ideal containinga.  
+
+Proof: If d is one of the derivations, we have aʳ⁻¹da=1/rdaʳ∈aʳ and thus:  
+    (r-1)aʳ⁻²(da)²+aʳ⁻¹d²a∈aʳ⇒ aʳ⁻²(da)³∈aʳ,...⇒(da)²ʳ⁻¹∈aʳ
+
+Q.E.D.  
+
+LEMMA 3.8: If a⊂ Ky, we set aq=a∩ K[yq] with a₀=a∩ K[y] and a∞=a. We have in general ρᵣ(aq)⊆aq₊ᵣ and the problem will be to know when we may have equality.  
+
+We shall say that a differential extension L=Q(Ky/p) is a finitely generated differential extension of K and we may define the evaluation epimorphism Ky→ Kη⊂ L with kernel p where η or y is the residual image of y modulo p. If we study such a differential extension L/K, by analogy with Section 2, we shall say that Rq or gq is a vector bundle over Rq if one can find a certain number of maximum rank determinant Dα that cannot be all zero at a generic solution of pq defined by differential polynomials Pτ, that is to say, according to the Hilbert Theorem of Zeros, we may find polynomials Aα,Bτ∈ Kyq such that : 
+    ΣαAαDα+ΣτBτPτ=1
+
+In particular the following Lemma will be used in the next important Theorem:  
+
+LEMMA 3.9: If p is a prime differential ideal of Ky, then, for q sufficiently large, there is a polynomial D∈ K[yq] such that D∉pq and :  
+    Dpq₊ᵣ⊂ rad(ρᵣ(pq))⊂pq₊ᵣ,28.45274pt∀ r≥ 0
+
+
+THEOREM 3.10: (Primality test) Let pq⊂ K[yq] and pq₊₁⊂ K[yq₊₁] be prime ideals such that pq₊₁=ρ₁(pq) and pq₊₁∩ K[yq]=pq. If the symbol gq of the algebraic variety Rq defined by pq is 2-acyclic and if its first prolongation gq₊₁ is a vector bundle over Rq, then p=ρ∞(pq) is a prime differential ideal with p∩ K[yq₊ᵣ]=ρᵣ(pq),∀ r≥ 0.  
+
+COROLLARY 3.11: Every perfect differential ideal of y can be expressed in a unique way as the non-redundant intersection of a finite number of prime differential ideals.  
+
+COROLLARY 3.12: (Differential basis) If r is a perfect differential ideal of Ky, then we have r=rad(ρ∞(rq)) for q sufficiently large.  
+
+EXAMPLE 3.13: As Ky is a polynomial ring with an infinite number of variables it is not noetherian and an ideal may not have a finite basis. With K=ℚ,n=1 and d=dₓ, then a=yyₓ,yₓyₓₓ,yₓₓyₓₓₓ,...⇒(yₓ)²+yyₓₓ∈a⇒ rad(a)=yₓ is a prime differential ideal.  
+
+PROPOSITION 3.14: If ζ is differentially algebraic over K<η> and η is differentially algebraic over K, then ζ is differentially algebraic over K. Setting ξ=ζ-η, it follows that, if L/K is a differential extension and ξ,η∈ L are both differentially algebraic over K, then ξ+η, ξη and dᵢξ are differentially algebraic over K.  
+
+If L=Q(Ky/p), M=Q(Kz/q) and N=Q(Ky,z/r) are such that p=r∩ Ky and q=r∩ Kz, we have the two towers K⊂ L⊂ N and K⊂ M⊂ N of differential extensions and we may therefore define the new tower K⊆L∩M⊆<L,M>⊆N. However, if only L/K and M/K are known and we look for such an N containing both L and M, we may use the universal property of tensor products an deduce the existence of a differential morphism L⊗KM→ N by setting d(a⊗ b)=(dLa)⊗ b+a⊗(dMb) whenever dL| K=dM| K=∂. The construction of an abstract composite differential field amounts therefore to look for a prime differential ideal in L⊗KM which is a direct sum of integral domains [32].  
+
+DEFINITION 3.15: A differential extension L of a differential field K is said to be differentially algebraic over K if every element of L is differentially algebraic over K. The set of such elements is an intermediate differential field K′⊆ L, called the differential algebraic closure of K in L. If L/K is a differential extension, one can always find a maximal subset S of elements of L that are differentially transcendental over K and such that L is differentially algebraic over K<S>. Such a set is called a differential transcedence basis and the number of elements of S is called the differential transcendence degree of L/K.  
+
+THEOREM 3.16: The number of elements in a differential basis of L/K does not depent on the generators of L/K and his value
+is difftrd(L/K)=α. Moreover, if K⊂ L⊂ M are differential fields, then difftrd(M/K)=difftrd(M/L)+difftrd(L/K).  
+
+THEOREM 3.17: If L/K is a finitely generated differential extension, then any intermediate differential field K′ between K and L is also finitely generated over K.  
+
+EXAMPLE 3.18: With k=ℚ, let us introduce the manifolds X with local coordinate x and Y with local coordinates (y¹,y²). We may consider the algebraic Lie pseudogroup Γ⊂ aut(Y) of (local, invertible) transformations of Y preserving the 1-form y²dy¹, that is to say made up by transformations y=g(y) solutions of the Pfaffian system y²dy¹=y²dy¹. Equivalently, we have to look for the invertible solutions of the algebraic first order involutive system R₁⊂ J₁(Y× Y) defined over k(y¹,y²) by the first order involutive system of algebraic PD equations in Lie form: 
+
+By chance one can obtain the generic solution y¹=g(y¹),5.69054pty²=y²/(∂ g(y¹)/∂ y¹) where g is an arbitrary function of one variable. Now, if we introduce a function y=f(x) and consider the corresponding transformations of the jets (y¹,y²,y¹ₓ,y²ₓ,...), we obtain the only generating differential invariant Φ≡y²y¹ₓ=y²y¹ₓ. Hence, setting K=k<y²y¹ₓ> and L=k<y¹,y²>, we have the tower of differential extensions k⊂ K⊂ L. As any intermediate differential field K⊂ K′⊂ L is finitely generated, let us consider K′=k<y²y¹ₓ,y²ₓ>. Then:  
+    y²ₓ∂y²/∂ y¹y¹ₓ+∂y²/∂ y²⇒∂y²/∂ y¹=0,∂y²/∂ y²=1⇒y¹=y¹+cst,11.38109pty²=y²
+
+allows to define a Lie subpseudogroup Γ′⊂Γ with generating differential invariants y¹ₓ,y² in such a way that, if we set K"=k<y¹ₓ,y²>, we have the strict inclusions K⊂ K′⊂ K" and it does not seem possible to obtain a differential Galois correspondence between algebraic subpseudogroups and intermediate differential fields, similar to the classical one. We have explained in [32] how to overcome this problem but this is out of the scope of this paper. It is finally important to notice that the fundamental differential isomorphism [4,5,32]:  
+    Q(L⊗KL)≃ Q(L⊗ₖ₍y₎k[Γ])
+
+is the Hopf dual of the projective limit of the action graph isomorphisms between fibered manifolds:  
+    Aq×XAq≃Aq×YRq
+
+of fibered dimension 2(q+2). The corresponding automorphic system y²y¹ₓ=ω in Lie form where ω is a geometric object as in the Introduction and its prolongations has been introduced as early as in 1903 by E. Vessiot [53,54] as a way to study principal homogeneous spaces (PHS) for Lie pseudogroups, namely if y=f(x) is a solution and y=f(x) is another solution, then there exists one and only one transformation y=g(y) of Γ such that f=g∘ f.  
+
+This is all what is needed in order to study systems of infinitesimal Lie equations defined, like the classical and conformal Killing systems, over ℚ<ω> where ω is a geometric object solution of a system of algebraic Vessiot structure equations (constant riemannian curvature, zero Weyl tensor).  
+
+4) DIFFERENTIAL DUALITY  
+
+Let A be a unitary ring, that is 1,a,b∈ A⇒ a+b,ab∈ A,1a=a1=a and even an integral domain (ab=0⇒ a=0 or b=0) with field of fractions K=Q(A). However, we shall not always assume that A is commutative, that is ab may be different from ba in general for a,b∈ A. We say that M=AM is a left module over A if x,y∈ M⇒ ax,x+y∈ M,∀ a∈ A or a right module MB over B if the operation of B on M is (x,b)→ xb,∀ b∈ B. If M is a left module over A and a right module over B with (ax)b=a(xb),∀ a∈ A,∀ b∈ B,∀ x∈ M, then we shall say that M=AMB is a bimodule. Of course, A=AAA is a bimodule over itself. We define the torsion submodule t(M)=x∈ M|∃ 0≠ a∈ A,ax=0⊆ M and M is a torsion module if t(M)=M or a torsion-free module if t(M)=0. We denote by homA(M,N) the set of morphisms f:M→ N such that f(ax)=af(x). We finally recall that a sequence of modules and maps is exact if the kernel of any map is equal to the image of the map preceding it.  
+
+When A is commutative, hom(M,N) is again an A-module for the law (bf)(x)=f(bx) as we have (bf)(ax)=f(bax)=f(abx)=af(bx)=a(bf)(x). In the non-commutative case, things are more complicate and, given AM and ANB, then homA(M,N) becomes a right module over B for the law (fb)(x)=f(x)b.  
+
+DEFINITION 4.1: A module F is said to be free if it is isomorphic to a (finite) power of A called the rank of F over A and denoted by rkA(F) while the rank rkA(M) of a module M is the rank of a maximum free submodule F⊂ M. It follows from this definition that M/F is a torsion module. In the sequel we shall only consider finitely presented modules, namely finitely generated modules defined by exact sequences of the type F₁d₁F₀pM0 where F₀ and F₁ are free modules of finite ranks m₀ and m₁ often denoted by m and p in examples. A module P is called projective if there exists a free module F and another (projective) module Q such that P⊕ Q≃ F. 
+
+PROPOSITION 4.2: For any short exact sequence 0→ M′fMgM"→ 0, we have the relation rkA(M)=rkA(M′)+rkA(M"), even in the non-commutative case. 
+
+The following proposition will be used many times in Section 5, in particular for exhibiting the Weyl tensor from the Riemann
+tensor ([2],p 73)([50],p 33) : 
+
+PROPOSITION 4.3: We shall say that the following short exact sequence splits if one of the following equivalent three conditions holds:  
+    0M′ufMvgM′′0
+
+• There exists a monomorphism v:M′′→ M called lift of g and such that g∘ v=idM′′ . • There exists an epimorphism u:M→ M′ called lift of f and such that u∘ f=idM′. • There exist isomorphisms φ=(u,g):M→ M′⊕ M′′ and ψ=f+v:M′⊕ M′′→ M that are inverse to each other and provide an isomorphism M≃ M′⊕ M′′ with f∘ u+v∘ g=idM and thus ker(u)=im(v).  These conditions are automatically satisfied if M" is free or projective.  
+
+Using the notation M*=homA(M,A), for any morphism f:M→ N, we shall denote by f*:N*→ M* the morphism which is defined by f*(h)=h∘ f,∀ h∈ homA(N,A) and satisfies rkA(f)=rkA(im(f))=rkA(f*),∀ f∈ homA(M,N)(See [37], Corollary 5.3, p 179). We may take out M in order to obtain the deleted sequence ...d₂F₁d₁F₀0 and apply homA(•,A) in order to get the sequence ...d*₂F*₁d*₁F*₀0.  
+
+PROPOSITION 4.4: The extension modules ext⁰A(M)=ker(d*₁)=homA(M,A)=M* and extⁱ(M)=extⁱA(M)=ker(d*ᵢ₊₁)/im(d*ᵢ),∀ i≥ 1 do not depend on the resolution chosen and are torsion modules for i≥ 1.  
+
+Let A be a differential ring, that is a commutative ring with n commuting derivations ∂₁,...,∂ₙ, that is ∂ᵢ∂ⱼ=∂ⱼ∂ᵢ=∂ᵢⱼ,∀ i,j=1,...,n while ∂ᵢ(a+b)=∂ᵢa+∂ᵢb and ∂ᵢ(ab)=(∂ᵢa)b+a∂ᵢb,∀ a,b∈ A. We shall use thereafter a differential integral domain A with unit 1∈ A whenever we shall need a differential field ℚ⊂ K=Q(A) of coefficients, that is a field (a∈ K⇒ 1/a∈ K) with ∂ᵢ(1/a)=-(1/a²)∂ᵢa, in order to exhibit solved forms for systems of partial differential equations as in the preceding section. Using an implicit summation on multi-indices, we may introduce the (noncommutative) ring of differential operators D=A[d₁,...,dₙ]=A[d] with elements P=aμdμ such that |μ|<∞ and dᵢa=adᵢ+∂ᵢa. The highest value of |μ| with aμ≠ 0 is called the order of the operator P and the ring D with multiplication (P,Q)P∘ Q=PQ is filtred by the order q of the operators with the filtration 0=D₋₁⊂ D₀⊂ D₁⊂...⊂ Dq⊂...⊂ D∞=D. Moreover, it is clear that D, as an algebra, is generated by A=D₀ and T=D₁/D₀ with D₁=A⊕ T if we identify an element ξ=ξⁱdᵢ∈ T with the vector field ξ=ξⁱ(x)∂ᵢ of differential geometry, but with ξⁱ∈ A now. It follows that D=DDD is a bimodule over itself, being at the same time a left D-module DD by the composition PQP and a right D-module DD by the composition PPQ with DᵣDₛ=Dᵣ₊ₛ,∀ r,s≥ 0 in any case.  
+
+If we introduce differential indeterminates y=(y¹,...,yᵐ), we may extend dᵢyᵏμ=yᵏμ₊₁ᵢ to Φτ≡ aτμₖyᵏμdᵢdᵢΦτ≡ aτμₖyᵏμ₊₁ᵢ+∂ᵢaτμₖyᵏμ for τ=1,...,p. Therefore, setting Dy¹+...+Dyᵐ=Dy≃ Dᵐ and calling I=DΦ⊂ Dy the differential module of equations, we obtain by residue the differential module or D-module M=Dy/DΦ, introducing the canonical projection DypM→ 0 and denoting the residue of yᵏμ by yᵏμ when there can be a confusion. Introducing the two free differential modules F₀≃ Dᵐ₀,F₁≃ Dᵐ₁, we obtain equivalently the free presentation F₁d₁F₀pM→ 0 of order q when d₁=D=Φ∘ jq. It follows that M can be endowed with a quotient filtration obtained from that of Dᵐ which is defined by the order of the jet coordinates yq in Dqy. We shall suppose that the system Rq=ker(Φ) is formally integrable. We have therefore the inductive limit 0=M₋₁⊆ M₀⊆ M₁⊆...⊆ Mq⊆...⊆ M∞=M with dᵢMq⊆ Mq₊₁ which is the dual of the projective limit R=R∞→...→ Rq→ R₀→ 0 if we set R=homK(M,K) with Rq=homK(Mq,K) and DRq₊₁⊆ T*⊗ Rq. This is the main reason for using a differential field K because homK(•,K) transform any short exact sequence into a short exact sequence. We have in generalDᵣIₛ⊆ Iᵣ₊ₛ,∀ r≥ 0,∀ s<q with Iᵣ=I∩ Dᵣy.  
+
+More generally, introducing the successive CC as in the preceding Section while changing slightly the numbering of the respective operators, we may finally obtain the free resolution of M, namely the exact sequence 14.22636pt...d₃F₂d₂F₁d₁F₀pM0 where p is the canonical projection. Also, with a slight abuse of language, when D=Φ∘ jq is involutive, that is to say when Rq=ker(Φ) is involutive, one should say that M has an involutive presentation of order q or that Mq is involutive.  
+
+REMARK 4.5: In actual practice, one must never forget that D=Φ∘ jq acts on the left on column vectors in the operator case and on the right on row vectors in the module case. For this reason, when E is a (finite dimensional) vector bundle overX, we may apply the correspondence J∞(E)↔ D⊗KE*:Jq(E)↔ Dq⊗KE* with πq⁺¹q:Jq₊₁(E)→ Jq(E)↔ Dq⊂ Dq₊₁ and E*=homK(E,K) between jet bundles and left differential modules in order to be able to use the double dual isomorphism E≃ E** in both cases. We shall say that D(E)=D⊗KE*=ind(E*) is the the left differential module induced by E*. Hence, starting from a differential operator EDF, we may obtain a finite presentation D⊗KF*D*D⊗KE*→ M→ 0 and conversely, keeping the same operator matrix if we act on the right of row vectors. This comment becomes particularly useful when dealing with the Poincaré sequence in electromagnetism (n=4) or even as we already saw in the Introduction (n=3).  
+
+Roughly speaking, homological algebra has been created in order to find intrinsic properties of modules not depending on their presentations or even on their resolutions and we now exhibit another approach by defining the formal adjoint of an operator P and an operator matrixD:  
+
+DEFINITION 4.6: Setting P=aμdμ∈ Dadad(P)=(-1)|μ|dμaμ∈ D, we have ad(ad(P))=P and ad(PQ)=ad(Q)ad(P),∀ P,Q∈ D. Such a definition can be extended to any matrix of operators by using the transposed matrix of adjoint operators and we get:
+
+from integration by part, where λ is a row vector of test functions and <> the usual contraction. We quote the useful formulasrkD(D)=rkD(ad(D)) as in ([34], p 339-341 or [35]). 
+
+The following technical Lemma is crucially used in the next proposition:  
+
+LEMMA 4.7: If f∈ aut(X) is a local diffeomorphisms on X, we may set x=f⁻¹(y)=g(y) and we have the identity:
+
+
+PROPOSITION 4.8: If we have an operator EDF, we may obtain by duality an operatorⁿT*⊗ E*ad(D)ⁿT*⊗ F*.  
+
+Now, with operational notations, let us consider the two differential sequences:  
+    ξDηD₁ζ
+
+    νad(D)μad(D₁)λ
+
+where D₁ generates all the CC of D. Then D₁∘D≡ 0ad(D)∘ ad(D₁)≡ 0 but ad(D) may not generate all the CC of ad(D₁) as we already saw in the Introduction. Passing to the module framework, we just recognize the definition of ext¹(M) when M is determined by D.  
+
+As D=DDD is a bimodule, then M*=homD(M,D) is a right D-module according to Lemma 3.1 and we may thus define a right module ND by the ker/coker long exact sequence 0NDF₁*D*F*₀M*0 but we have [6,36,43,51]:  
+
+THEOREM 4.9: We have the side changing procedures M=DM→ MD=ⁿT*⊗AM and ND→ N=DN=homA(ⁿT*,ND) with ((MD))D=M and (ND)D=N.  
+
+Now, exactly like we defined the differential module M from D, we may define the differential module N from ad(D).
+For any other presentation of M with an accent, we have [23,36]:  
+
+THEOREM 4.10: The modules N and N′ are projectively equivalent, that is one can find two projective modules P and P′ such that N⊕ P≃ N′⊕ P′ and we obtain therefore extⁱD(N)≃ extⁱD(N′),∀ i≥ 1.  
+
+THEOREM 4.11: The operator D is simply parametrizable if ext¹(N)=0 and doubly parametrizable if ext¹(N)=0 and ext²(N)=0. Moreover, we have the ker/coker long exact sequence:  
+    0→ ext¹(N)→ M[equation]M**→ ext²(N)→ 0
+
+where (ε(m))(f)=f(m) whenever f∈ M* and we have t(M)=ext¹(N)=ker(ε).  
+
+Proof: We prove first that t(M)⊆ ker(ε). Indeed, if m∈ t(M), then one may find 0≠ P∈ D such that Pm=0 and thus f(Pm)=Pf(m)=0⇒ f(m)=0 because D=K[d] is an integral domain and thus t(M)⊆ ker(ε). Let us now start with a free presentation of M=cocker(d₁):
+    F₁d₁F₀pM0
+
+Applying homD(M,D), we may define ND=coker(d*₁) and exhibit the following free resolution of N by right D-modules:
+    0NDF*₁d*₁F*₀d*₀F*₋₁d*₋₁F*₋₂
+
+where M*=ker(d*₁)=im(d*₀)≃ coker(d*₋₁). The deleted
+sequence is:
+    0F*₁d*₁F*₀d*₀F*₋₁d*₋₁F*₋₂
+
+Applying again homD(•,D) and using the canonical isomorphismF**≃ F for any free module F of finite rank, we get the sequence of left D-modules:
+    []rcccl0F₁d₁ F₀ d₀ F₋₁ d₋₁F₋₂  ↓ ↘ ↑   M [equation] M**   ↓  ↑   0  0
+
+Denoting as usual a coboundary space by B, a cocycle space by Z and the
+corresponding cohomology by H=Z/B, we get the commutative and exact diagram:
+    []rcccccl0 B₀  F₀  M 0  ↓  ∥  ↓ε  0 Z₀  F₀  M**
+
+An easy chase provides at once H₀=Z₀/B₀=ext¹D(N)≃ ker(ε). It follows that ker(ε) is a torsion module and, as
+we already know that t(M)⊆ ker(ε)⊆ M, we finally
+obtain t(M)=ker(ε). Also, as B₋₁=im(ε) andZ₋₁≃ M**, we obtainH₋₁=Z₋₁/B₋₁=ext²A(N,A)≃ coker(ε). Accordingly, a torsion-free (ε injective)/reflexive(ε bijective) module is described by an operator that admits respectively a single/double step parametrization.                                                                                                         Q.E.D.  
+
+We know turn to the operator framework;  
+
+DEFINITION 4.12: If a differential operator ξDη is given, a direct problem is to find generating compatibility conditions (CC) as an operator ηD₁ζ such that Dξ=η⇒D₁η=0. Conversely, given ηD₁ζ, the inverse problem will be to look for ξDη such that D₁ generates the CC of D and we shall say that D₁ is parametrized by D if such an operator D is existing. We finally notice that any operator is the adjoint of a certain operator because ad(ad(P))=P,∀ P∈ D and we get:  
+
+THEOREM 4.13: (reflexivity test) In order to check whether M is reflexive or not, that is to find out a parametrization if t(M)=0 which can be again parametrized, the test has 5 steps which are drawn in the following diagram where ad(D) generates the CC of ad(D₁) and D₁′ generates the CC of D=ad(ad(D)) while ad(D₋₁) generates the CC of ad(D) and D′ generates the CC of D₋₁:  
+    []rcccccccl     η′  ζ′ 42.67912pt5     D′↗  D′₁↗   4 φ D₋₁ ξ D η D₁ ζ 42.67912pt1                   3 θ ad(D₋₁) ν ad(D) μ ad(D₁) λ 42.67912pt2
+
+    D₁ parametrized by D⟺D₁=D′₁⟺ ext¹(N)=0⟺ε injective⟺ t(M)=0
+
+    D parametrized by D₋₁⟺D=D′⟺ ext²(N)=0⟺ε surjective48.36967pt
+
+
+COROLLARY 4.14: In the differential module framework, if F₁D₁F₀pM→ 0 is a finite free presentation of M=coker(D₁) with t(M)=0, then we may obtain an exact sequence F₁D₁F₀DE of free differential modules where D is the parametrizing operator. However, there may exist other parametrizations F₁D₁F₀D′E′ called minimal parametrizations such that coker(D′) is a torsion module and we have thus rkD(M)=rkD(E′).  
+
+REMARK 4.15: The following chains of inclusions and short exact sequences allow to compare the main procedures used in the respective study of differential extensions and differential modules:  
+    []cccK⊂ K<S>⊂ L ⇒ 0→ F→ M→ T→ 0    K⊂ K′⊂ L ⇒ 0→ t(M)→ M→ M′→ 0
+
+where F is a maximum free submodule of M, T=M/F is a torsion-module and M′=M/t(M) is a torsion-free module. The next examples open the way towards a new domain of research.  
+
+EXAMPLE 4.16: With n=2,m=3,K=ℚ, let us consider the first order nonlinear involutive system:  
+    P₁≡ y¹₂-y³y¹₁=0,28.45274ptP₂≡ y²₂-y³y²₁=0
+
+This system defines a prime differential ideal p⊂ Ky and the differential extension L=Q(Ky/p) is differentially algebraic over K<y³> with parametric jets (y¹,y²,y¹₁,y²₁,y¹₁₁,y²₁₁,...). The linearized system D₁Y=0 over L is:  
+    d₂Y¹-y³d₁Y¹-y¹₁Y³=0,28.45274ptd₂Y²-y³d₁Y²-y²₁Y³=0
+
+Multiplying by test functions (λ¹,λ²) and integrating by part, we get ad(D₁)λ=μ in the form:  
+    []cccccY¹ → -d₂λ¹+y³d₁λ¹+y³₁λ¹ = μ¹ Y² → -d₂λ²+y³d₁λ²+y³₁λ² = μ² Y³ → -y¹₁λ¹-y²₁λ² = μ³
+
+Using only the parametric jets for y and λ in the PD equations provided, we get:  
+    -y¹₁(y³d₁λ¹+y³₁λ¹)-(y³y¹₁₁+y¹₁y³₁)λ¹-y²₁(y³d₁λ₂+y³₁λ¹)-(y³y²₁₁+y²₁y³₁)λ²=d₂μ³-y¹₁μ¹-y²₁μ²
+
+    -y³y¹₁d₁λ¹-y³y¹₁₁λ¹-y³y²₁d₁λ²-y³y²₁₁λ²-2y¹₁y³₁λ¹-2y²₁y³₁λ²=y³d₁μ³+2y³₁μ³
+
+and the only CC ad(D)μ=0 over L:  
+    -d₂μ³+y³d₁μ³+y¹₁μ¹+y²₁μ²+2y³₁μ³=0
+
+Multiplying by a test function ξ and integrating by part, we get Dξ=Y over L in the form:  
+    y¹₁ξ=Y¹,28.45274pty²₁ξ=Y²,28.45274ptd₂ξ-y³d₁ξ+y³₁ξ=Y³
+
+admitting the CC D₁Y=0 of course but also the additional zero order CC:
+    ω≡ y¹₁Y²-y²₁Y¹=0
+
+which provides a torsion element ω satisfying d₂ω-y³d₁ω-y³₁ω=0. Setting Y=δ y as the standard variational notation used by engineer, we obtain easily ω≠ 0 and ω cannot therefore admit an integrating factor, a result showing that K is its own differential algebraic closure in L.  
+
+EXAMPLE 4.17: If α=dx¹-x³dx²∈ T*, the linear system obtained over K=ℚ(x¹,x²,x³) by eliminating the factor ρ(x) in the linear system L(ξ)α=ρ(x)α admits the injective parametrization -x³∂₃θ+θ=ξ¹,-∂₃φ=ξ²,∂₂φ-x³∂₁φ=ξ³⇒ξ¹-x³ξ²=φ.
+It defines therefore a free differential module M≃ D which is thus reflexive and even projective. Any resolution of this module splits,
+like the short exact sequence 0→ D²→ D³→ D→ 0, and we shall prove in section 6 that the corresponding differential sequence of operators is locally exact like the Poincaré sequence ([32], p 684-691).  
+
+5) CONFORMAL STRUCTURE  
+
+We start this section with a general (difficult) result on the actions of Lie groups, covering at the same time the study of the classical and conformal Killing systems. For this, we notice that the involutive first Spencer operator D₁:C₀=Rqj₁→J₁(Rq)→ J₁(Rq)/Rq₊₁≃ T*⊗ Rq/δ(gq₊₁)=C₁ of order one is induced by the Spencer operator D:Rq₊₁→ T*⊗ Rq:ξq₊₁→ j₁(ξq)-ξq₊₁=∂ᵢξᵏμ-ξᵏμ₊₁ᵢ| 0≤|μ| q. Introducing the Spencer bundles Cᵣ=ʳT*⊗ Rq/δ(ʳ⁻¹T*⊗ gq₊₁), the first order involutive (r+1)-Spencer operator Dᵣ₊₁:Cᵣ→ Cᵣ₊₁ is induced by D:ʳT*⊗ Rq₊₁→ʳ⁺¹T*⊗ Rq:α⊗ξq₊₁→ dα⊗ξq+(-1)ʳαDξq₊₁. We obtain therefore the canonical linear Spencer sequence ([34], p 150 or [52]):  
+    0jqC₀D₁C₁D₂C₂D₃...DₙCₙ0
+
+
+PROPOSITION 5.1: The Spencer sequence for the Lie operator describing the infinitesimal action of a Lie group G is
+(locally) isomorphic to the tensor product of the Poincaré sequence by the Lie algebra G=Tₑ(G) where e∈ G is the identity element. It follows that Dᵣ₊₁ generates the CC of Dᵣ ⟺ ad(Dᵣ) generates the CC of ad(Dᵣ₊₁), a result not evident at all.  
+
+Proof: We may introduce a basis θτ=θⁱτ(x)∂ᵢ of infinitesimal generators of the action with τ=1,...,dim(G) and the commutation relations [θρ,θσ]=cτρσθτ discovered by S. Lie giving the structure constants c of G (See [34] and [44] for more details). Any element λ∈G can be written λ=λτ=cst. ” Gauging  ” such an element, that is to say replacing the constants by functions or, equivalently, introducing a map X→⁰T*⊗G:(x)→(λτ(x)), we may obtain locally a map ⁰T*⊗G→ T:λτ(x)→λτ(x)θᵏτ(x) or, equivalently, vector fields ξ=(ξⁱ(x)∂ᵢ)∈ T of the form ξᵏ(x)=λτ(x)θᵏτ(x), keeping the index i for 1-forms. More generally, we can introduce a map :  
+    ʳT*⊗G→ʳT*⊗ Jq(T)=λ→λ⊗ jq(θ)=Xq:λτ(x)→λτ(x)∂μθᵏτ(x)=Xᵏμ,I(x)dxᴵ
+
+that we can lift to the element λ⊗ jq₊₁(θ)=Xq₊₁∈ʳT*⊗ Jq₊₁(T). It follows from the definitions that DᵣXq=DXq₊₁ by introducing any element of Cᵣ(T) through its representative Xq∈ʳT*⊗ Jq(T). We obtain therefore the crucial formula:  
+    DᵣXq=DXq₊₁=D(λ⊗ jq₊₁(θ))=dλ⊗ jq(θ)+(-1)ʳλDjq₊₁(θ)=dλ⊗ jq(θ)
+
+allowing to identify locally the Spencer sequence for jq with the Poincaré sequence. When the action is effective, the
+map ⁰T*⊗G→ Jq(T) is injective. We obtain therefore an isomorphism⁰T*⊗G→ Rq⊂ Jq(T) when q is large enough allowing to exhibit an isomorphism between the canonical Spencer sequence and the tensor product of the Poincaré sequence by G when q is large enough in such a way that Rq is involutive with dim(Rq)=dim(G) and gq=0.                                                                                                          Q.E.D.  
+
+We now study what happens when n≥ 3 because the case n=2 has already been provided, proving that conformal geometry must be entirely revisited.  
+
+• n=3: Using the euclidean metric ω, we have 6 components of Ω∈ F₀=S₂T* with dim(F₀)=n(n+1)/2=6 in the case of the classical Killing system/operator and obtain easily the n²(n²-1)/12=6 components of the second order Riemann operator, linearization of the Riemann tensor at ω. We have n²(n²-1)(n-2)/24=3 first order Bianchi identities ([32], p 625). Introducing the respective adjoint operators while taking into account the last Proposition and the fact that the extension modules do not depend on the resolution used (a difficult result indeed !), we get the following diagram where we have set ad(Riemann)=Beltrami for historical reasons [3] and each operator generates the CC of the next one:  
+    []rccccccl 3 Killing 6 Riemann 6 Bianchi 3→ 0         0← 3 Cauchy 6 Beltrami 6  3
+
+As in the Introduction where Airy=ad(Riemann), the Beltrami operator is now parametrizing the 3 Cauchy stress equations [3] but it is rather striking to discover that the central second order operator is self-adjoint and can be given as follows:  
+    ([]cccccc0 0 0 d₃₃ -2d₂₃ d₂₂ 0 -2d₃₃ 2d₂₃ 0 2d₁₃ -2d₁₂ 0 2d₂₃ -2d₂₂ -2d₁₃ 2d₁₂ 0 d₃₃ 0 -2d₁₃ 0 0 d₁₁ -2d₂₃ 2d₁₃ 2d₁₂ 0 -2d₁₁ 0 d₂₂ -2d₁₂ 0 d₁₁ 0 0)
+
+The study of the conformal case is much more delicate. As F₀ can be described by trace-free symmetric tensors, we have dim(F₀)=dim(F₀)-1=5 and it remains to discover the operator that will replace the Riemann operator. Having in mind the diagram of Proposition 2.11 and the fact that dim(g₂)=3 while g₃=0⇒g₄=0, we have successively:  • NO CC order 1: 0→g₂→ S₂T*⊗ T→ T*⊗F₀→F₁⇒ 0⇒ dim(F₁)=3-18+15=0. • NO CC order 2: 0→g₃→ S₃T*⊗ T→ S₂T*⊗F₀→F₁⇒ 0⇒ dim(F₁)=0-30+30=0.  • OK CC order 3: 0→g₄→ S₄T*⊗ T→ S₃T*⊗F₀→F₁⇒ 0⇒ dim(F₁)=0-45+50=5.  Once again, the central third order operator is self-adjoint as can be easily seen by proving that the last 5→ 3 operator, obtained in [44] by means of computer algebra, can be chosen to be the transpose of the first 3→ 5 conformal Killing operator, just by changing columns. This result can also be obtained by using the fact that, when an operator/a system is formally integrable, the order of the generating CC is equal to the number of prolongations needed to get a 2-acyclic symbol plus 1 ([34], p 120, [44]). In the present case, neither g₁ nor g₂ are 2-acyclic while g₃=0 is trivially involutive, so that (3-1)+1=3.  
+
+• n=4: In the classical case, we may proceed as before for exibiting the 20 components of the second order Riemann operator and the 20 components of the first order Bianchi operator.  The study of the conformal case is much more delicate and still unknown. Indeed, the symbol g₂ is 2-acyclic when n≥ 4 and 3-acyclic when n≥ 5. Accordingly, the Weyl operator, namely the CC for the conformal Killing operator, is second order like the Riemann operator. However, when n=4 only (care), the symbol h₂ of the Weyl system is not 2-acyclic while its first prolongation h₃ becomes 2-acyclic. It follows that the CC for the Weyl operator are second order, … and so on. For example, we have the long exact sequence:  
+    0→g₅→ S₅T*⊗ T→ S₄T*⊗F₀→ S₂T*⊗F₁→F₂→ 0
+
+and deduce that dim(F₂)=(-0)+(56× 4)-(35× 9)+(10× 10)=9, a result that can be ckecked by computer algebra in a few milliseconds but is still unknown.  
+
+We shall finally prove below that the Einstein parametrization of the stress equations is neither canonical nor minimal in the following diagrams:  
+    []rcccccccccl 4 Killing 10 Riemann 20 Bianchi 20  6 → 0    ∥  ↓  ↓      10 Einstein 10 div 4 → 0           0← 4 Cauchy 10 Beltrami 20  20       ∥  ↑       10 Einstein 10
+
+obtained by using the fact that the Einstein operator is self-adjoint, where by Einstein operator we mean the linearization of the Einstein equations at the Minkowski metric, the 6 terms being exchanged between themselves [35,40]. Indeed, setting Eᵢⱼ=Rᵢⱼ-1/2ωᵢⱼtr(R) with tr(R)=ωⁱʲRᵢⱼ, it is essential to notice that the Ricci operator is not self-adjoint because we have for example:  
+    λⁱʲ(ωʳˢdᵢⱼΩᵣₛ)ad(ωʳˢdᵢⱼλⁱʲ)Ωᵣₛ
+
+and ad provides a term appearing in -ωᵢⱼtr(R) but not in 2Rᵢⱼ because we have, as in (5.1.4) of [15]:  
+    tr(Ω)=ωʳˢΩᵣₛ28.45274pt⇒28.45274pttr(R)=ωʳˢdᵣₛtr(Ω)-dᵣₛΩʳˢ
+
+
+The upper div induced by Bianchi has nothing to do with the lower Cauchy stress equations, contrary to what is still believed today while the 10 on the right of the lower diagram has nothing to do with the perturbation of a metric which is the 10 on the left in the upper diagram. It also follows that the Einstein equations in vacuum cannot be parametrized as we have the following diagram of operators recapitulating the five steps of the parametrizability criterion (See [35,37] for more details or [44,56] for a computer algebra exhibition of this result):  
+    []rcccl   Riemann 20    ↗  4 Killing 10 Einstein 10      4 Cauchy 10 Einstein 10
+
+
+As a byproduct, we are facing only two possibilities, both leading to a contradiction:  1) If we use the operator S₂T*EinsteinS₂T* in the geometrical setting, the S₂T* on the left has indeed someting to do with the perturbation of the metric but the S₂T* on the right has nothing to do with the stress.  2) If we use the adjoint operator ⁿT*⊗ S₂TEinsteinⁿT*⊗ S₂T in the physical setting, then ⁿT*⊗ S₂T on the left has of course something to do with the stress but the ⁿT*⊗ S₂T on the right has nothing to do with the perturbation of a metric.  
+
+These purely mathematical results question the origin and existence of gravitational waves.  
+
+We may summarize these results, which do not seem to be known, by the following differential sequences where the order of an operator is written under its arrow:  
+
+• n=3: 56.9055pt3153513→ 0  • n=4: 56.9055pt4192102914→ 0  • n=5: 56.9055pt511423513521415→ 0 
+
+THEOREM 5.2: Recalling that we have F₁=H²(g₁)=Z²(g₁) and F₁=H²(g₁)≠ Z²(g₁), we have the following commutative and exact ”fundamental diagram II ”:  
+    []rcccccccl       0         ↓       0  S₂T*       ↓  ↓     0  Z²(g₁)  H²(g₁) 0    ↓  ↓  ↓   0  T*⊗g₂ [equation] Z²(g₁)  H²(g₁) 0    ↓  ↓  ↓  0 S₂T* [equation] T*⊗ T* [equation] ²T*  0     ↓  ↓       0  0
+
+
+The following theorem will provide all the classical formulas of both Riemannian and conformal geometry in one piece but in a totally unusual framework not depending on any conformal factor:  
+
+THEOREM 5.3: All the short exact sequences of the preceding diagram split in a canonical way, that is in a way compatible with the underlying tensorial properties of the vector bundles involved.  
+
+
+Proof: First of all, we recall that:  
+    g₁=ξᵏᵢ∈ T*⊗ T|ωᵣⱼξʳᵢ+ωᵢᵣξʳⱼ=0⊂g₁=ξᵏᵢ∈ T*⊗ T|ωᵣⱼξʳᵢ+ωᵢᵣξʳⱼ-2/nωᵢⱼξʳᵣ=0
+
+    ⇒28.45274pt0=g₂⊂g₂=ξᵏᵢⱼ∈ S₂T*⊗ T| nξᵏᵢⱼ=δᵏᵢξʳᵣⱼ+δᵏⱼξʳᵣᵢ-ωᵢⱼωᵏˢξʳᵣₛ
+
+Now, if (τᵏₗᵢ,ⱼ)∈ T*⊗g₂, then we have:  
+    nτᵏₗᵢ,ⱼ=δᵏₗτʳᵣᵢ,ⱼ+δᵏᵢτʳᵣₗ,ⱼ-ωₗᵢωᵏˢτʳᵣₛ,ⱼ
+
+and we may set τʳᵣᵢ,ⱼ=τᵢ,ⱼ≠τⱼ,ᵢ with (τᵢ,ⱼ)∈ T*⊗ T and such a formula does not depend on any conformal factor [53]. We have:  
+    δ(τᵏₗᵢ,ⱼ)=(τᵏₗᵢ,ⱼ-τᵏₗⱼ,ᵢ)=(ρᵏₗ,ᵢⱼ)∈ B²(g₁)⊂ Z²(g₁)
+
+with:  
+
+    δ(ρᵏₗ,ⱼᵢ)=(Σ₍ₗ,ᵢ,ⱼ₎ρᵏₗ,ᵢⱼ=ρᵏₗ,ᵢⱼ+ρᵏᵢ,ⱼₗ+ρᵏⱼ,ₗᵢ)∈³T*⊗ T
+
+• The splitting of the lower row is obtained by setting (τᵢ,ⱼ)∈ T*⊗ T*→(1/2(τᵢ,ⱼ+τⱼ,ᵢ))∈ S₂T* in such a way that (τᵢ,ⱼ=τⱼ,ᵢ=τᵢⱼ)∈ S₂T*⇒1/2(τᵢⱼ+τⱼᵢ)=τᵢⱼ.  Similarly, (φᵢⱼ=-φⱼᵢ)∈²T*→(1/2φᵢⱼ)∈ T*⊗ T* and(1/2φᵢⱼ-1/2φⱼᵢ)=(φᵢⱼ)∈²T*.  
+
+• The most important result is to split the right column. For this, we first need to describe the monomorphism 0→ S₂T*→ H²(g₁) which is in fact produced by a diagonal north-east snake type chase. Let us choose (τᵢⱼ=τᵢ,ⱼ=τⱼ,ᵢ=τⱼᵢ)∈ S₂T*⊂ T*⊗ T*. Then, we may find (τᵏₗᵢ,ⱼ)∈ T*⊗g₂ by deciding that τʳᵣᵢ,ⱼ=τᵢ,ⱼ=τⱼ,ᵢ=τʳᵣⱼ,ᵢ in Z²(g₁) and applyδ in order to get ρᵏₗ,ᵢⱼ=τᵏₗᵢ,ⱼ-τᵏₖ,ₗⱼ,ᵢ such that ρʳᵣ,ᵢⱼ=φᵢⱼ=0 and thus (ρᵏₗ,ᵢⱼ)∈ Z²(g₁)=H²(g₁). We obtain:  
+    []rclnρᵏₗ,ᵢⱼ = δᵏₗτʳᵣᵢ,ⱼ-δᵏₗτʳᵣⱼ,ᵢ+δᵏᵢτʳᵣₗ,ⱼ-δᵏⱼτʳᵣₗᵢ-ωᵏˢ(ωₗᵢτʳᵣₛ,ⱼ-ωₗⱼτʳᵣₛ,ᵢ)  = (δᵏᵢτₗⱼ-δᵏⱼτₗᵢ)-ωᵏˢ(ωₗᵢτₛⱼ-ωₗⱼτₛᵢ)
+
+Contracting in k and i while setting simply tr(τ)=ωⁱʲτᵢⱼ,tr(ρ)=ωⁱʲρᵢⱼ, we get:  
+    nρᵢⱼ=nτᵢⱼ-τᵢⱼ-τᵢⱼ+ωᵢⱼtr(τ)=(n-2)τᵢⱼ+ωᵢⱼtr(τ)=nρⱼᵢ⇒ ntr(ρ)=2(n-1)tr(τ)
+
+Substituting, we finally obtain τᵢⱼ=n/(n-2)ρᵢⱼ-n/2(n-1)(n-2)ωᵢⱼtr(ρ) and thus the tricky formula:  
+
+Contracting in k and i, we check that ρᵢⱼ=ρᵢⱼ indeed, obtaining therefore the desired canonical lift H²(g₁)→ S₂T*→ 0:ρᵏᵢ,ₗⱼ→ρʳᵢ,ᵣⱼ=ρᵢⱼ. Finally, using Proposition 4.3, the epimorphism H²(g₁)→ H²(g₁)→ 0 is just described by the formula:  
+    σᵏₗ,ᵢⱼ=ρᵏₗ,ᵢⱼ-1/(n-2)(δᵏᵢρₗⱼ-δᵏⱼρₗᵢ-ωᵏˢ(ωₗᵢρₛⱼ-ωₗⱼρₛᵢ))+1/(n-1)(n-2)(δᵏᵢωₗⱼ-δᵏⱼωₗᵢ)tr(ρ)
+
+which is just the way to define the Weyl tensor. We notice that σʳᵣ,ᵢⱼ=ρʳᵣ,ᵢⱼ=0 and σʳᵢ,ᵣⱼ=0 by using indices or a circular chase showing that Z²(g₁)=Z²(g₁)+δ(T*⊗g₂). This purely algebraic result only depends on the metric ω and does not depend on any conformal factor. In actual practice, the lift H²(g₁)→ S₂T* is described by ρᵏₗ,ᵢⱼ→ρʳᵢ,ᵣⱼ=ρᵢⱼ=ρⱼᵢ but it is not evident at all that the lift H²(g₁)→ H²(g₁) is described by the strict inclusion σᵏₗ,ᵢⱼ→ρᵏₗ,ᵢⱼ=σᵏₗ,ᵢⱼ providing a short exact sequence as in Proposition 4.3 because ρᵢⱼ=ρʳᵢ,ᵣⱼ=σʳᵢ,ᵣⱼ=0 by composition.                                                                                                         Q.E.D.  
+
+COROLLARY 5.4: When n≥ 4, each component of the Weyl tensor is a torsion element killed by the Dalembertian whenever the Einstein equations in vacuum are satisfied by the metric. Hence, there exists a second order operator Q such that we have an identity:  
+    ∘ Weyl=Q∘ Ricci
+
+
+Proof: According to Proposition 4.4, each extension module extⁱ(M) is a torsion module, ∀ i≥ 1. It follows that each additional CC in D′₁ which is not already in D₁ is a torsion element as it belongs to this module. One may also notice that:  
+    rkD(Einstein)=n(n+1)/2-n=n(n-1)/28.53581pt,8.53581ptrkD(Riemann)=n(n+1)/2-n=n(n-1)/2
+
+The differential ranks of the Einstein and Riemann operators are thus equal, but this is a pure coincidence because rkD(Einstein) has only to do with the div operator induced by contracting the Bianchi identities, while rkD(Riemann) has only to do with the classical Killing operator and the fact that the corresponding differential module is a torsion module because we have a Lie group of transformations having n+n(n-1)/2=n(n+1)/2 parameters (translations + rotations). Hence, as the Riemann operator is a direct sum of the Weyl operator and the Einstein or Ricci operator according to the previous theorem, each component of the Weyl operator must be killed by a certain operator whenever the Einstein or Ricci equations in vacuum are satisfied. A direct tricky computation can be found in ([8], p 206]) and ([18], exercise 7.7]).                                                                                                          Q.E.D.  
+
+REMARK 5.5: In a similar manner, the EM wave equations F=0 are easily obtained when the second set of Maxwell equations in vacuum is satisfied, avoiding therefore the Lorenz (no ”t”) gauge condition for the EM potential. Indeed, let us start with the Minkowski constitutive law with electric constant ε₀ and magnetic constant μ₀ such that ε₀μ₀c²=1 in vacuum:  
+    Fʳˢ=1/μ₀ωʳⁱωˢʲFᵢⱼ∼ωʳⁱωˢʲFᵢⱼ
+
+where ωᵢⱼ=| det(ω)|⁽⁻¹⁄ⁿ⁾ωᵢⱼ⇒| det(ω)|=1, F∈²T* is the EM field and the induction F is thus a contravariant skewsymmetric 2-tensor density. From the Maxwell equations we have:
+    ∂ᵣFᵢⱼ+∂ᵢFⱼᵣ+∂ⱼFᵣᵢ=0,8.53581pt∇ʳFᵣᵢ=08.53581pt⇒8.53581pt∇ʳFᵣᵢ=0
+
+    ⇒8.53581ptFᵢⱼ=∇ʳ∇ᵣFᵢⱼ=∇ʳ(∇ᵢFᵣⱼ-∇ⱼFᵣᵢ)=0
+
+
+REMARK 5.6: Using Proposition 4.3 and the splittings of Theorem 5.3 for the second column, we obtain the following commutative and exact diagram:  
+    []cccccccl  0  0  0    ↓  ↓  ↓  0  10  16 → 6 → 0 ↓  ↓↑  ↓  ∥  10 Riemann 20 Bianchi 20 → 6 → 0 ∥  ↓↑  ↓  ↓  10 Einstein 10 div 4 → 0  ↓  ↓  ↓    0  0  0
+
+It follows that the 10 components of the Weyl tensor must satisfy a first order linear system with 16 equations, having 6 generating first order CC. The differential rank of the corresponding operator is thus equal to 16-6=10 and such an operator defines a torsion module in which we have to look separately for each component of the Weyl tensor in order to obtain Corollary 5.4. The situation is similar to that of the Cauchy-Riemann equations when n=2. Indeed, any complex transformation y=f(x) must be solution of the (linear) first order system y²₂-y¹₁=0,y¹₂+y²₁=0 of finite Lie equations though we obtain y¹₁₁+y¹₂₂=0,y²₁₁+y²₂₂=0, that is y¹ and y² are separately killed by the second order laplacian Δ=d₁₁+d₂₂.  
+
+6) CONTACT STRUCTURE  
+
+Changing slightly the notations while setting α=1,...,p and α=α+p=p+1,...,2p, we may consider the contact 1-formχ=dxn−∑α=1pxα¯dxα⇒χ∧(dχ)p=(1)p+1p!dx1∧…∧dxn≠0 where the exterior power of dχ is taken p times. As before, we obtain the injective parametrization:  
+    ξα=-∂φ/∂ xα, ξα=∂φ/∂ xα+xα∂φ/∂ xⁿ, ξⁿ=φ-xβ∂φ/∂ xβ ⇒ φ=i(ξ)χ ⇒ L(ξ)χ=∂φ/∂ xⁿχ
+
+From now on, considering χ as a 1-form density as we did before, we may consider φ as a density section of a vector bundle E with dim(E)=1 and we obtain the defining system in the Medolaghi form with n equations:  
+    χᵣ(x)∂ᵢξʳ-1/p+1χᵢ∂ᵣξʳ+ξʳ∂ᵣχᵢ=0
+
+We have seen that this system is involutive when n=3 but let the reader check as a difficult exercise that this system is not even formally
+integrable when n≥ 5.  
+
+We may define the linear first order operator C=A∘ j₁:E→ T and the linear first order operator D=B∘ j₁:T→ F₀ by the two rows of the following commutative and exact diagram:  
+    []rcccccccc0→ Q₂ → J₂(E) ρ₁(A)→ J₁(T) B→ F₀ → 0  ↓  ↓  ↓  ↓ 0→ Q₁ → J₁(E) A→ T → 0
+
+where Q₁=ker(A)⊂ J₁(E) and its symbol K1⊂T∗⊗E is easily seen to be involutive with dim(Kᵣ₊₁)=1. As the parametrizing operator C is injective with a lift ξ→ i(ξ)χ=φ, we obtain Q⁽¹⁾₁=π²₁(Q₂)=0 and thus Q₁ is not formally integrable. However, using Theorem 2.14, we have Q⁽¹⁾ᵣ₊₁=ρᵣ(Q⁽¹⁾₁)=0 and thus Qᵣ₊₁≃ Kᵣ₊₁⇒ dim(Qᵣ₊₁)=1. We obtain therefore at once:  
+    dim(F₀)=1-(n+1)(n+2)/2+n(n+1)=n(n-1)/2
+
+and dim(F₀)=10 when n=5 instead of the 5 equations we obtained with the 1-form density χ. Prolonging this diagram r-times by induction, we obtain the following commutative diagram:  
+
+    []rccccccc 0  0  0  0  ↓  ↓  ↓  ↓ 0→ Kᵣ₊₂ → Sᵣ₊₂T*⊗ E σᵣ₊₁(A) Sᵣ₊₁T*⊗ T σᵣ(B) SᵣT*⊗ F₀  ↓  ↓  ↓  ↓ 0→ Qᵣ₊₂ → Jᵣ₊₂(E) ρᵣ₊₁(A) Jᵣ₊₁(T) ρᵣ(B) Jᵣ(F₀)  ↓  ↓  ↓  ↓ 0→ Qᵣ₊₁ → Jᵣ₊₁(E) ρᵣ(A) Jᵣ(T) ρᵣ₋₁(B) Jᵣ₋₁(F₀)    ↓  ↓  ↓    0  0  0
+
+Chasing in this diagram while cutting it in the middle by setting:  
+    Rᵣ₊₁=im(ρᵣ₊₁(A))⊆ ker(ρᵣ(B))=ρᵣ(R₁)⇒πʳ⁺¹ᵣ(Rᵣ₊₁)=Rᵣ⇒ gᵣ₊₁⊆ρᵣ(g₁)
+
+we obtain successively:  
+
+It follows that gᵣ₊₁=ρᵣ(g₁) and thus Rᵣ₊₁=ρᵣ(R₁) by induction on r. Hence R₁ is an involutive first order system because it is already formally integrable and its symbol g₁ is involutuve because K₁ is involutive. Extending step by step the previous diagram on the right, we obtain:  
+
+THEOREM 6.1: We have the locally exact Janet sequence where all the operators are first order and involutive but C which is first order but not formally integrable:  
+    0→ ECTDF₀D₁F₁D₂...Dₙ₋₂Fₙ₋₂→ 0
+
+
+Proof: We recall that a differential sequence is locally exact, like the Poincaré sequence, if any (local) section of Fᵣ killed by Dᵣ₊₁ is the image of a (local) section of Fᵣ₋₁ by Dᵣ. To prove this result we just need to apply the Spencer operator D to the middle row of the preceding diagram when r is large enough. As it is known that all the resulting vertical Spencer sequences are locally exact (See [31,34,36,52] for more details), then the commutative diagram thus obtained is exact but perhaps the first purely algebraic column on the left which is an induced δ-sequence, exact because K₁ is involutive. For helping the reader we provide the upper part of this diagram:  
+    []rcccccccl   0  0  0     ↓  ↓  ↓   0 → E C T D F₀ →...  ↓  19.91692pt↓ jᵣ₊₂  19.91692pt↓ jᵣ₊₁  11.38109pt↓ jᵣ  0→ Kᵣ₊₂ → Jᵣ₊₂(E)  Jᵣ₊₁(T)  Jᵣ(F₀) →...  14.22636pt↓-δ  11.38109pt↓ D  11.38109pt↓ D  14.22636pt↓ D  0→ T*⊗ Kᵣ₊₁ → T*⊗ Jᵣ₊₁(E) → T*⊗ Jᵣ(T) → T*⊗ Jᵣ₋₁(F₀) →...
+
+Comparing to the Poincaré sequence, we get dim(Fᵣ)=n!/(r+2)!(n-r-2)! and it remains to find the geometric object providing D. For this, we may introduce the dual density ω=(ωⁱʲ) of α=(αₖ₁,...ₖₙ₋₂)=χ(dχ)ᵖ⁻¹ in a symbolic way by introducing ε∈ⁿT with |εⁱ₁,···,ⁱₙ|=1 and set ωⁱʲ=εⁱʲᵏ₁,···,ᵏₙ₋₂αₖ₁,...,ₖₙ₋₂. Using jet notations, we have the nonlinear system of finite Lie equations in Lie form: 
+    ωᵏˡ(y)∂ xⁱ/∂ yᵏ∂ xʲ/∂ yˡ(∂(y¹,...,yⁿ)/∂(x¹,...,xⁿ))⁽⁻¹⁄ᵖ⁺¹⁾=ωⁱʲ(x)
+
+We obtain therefore by linearization the involutive system R₁ in of general infinitesimal Lie equations
+in Medolaghi form:  
+    -ωʳʲ(x)∂ᵣξⁱ-ωⁱʳ(x)∂ᵣξʲ-1/p+1ωⁱʲ(x)∂ᵣξʳ+ξʳ∂ᵣωⁱʲ(x)=0
+
+The Vessiot structure equations involve only one constant and become:  
+    χᵢ(∂ⱼχₖ-∂ₖχⱼ)+χⱼ(∂ₖχᵢ-∂ᵢχₖ)+χₖ(∂ᵢχⱼ-∂ⱼχᵢ)=c σᵢⱼₖ
+
+where the 3-form density σ=(σᵢⱼₖ) is the dual of (ω)ᵖ⁻¹. Finally, as χ is proportional to the dual density of(ω)ᵖ, it may be expressed rationally in terms of ω. Linearizing as we did in Section 2 and with the Riemann tensor, we obtainD₁ with dim(F₁)=n(n-1)(n-2)/6 in a coherent way.                                                                                                          Q.E.D.  
+
+We use the previous results in order to revisit the Hamilton-Jacobi equation and prove the need to use differential algebra for studying the nonlinear systems involved. This is a difficult problem indeed, in the sense that no classical approach by means of exterior calculus can be adapted as formal integrability or involution become crucial tools that cannot be avoided. Let z=f(t,x) be a solution of the non-linear PD equation zₜ+H(t,x,z,zₓ)=0 written with jet notations for the single unknown z. When dealing with applications, t will be time, x will be space, z will be the action and, as usual, we shall set p=zₓ for the momentum. It is important to notice that, in this general setting, H(t,x,z,p) cannot be called Hamiltonian as it involves z (See [32] and in particular [33], p 506 for more details):  
+
+DEFINITION 6.2: A complete integral z=f(t,x;a,b) is a family of solutions depending on two constant parameters (a,b) in such a way that the Jacobian condition ∂(z,p)/∂(a,b)≠ 0 whenever p=∂ₓf(t,x;a,b). Using the implicit function theorem, we may set 
+
+THEOREM 6.3: The search for a complete integral of the PD equation:  
+    zₜ+H(t,x,z,zₓ)=0
+
+is equivalent to the search for a single solution of the automorphic system A₁ with n=4,m=3, obtained by eliminating ρ(t,x,z,p) in the Pfaffian system:  
+    dz-pdx+H(t,x,z,p)dt=ρ(dZ-PdX)
+
+The corresponding Lie pseudogroup is the pseudogroup Γ of contact transformations of (X,Z,P) that reproduces the contact 1-form dZ-PdX up to a function factor.  
+
+Proof: If z=f(t,x;a,b) is a complete integral, we have:  
+    dz-pdx+H(t,x,z,p)dt=∂ f/∂ ada+∂ f/∂ bdb
+
+Using the implicit function theorem and the Jacobian condition, we may set:  
+    a=X(t,x,z,p), b=Z(t,x,z,p)⇒ρ(t,x,z,p)=∂ f/∂ b, P(t,x,z,p)=∂ f/∂ a/∂ f/∂ b
+
+The converse is left to the reader.  
+
+For another solution denoted wit a ”bar”, we have:  
+    dz-pdx+H(t,x,z,p)dt=ρ(dZ-PdX) ⇒ dZ-PdX=ρ/ρ(dZ-PdX)
+
+Closing this system, we obtain at once:  
+    dXdZdP=(ρ/ρ)²dXdZdP
+
+Closing again, we discover that ρ/ρ is in fact a function of (X,Z,P), a result bringing the Lie pseudogroup of contact transformations and showing that no restriction must be imposed to H(t,x,z,p).                                                                                                          Q.E.D.  
+
+It is quite more dificult to exhibit the equations of the above automorphic sytem and the corresponding equations of the Lie pseudogroup Γ in Lie form or even as involutive systems of PD equations. From what has been said, we obtain at least:  
+    ∂Z/∂ X-P∂X/∂ X/∂Z/∂ Z-P∂X/∂ Z=-P,∂Z/∂ P-P∂X/∂ P/∂Z/∂ Z-P∂X/∂ Z=0⇒∂Z/∂ P-P∂X/∂ P=0
+
+for defining R₁, that is to say:  
+    ∂Z/∂ X-P∂X/∂ X+P(∂Z/∂ Z-P∂X/∂ Z)=0,28.45274pt∂Z/∂ P-P∂X/∂ P=0
+
+Using now letters (x,z,p) instead of the capital letters (X,Z,P) and (ξ,η,ζ) for the corresponding vertical bundles, we obtain by linearization the system of first order infinitesimal Lie equations:  
+    ∂ξ/∂ x-p∂η/∂ x-ζ+p(∂ξ/∂ z-p∂η/∂ z)=0, ∂ξ/∂ p-p∂η/∂ p=0
+
+This system is not involutive as it is not even formally integrable. Using crossed derivatives in x/p, we obtain the only new first order equation:  
+    ∂η/∂ x-∂ξ/∂ z+∂ζ/∂ p+2p∂η/∂ z=0
+
+and the resulting system R⁽¹⁾₁ is involutive with two equations of class x solved with respect to (∂ξ/∂ x,∂η/∂ x) and one equation of class p solved with respecto ∂ξ/∂ p, that is dimY(R⁽¹⁾₁)=(3+3× 3)-3=9. Accordingly, the non-linear system of Lie equations must become involutive by adding only one equation in Lie form, namely:  
+    ∂(Z,X,P)/∂(Z,X,P)/(∂Z/∂ Z-P∂X/∂ X)²=1
+
+and its linearization just provides:  
+    ∂η/∂ x+∂ξ/∂ z+∂ζ/∂ p=2(∂ξ/∂ z-p∂η/∂ z)
+
+that is exactly the previous equation.  Coming back to the original system and notations, we may suppose ∂ Z/∂ z-P∂ X/∂ z≠ 0 and introduce the 7=3+4 equations:  
+    ∂ Z/∂ x-P∂ X/∂ x+p(∂ Z/∂ z-P∂ X/∂ z)=0,∂ Z/∂ t-P∂ X/∂ t-H(∂ Z/∂ z-P∂ X/∂ z)=0,∂ Z/∂ p-P∂ X/∂ p=0
+
+    ∂(Z,X,P)/∂(z,x,p)-(∂ Z/∂ z-P∂ X/∂ z)²=0,∂(Z,X,P)/∂(z,p,t)-∂ H/∂ p(∂ Z/∂ z-P∂ X/∂ z)²=0,...
+
+
+Starting now, the next results canot be obtained by exterior calculus and are therefore not known. Indeed, developping the 3× 3 Jacobian determinant, the fourth equation provided can be written as:  
+
+Using the previous equations in order to eliminate ∂ Z/∂ x and ∂ Z/∂ p, we obtain:  
+
+    (∂ Z/∂ z-P∂ X/∂ z)(∂(X,P)/∂(x,p)+p∂(X,P)/∂(z,p))=(∂ Z/∂ z-P∂ X/∂ z)²
+
+and thus:  
+
+which is nothing else than the first order equation that can be obtained from the first and third among the previous 7 equations by using crossed derivatives in x/p. It follows that A⁽¹⁾₁ may be defined by 6 equations only and we have thusdimX(A⁽¹⁾₁)=(3+4× 3)-6=9. This result proves that the involutive system A⁽¹⁾₁ is an automorphic system for the involutive Lie groupoid R⁽¹⁾₁.  
+
+We finally show the link which is existing with differential algebra and the differential Galois theory because the Lie pseudogroup of contact transformations is an algebraic Lie pseudogroup. For this, using jet notations, let us consider the chain of strict inclusions of differential fields:  
+
+Using the chain rule for derivatives, we let the reader prove as an exercise that each fraction is a differential invariant for the Lie pseudogroupΓ of contact transformations. Accordigly, L/K is a differential automorphic extension in the sense that the corresponding infinite dimensional model differential variety is a principal homogeneous space (PHS) for Γ. It is not so evident that:  
+    ∂(X,Z,P)/∂(x,z,p)/(∂ Z/∂ z-P∂ X/∂ z)²∈ K
+
+because it is also a differential invariant of Γ. The intermediate differential field K⊂ K′⊂ L with K′=K<Zz-PXz> is the differential field of invariants of the Lie subpseudogroup Γ′⊂Γ of strict or unimodular contact transformations preserving the contact form dZ-PdX and thus the volume 3-form dZdXdP. We let the reader adapt the previous results to this particular case.  
+
+7) CONCLUSION  
+
+Whenever Rq⊆ Jq(E) is an involutive system of order q on E, we may define the Janet bundles Fᵣ for r=0,1,...,n by the short exact sequences:  
+    0→ʳT*⊗ Rq+δ(ʳ⁻¹T*⊗ Sq₊₁T*⊗ E)→ʳT*⊗ Jq(E)→ Fᵣ→ 0
+
+We may pick up a section of Fᵣ, lift it up to a section of ʳT*⊗ Jq(E) that we may lift up to a section of ʳT*⊗ Jq₊₁(E) and apply D in order to get a section of ʳ⁺¹T*⊗ Jq(E) that we may project onto a section of Fᵣ₊₁ in order to construct an operator Dᵣ₊₁:Fᵣ→ Fᵣ₊₁ generating the CC of Dᵣ in the canonical linear Janet sequence ([34], p 145):  
+    0EDF₀D₁F₁D₂...DₙFₙ0
+
+If we have two involutive systems Rq⊂Rq⊂ Jq(E), the Janet sequence for Rq projects onto the Janet sequence for Rq and we may define inductively canonical epimorphisms Fᵣ→Fᵣ→ 0 forr=0,1,...,n by comparing the previous sequences for Rq and Rq.  A similar procedure can also be obtained if we define the Spencer bundles Cᵣ for r=0,1,...,n by the short exact sequences:  
+    0→δ(ʳ⁻¹T*⊗ gq₊₁)→ʳT*⊗ Rq→ Cᵣ→ 0
+
+We may pick up a section of Cᵣ, lift it to a section of ʳT*⊗ Rq, lift it up to a section of ʳT*⊗ Rq₊₁ and apply D in order to construct a section of ∧r+1⊗Rq that we may project to Cᵣ₊₁ in order to construct an operator Dᵣ₊₁:Cᵣ→ Cᵣ₊₁ generating the CC of Dᵣ in the canonical linear Spencer sequence which is another completely different resolution of the set Θ of (formal) solutions of Rq:  
+    0jqC₀D₁C₁D₂C₂D₃...DₙCₙ0
+
+However, if we have two systems as above, the Spencer sequence for Rq is now contained into the Spencer sequence forRq and we may construct inductively canonical monomorphisms 0→ Cᵣ→Cᵣ for r=0,1,...,n by comparing the previous sequences for Rq and Rq.  When dealing with applications, we have set E=T and considered systems of finite type Lie equations determined by Lie groups of transformations and ad(Dᵣ) generates the CC of ad(Dᵣ₊₁) while ad(Dᵣ) generates the CC of ad(Dᵣ₊₁).
+We have obtained in particular Cᵣ=ʳT*⊗ Rq⊂ʳT*⊗Rq=Cᵣ when comparing the classical and conformal Killing systems, but these bundles have never been used in physics. Therefore, instead of the classical Killing system R₂⊂ J₂(T) defined by Ω≡L(ξ)ω=0 and Γ≡L(ξ)γ=0 or the conformal Killing system R₂⊂ J₂(T) defined by Ω≡L(ξ)ω=A(x)ω and Γ≡L(ξ)γ=(δᵏᵢAⱼ(x)+δᵏⱼAᵢ(x)-ωᵢⱼωᵏˢAₛ(x))∈ S₂T*⊗ T, we may introduce the intermediate differential system R₂⊂ J₂(T) defined by L(ξ)ω=Aω with A=cst and Γ≡L(ξ)γ=0, for theWeyl group obtained by adding the only dilatation with infinitesimal generator xⁱ∂ᵢ to the Poincaré group. We have R₁⊂R₁=R₁ but the strict inclusions R₂⊂R₂⊂R₂ and we discover exactly the group scheme used through this paper, both with the need to shift by one step to the left the physical interpretation of the various differential sequences used. Indeed, as g₂≃ T*, the first Spencer operator R₂D₁T*⊗R₂ is induced by the usual Spencer operator R₃DT*⊗R₂:(0,0,ξʳᵣⱼ,ξʳᵣᵢⱼ=0)→(0,∂ᵢ0-ξʳᵣᵢ,∂ᵢξʳᵣⱼ-0) and thus projects by cokernel onto the induced operator T*→ T*⊗ T*. Composing with δ, it projects therefore onto T*d→²T*:A→ dA=F as in EM and so on by using the fact that D₁and d are both involutive or the composite epimorphisms Cᵣ→Cᵣ/Cᵣ≃ʳT*⊗(R₂/R₂)≃ʳT*⊗g₂≃ʳT*⊗ T*[equation]ʳ⁺¹T*. The main result we have obtained is thus to be able to increase the order and dimension of the underlying jet bundles and groups, proving therefore that any 1-form with value in the second order jets g₂ (elations) of the conformal Killing system (conformal group) can be decomposed uniquely into the direct sum (R,F) where R is a section of the Ricci bundle S₂T* and the EM field F is a section of ²T* as in [41,42](Compare to [55]).  The mathematical structures of electromagnetism and gravitation only depend on second order jets. 
+
+REFERENCES  
+
+[1] Adler, F.W.: Über die Mach-Lippmannsche Analogie zum zweiten Hauptsatz, Anna. Phys. Chemie, 22, 578-594 (1907).  [2] Airy, G.B.: On the Strains in the Interior of Beams, Phil. Trans. Roy. Soc.London, 153, 1863, 49-80 (1863).  [3] Arnold, V.: Méthodes Mathématiques de la Mécanique Classique, Appendice 2 (Géodésiques des métriques invariantes à gauche sur des groupes de Lie et hydrodynamique des fluides parfaits), MIR, Moscow (1974,1976).  [4] Assem, I.: Algèbres et Modules, Masson, Paris (1997).  [5] Beltrami, E.: Osservazioni sulla Nota Precedente, Atti Reale Accad. Naz. Lincei Rend., 5, 141-142 (1892).  [6] Birkhoff, G.: Hydrodynamics, Princeton University Press (1954).  [7] Bjork, J.E. (1993) Analytic D-Modules and Applications, Kluwer (1993).  [8] Bourbaki, N.: Algèbre, Ch. 10, Algèbre Homologique, Masson, Paris (1980).  [9] de Broglie, L.: Thermodynamique de la Particule isolée, Gauthiers-Villars, Pris 1964).  [10] Choquet-Bruhat, Y.: Introduction to General Relativity, Black Holes and Cosmology, Oxford University Press (2015).  [11] Chyzak, F.,Quadrat, A., Robertz, D.: Effective algorithms for parametrizing linear control systems over Ore algebras,
+Appl. Algebra Engrg. Comm. Comput., 16, 319-376, 2005.  [12] Chyzak, F., Quadrat, A., Robertz, D.: OreModules: A symbolic package for the study of multidimensional linear systems,
+Springer, Lecture Notes in Control and Inform. Sci., 352, 233-264, 2007. http://wwwb.math.rwth-aachen.de/OreModules  [13] Cosserat, E., & Cosserat, F.: Théorie des Corps Déformables, Hermann, Paris, 1909. [14] Eisenhart, L.P.: Riemannian Geometry, Princeton University Press, Princeton (1926).  [15] Foster, J., Nightingale, J.D.: A Short Course in General relativity, Longman (1979).  [16] Gröbner, W.: Über die Algebraischen Eigenschaften der Integrale von Linearen Differentialgleichungen mit Konstanten Koeffizienten, Monatsh. der Math., 47, 247-284 (1939). [17] Hu,S.-T.: Introduction to Homological Algebra, Holden-Day (1968).  [18] Hughston, L.P., Tod, K.P.: An Introduction to General Relativity, London Math. Soc. Students Texts 5, Cambridge University Press
+(1990).  [19] Janet, M.: Sur les Systèmes aux Dérivées Partielles, Journal de Math., 8, 65-151 (1920).  [20] Kashiwara, M.: Algebraic Study of Systems of Partial Differential Equations, Mémoires de la Société
+Mathématique de France, 63 (1995) (Transl. from Japanese of his 1970 Master s Thesis).  [21] Kolchin, E.R.: Differential Algebra and Algebraic groups, Academic Press, New York (1973).  [22] Kumpera, A., & Spencer, D.C.: Lie Equations, Ann. Math. Studies 73, Princeton University Press, Princeton (1972). [23] Kunz, E.: Introduction to Commutative Algebra and Algebraic Geometry, Birkha ser (1985).  [24] Lippmann, G.: Extension du Principe de S. Carnot à la Théorie des Pénomènes électriques, C. R. Acad/ Sc. Paris, 82, 1425-1428 (1876).  [25] Lippmann, G.: Über die Analogie zwischen Absoluter Temperatur un Elektrischem Potential, Ann. Phys. Chem., 23,
+994-996 (1907).  [26] Macaulay, F.S.: The Algebraic Theory of Modular Systems, Cambridge (1916).  [27] Mach, E.: Die Geschichte und die Wurzel des Satzes von der Erhaltung der Arbeit, p 54, Prag: Calve (1872).  [28] Mach, E.: Prinzipien der Wärmelehre, 2, Aufl., p 330, Leipzig: J.A. Barth (1900).  [29] Maxwell, J.C.: On Reciprocal Figures, Frames and Diagrams of Forces, Trans. Roy. Soc. Ediinburgh, 26, 1-40 (1870).  [30] Morera, G.: Soluzione Generale della Equazioni Indefinite dell Equilibrio di un Corpo Continuo, Atti. Reale. Accad. dei Lincei, 1, 137-141+233(1892).  [31] Nordström, G.: Einstein’s Theory of Gravitation and Herglotz’s Mechanics of Continua, Proc. Kon. Ned. Akad. Wet., 19, 884-891 (1917).  [32] Northcott, D.G.: An Introduction to Homological Algebra, Cambridge university Press (1966).  [33] Northcott, D.G.: Lessons on Rings Modules and Multiplicities, Cambridge University Press (1968).  [34] Oberst, U.: Multidimensional Constant Linear Systems, Acta Appl. Math., 20, 1-175 (1990).  [35] Oberst, U.: The Computation of Purity Filtrations over Commutative Noetherian Rings of Operators and their Applications to Behaviours, Multidim. Syst. Sign. Process. (MSSP) 26, 389-404 (2013).  http://dx.doi.org/10.1007/s11045-013-0253-4  [36] Ougarov, V.: Théorie de la Relativité Restreinte, MIR, Moscow, 1969, (french translation, 1979). [37] Poincaré, H.: Sur une Forme Nouvelle des Equations de la Mécanique, C. R. Académie des Sciences Paris, 132 (7) (1901) 369-371.  [38] Pommaret, J.-F.: Systems of Partial Differential Equations and Lie Pseudogroups, Gordon and Breach, New York, 1978; Russian translation: MIR, Moscow, 1983. [39] Pommaret, J.-F.: Differential Galois Theory, Gordon and Breach, New York, 1983. [40] Pommaret, J.-F.: Lie Pseudogroups and Mechanics, Gordon and Breach, New York, 1988. [41] Pommaret, J.-F.: Partial Differential Equations and Group Theory, Kluwer, 1994. http://dx.doi.org/10.1007/978-94-017-2539-2  [42] Pommaret, J.-F.: François Cosserat and the Secret of the Mathematical Theory of Elasticity, Annales des Ponts et Chaussées, 82, 59-66 (1997) (Translation by D.H. Delphenich).  [43] Pommaret, J.-F.: Group Interpretation of Coupling Phenomena, Acta Mechanica, 149 (2001) 23-39. http://dx.doi.org/10.1007/BF01261661  [44] Pommaret, J.-F.: Partial Differential Control Theory, Kluwer, Dordrecht, 2001. [45] POMMARET, J.-F.: Algebraic Analysis of Control Systems Defined by Partial Differential Equations, in ”Advanced Topics in Control Systems Theory”, Springer, Lecture Notes in Control and Information Sciences 311 (2005) Chapter 5, pp. 155-223. [46] Pommaret, J.-F.: Arnold’s Hydrodynamics Revisited, AJSE-math matiques, 1, 1, 2009, pp. 157-174.  [47] Pommaret, J.-F.: Parametrization of Cosserat Equations, Acta Mechanica, 215 (2010) 43-55. http://dx.doi.org/10.1007/s00707-010-0292-y  [48] Pommaret, J.-F.: Macaulay Inverse Systems revisited, Journal of Symbolic Computation, 46, 1049-1069 (2011).  [49] Pommaret, J.-F.: Spencer Operator and Applications: From Continuum Mechanics to Mathematical Physics, in ”Continuum Mechanics-Progress in Fundamentals and Engineering Applications”, Dr. Yong Gan (Ed.), ISBN: 978-953-51-0447–6, InTech, 2012, Available from:  http://dx.doi.org/10.5772/35607  [50] Pommaret, J.-F.: The Mathematical Foundations of General Relativity Revisited, Journal of Modern Physics, 4 (2013) 223-239.  http://dx.doi.org/10.4236/jmp.2013.48A022  [51] Pommaret, J.-F.: The Mathematical Foundations of Gauge Theory Revisited, Journal of Modern Physics, 5 (2014) 157-170.  http://dx.doi.org/10.4236/jmp.2014.55026  [52] Pommaret, J.-F.: Relative Parametrization of Linear Multidimensional Systems, Multidim. Syst. Sign. Process., 26, 405-437 2015).  DOI 10.1007/s11045-013-0265-0  [53] Pommaret,J.-F.:From Thermodynamics to Gauge Theory: the Virial Theorem Revisited, pp. 1-46 in ”Gauge Theories and Differential geometry,”, NOVA Science Publisher (2015).  [54] Pommaret, J.-F.: Airy, Beltrami, Maxwell, Einstein and Lanczos Potentials revisited, Journal of Modern Physics, 7, 699-728 (2016).  http://dx.doi.org/10.4236/jmp.2016.77068  [55] Pommaret, J.-F.: Deformation Theory of Algebraic and Geometric Structures, Lambert Academic Publisher (LAP), Saarbrucken, Germany (2016). A short summary can be found in ”Topics in Invariant Theory ”, Séminaire P. Dubreil/M.-P. Malliavin, Springer
+Lecture Notes in Mathematics, 1478, 244-254 (1990). http://arxiv.org/abs/1207.1964  [56] Pommaret, J.-F. and Quadrat, A.: Localization and Parametrization of Linear Multidimensional Control Systems, Systems & Control Letters, 37, 247-260 (1999).  [57] Pommaret, J.-F., Quadrat, A.: Algebraic Analysis of Linear Multidimensional Control Systems, IMA Journal of Mathematical Control and Informations, 16, 275-297 (1999).  [58] Quadrat, A., Robertz, D.: Parametrizing all solutions of uncontrollable multidimensional linear systems, Proceedings of the 16th IFAC World Congress, Prague, July 4-8, 2005.  [59] Quadrat, A.: An Introduction to Constructive Algebraic Analysis and its Applications,
+Les cours du CIRM, Journees Nationales de Calcul Formel, 1(2), 281-471 (2010). [60] Quadrat, A., Robertz, R.: A Constructive Study of the Module Structure of Rings of Partial Differential Operators, Acta Applicandae Mathematicae, 133, 187-234 (2014).  http://hal-supelec.archives-ouvertes.fr/hal-00925533  [61] Rotman, J.J.: An Introduction to Homological Algebra, Pure and Applied Mathematics, Academic Press (1979).  [62] Schneiders, J.-P.: An Introduction to D-Modules, Bull. Soc. Roy. Sci. Liège, 63, 223-295 (1994).  [63] Spencer, D.C.: Overdetermined Systems of Partial Differential Equations, Bull. Am. Math. Soc., 75 (1965) 1-114. [64] Teodorescu, P.P.: Dynamics of Linear Elastic Bodies, Abacus Press, Tunbridge, Wells (1975)
+(Editura Academiei, Bucuresti, Romania). [65] Vessiot, E.: Sur la Théorie des Groupes Infinis, Ann. Ec. Norm. Sup., 20, 411-451 (1903) (Can be obtained from
+http://numdam.org).  [66] Weyl, H.: Space, Time, Matter, Springer, 1918, 1958; Dover, 1952.  [67] Zerz, E.: Topics in Multidimensional Linear Systems Theory, Lecture Notes in Control and Information Sciences (LNCIS) 256,
+Springer (2000).  [68] Zou, Z., Huang, P., Zang ,Y., Li, G.: Some Researches on Gauge Theories of Gravitation, Scientia Sinica, XXII, 6, 628-636 (1979). 
+

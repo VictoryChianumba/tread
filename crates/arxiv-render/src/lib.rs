@@ -1,3 +1,4 @@
+pub mod ar5iv_parse;
 pub mod bibtex;
 pub mod fetch;
 pub mod pandoc_parse;

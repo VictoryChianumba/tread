@@ -1,0 +1,110 @@
+# Bench B: ar5iv coverage
+# per_bucket=25
+# columns: bucket id status
+recent_cs	2605.16118	200
+recent_cs	2605.16126	200
+recent_cs	2605.16134	200
+recent_cs	2605.16138	200
+recent_cs	2605.16142	200
+recent_cs	2605.16145	200
+recent_cs	2605.16154	200
+recent_cs	2605.16163	200
+recent_cs	2605.16164	200
+recent_cs	2605.16170	200
+recent_cs	2605.16175	200
+recent_cs	2605.16184	200
+recent_cs	2605.16198	200
+recent_cs	2605.16205	200
+recent_cs	2605.16208	200
+recent_cs	2605.16211	200
+recent_cs	2605.16219	200
+recent_cs	2605.16222	200
+recent_cs	2605.16230	200
+recent_cs	2605.16232	200
+recent_cs	2605.16233	200
+recent_cs	2605.16234	200
+recent_cs	2605.16239	200
+recent_cs	2605.16245	200
+recent_cs	2605.16250	200
+recent_math	2605.13726	200
+recent_math	2605.13792	200
+recent_math	2605.13808	200
+recent_math	2605.13824	200
+recent_math	2605.14046	200
+recent_math	2605.14150	200
+recent_math	2605.14203	200
+recent_math	2605.14286	200
+recent_math	2605.14470	200
+recent_math	2605.14536	200
+recent_math	2605.14583	200
+recent_math	2605.14763	200
+recent_math	2605.14803	200
+recent_math	2605.14817	200
+recent_math	2605.14904	200
+recent_math	2605.15061	200
+recent_math	2605.15347	200
+recent_math	2605.15452	200
+recent_math	2605.15605	200
+recent_math	2605.15878	200
+recent_math	2605.15917	200
+recent_math	2605.16040	200
+recent_math	2605.16051	200
+recent_math	2605.16063	200
+recent_math	2605.16092	200
+old_cs	cmp-lg/9404001	200
+old_cs	cmp-lg/9404002	200
+old_cs	cmp-lg/9404003	200
+old_cs	cmp-lg/9404004	200
+old_cs	cmp-lg/9404005	200
+old_cs	cmp-lg/9404006	200
+old_cs	cmp-lg/9404007	200
+old_cs	cmp-lg/9404008	200
+old_cs	cmp-lg/9404009	200
+old_cs	cmp-lg/9404010	200
+old_cs	cmp-lg/9404011	200
+old_cs	cmp-lg/9405001	200
+old_cs	cmp-lg/9405002	200
+old_cs	cmp-lg/9405003	200
+old_cs	cmp-lg/9405004	200
+old_cs	cmp-lg/9405005	200
+old_cs	cmp-lg/9405006	200
+old_cs	cmp-lg/9405007	200
+old_cs	cmp-lg/9405008	200
+old_cs	cmp-lg/9405009	200
+old_cs	cmp-lg/9405010	200
+old_cs	cmp-lg/9405011	200
+old_cs	cmp-lg/9405012	200
+old_cs	cmp-lg/9405013	200
+old_cs	cmp-lg/9405014	200
+old_math	alg-geom/9404010	200
+old_math	hep-th/9202088	200
+old_math	hep-th/9204087	200
+old_math	hep-th/9310175	200
+old_math	math/9201263	200
+old_math	math/9201264	200
+old_math	math/9201265	200
+old_math	math/9201299	200
+old_math	math/9201301	200
+old_math	math/9201302	200
+old_math	math/9204231	200
+old_math	math/9207211	200
+old_math	math/9210223	200
+old_math	math/9210224	200
+old_math	math/9301212	200
+old_math	math/9301216	200
+old_math	math/9304209	200
+old_math	math/9304210	200
+old_math	math/9307228	200
+old_math	math/9307230	200
+old_math	math/9307233	200
+old_math	math/9401219	200
+old_math	math/9404228	200
+old_math	math/9404232	200
+old_math	math/9407217	200
+
+# summary: success rate per bucket (HTTP 200)
+# bucket total ok_200 redirect_3xx error_4xx_5xx pct_200
+old_cs	25	25	0	0	100.0
+old_math	25	25	0	0	100.0
+recent_cs	25	25	0	0	100.0
+recent_math	25	25	0	0	100.0
