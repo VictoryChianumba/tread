@@ -72,11 +72,19 @@ pub fn absolutize_image_paths(blocks: &mut [doc_model::Block], asset_dir: &std::
 }
 
 /// Read pixel `(width, height)` for an image at `path`.  PNG: parse the
-/// IHDR chunk directly.  PDF: rasterise via `pdftoppm` (cached), then
-/// read the resulting PNG's header.  JPG/JPEG: use the image crate's
-/// header reader so photo-heavy figure rows preserve aspect ratio too.
-/// Unsupported formats return `None` and the caller falls back to the
-/// default cell footprint.
+/// IHDR chunk directly.  PDF: read the page size via `pdfinfo` and scale
+/// to the rasteriser's DPI — **without** rendering the page.  JPG/JPEG:
+/// use the image crate's header reader so photo-heavy figure rows
+/// preserve aspect ratio too.  Unsupported formats return `None` and the
+/// caller falls back to the default cell footprint.
+///
+/// Why the PDF path avoids `pdftoppm` here: layout only needs each
+/// figure's dimensions to reserve an aspect-correct footprint, and the
+/// actual rasterisation already happens lazily on first scroll-into-view
+/// (`tread::images::png::resolve_png`).  Rendering every PDF figure
+/// eagerly just to learn its size cost ~20s on figure-heavy papers that
+/// fall to this tarball path; `pdfinfo` returns the same aspect in
+/// milliseconds.
 fn read_image_dims(path: &std::path::Path) -> Option<(u32, u32)> {
     let ext = path
         .extension()
@@ -86,26 +94,9 @@ fn read_image_dims(path: &std::path::Path) -> Option<(u32, u32)> {
     match ext.as_str() {
         "png" => kitty_graphics::png::dimensions(path),
         "jpg" | "jpeg" => image::image_dimensions(path).ok(),
-        "pdf" => {
-            // Eager rasterisation so build_visual_lines has dims.  pdf_to_png
-            // is cached by FNV-1a of canonical path, so subsequent runs and
-            // retries pay zero conversion cost.
-            let cache = pdf_cache_dir();
-            let png = kitty_graphics::pdf::pdf_to_png(path, &cache).ok()?;
-            kitty_graphics::png::dimensions(&png)
-        }
+        "pdf" => kitty_graphics::pdf::pdf_page_dims(path),
         _ => None,
     }
-}
-
-fn pdf_cache_dir() -> std::path::PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        return std::path::PathBuf::from(home)
-            .join(".cache")
-            .join("tread")
-            .join("figures");
-    }
-    std::env::temp_dir().join("tread-figures")
 }
 
 #[cfg(test)]

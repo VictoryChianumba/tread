@@ -73,6 +73,71 @@ pub fn pdf_to_png(input: &Path, cache_dir: &Path) -> io::Result<PathBuf> {
     Ok(target)
 }
 
+/// Read the first page's pixel `(width, height)` **without rasterising**,
+/// by asking `pdfinfo` for the page size in points and scaling by the
+/// same `RENDER_DPI` `pdf_to_png` uses.  The reported dimensions match
+/// the PNG a later lazy rasterisation will produce — what layout needs
+/// is the aspect ratio, and points→pixels is a uniform scale that
+/// preserves it.
+///
+/// This is the cheap companion to `pdf_to_png`: the layout pass needs a
+/// figure's dimensions up front to reserve its footprint, but rendering
+/// every PDF figure eagerly via `pdftoppm` costs seconds on figure-heavy
+/// papers.  `pdfinfo` reads structure only and returns in milliseconds,
+/// so the expensive rasterisation can stay lazy (on first scroll into
+/// view) while layout is still aspect-correct.
+///
+/// We read the **MediaBox**, not `pdfinfo`'s top-line "Page size" — that
+/// summary reports the CropBox, but `pdf_to_png` invokes `pdftoppm`
+/// without `-cropbox`, so the rasteriser renders the full MediaBox.
+/// Keying off the MediaBox keeps these dims identical (to rounding) with
+/// the eventual PNG; the CropBox can differ in both scale and aspect
+/// (e.g. a 960×540 MediaBox cropped to 786×404), which would distort the
+/// reserved footprint.
+///
+/// `pdfinfo` ships in the same Poppler package as the `pdftoppm` this
+/// module already depends on.  Returns `None` when it isn't installed,
+/// the input isn't a readable PDF, or the MediaBox line can't be parsed;
+/// callers then fall back to a default footprint, exactly as for any
+/// other dimension-less image.
+pub fn pdf_page_dims(input: &Path) -> Option<(u32, u32)> {
+    let output = Command::new("pdfinfo").arg("-box").arg(input).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (w_pts, h_pts) = parse_mediabox_pts(&stdout)?;
+    let scale = RENDER_DPI as f64 / 72.0;
+    let w = (w_pts * scale).round() as u32;
+    let h = (h_pts * scale).round() as u32;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some((w, h))
+}
+
+/// Parse the `MediaBox: <x0> <y0> <x1> <y1>` line from `pdfinfo -box`
+/// output, returning `(x1 - x0, y1 - y0)` in points.  Coordinates are
+/// fractional in general (`pdfinfo -box` prints two decimals), so parse
+/// as `f64`.  Returns `None` when the line is absent or malformed.
+fn parse_mediabox_pts(pdfinfo_stdout: &str) -> Option<(f64, f64)> {
+    let after_label = pdfinfo_stdout
+        .lines()
+        .find_map(|l| l.trim_start().strip_prefix("MediaBox:"))?;
+    let mut nums = after_label
+        .split_whitespace()
+        .filter_map(|tok| tok.parse::<f64>().ok());
+    let x0 = nums.next()?;
+    let y0 = nums.next()?;
+    let x1 = nums.next()?;
+    let y1 = nums.next()?;
+    let (w, h) = (x1 - x0, y1 - y0);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    Some((w, h))
+}
+
 /// FNV-1a 64-bit hash of the canonicalised input path mixed with the
 /// source file's size and mtime, so a refreshed PDF at the same path
 /// doesn't keep serving the older rasterised PNG forever.  Stable
@@ -131,6 +196,32 @@ mod tests {
         assert_eq!(fnv1a_64(b""), 0xcbf29ce484222325);
         assert_eq!(fnv1a_64(b"a"), 0xaf63dc4c8601ec8c);
         assert_eq!(fnv1a_64(b"foobar"), 0x85944171f73967e8);
+    }
+
+    #[test]
+    fn parse_mediabox_full_page() {
+        let out = "Page size:       786.05 x 403.634 pts\n\
+                   MediaBox:            0.00     0.00   960.00   540.00\n\
+                   CropBox:           103.62    54.93   889.67   458.56\n";
+        // MediaBox wins over the CropBox-derived "Page size" line.
+        assert_eq!(parse_mediabox_pts(out), Some((960.0, 540.0)));
+    }
+
+    #[test]
+    fn parse_mediabox_offset_origin() {
+        // Non-zero origin: dims are the box extent, not the far corner.
+        let out = "MediaBox:           10.00    20.00   110.00   220.00\n";
+        assert_eq!(parse_mediabox_pts(out), Some((100.0, 200.0)));
+    }
+
+    #[test]
+    fn parse_mediabox_absent_returns_none() {
+        assert_eq!(parse_mediabox_pts("Pages:           1\n"), None);
+    }
+
+    #[test]
+    fn parse_mediabox_degenerate_returns_none() {
+        assert_eq!(parse_mediabox_pts("MediaBox: 0 0 0 0\n"), None);
     }
 
     #[test]
