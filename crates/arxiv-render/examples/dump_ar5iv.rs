@@ -62,7 +62,14 @@ fn main() {
                 let s: String = spans.iter().map(|sp| sp.text.as_str()).collect();
                 println!("> {s}");
             }
-            Block::Figure { alt, .. } => println!("[figure: {alt}]"),
+            Block::Figure { alt, figure_id, rows, .. } => {
+                let paths: Vec<String> = rows
+                    .iter()
+                    .flatten()
+                    .map(|it| format!("{}#{}", it.path.display(), it.kitty_id))
+                    .collect();
+                println!("[figure {figure_id}: {alt} | imgs: {}]", paths.join(", "));
+            }
         }
     }
 }

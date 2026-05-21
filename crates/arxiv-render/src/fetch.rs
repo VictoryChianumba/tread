@@ -141,6 +141,101 @@ fn fetch_ar5iv_with(id: &str, force_refresh: bool) -> Result<String, String> {
   }
 }
 
+/// Per-image cap for ar5iv figure assets.  ar5iv serves rasterised
+/// figures (the PNGs LaTeXML generated), which are page-fragment sized —
+/// a few hundred KB at most.  Cap generously to skip pathological cases
+/// without rejecting legitimate high-DPI figures.
+const MAX_ASSET_BYTES: usize = 20 * 1024 * 1024;
+
+/// Download the figure assets an ar5iv parse referenced into a stable
+/// per-id directory, returning that directory so the caller can pass it
+/// to `absolutize_image_paths` exactly as it does the tarball asset dir.
+///
+/// `rel_paths` are the tarball-relative paths the ar5iv parser emitted
+/// (e.g. `assets/x1.png`, `assets/Figures/ModalNet-21.png`); ar5iv hosts
+/// each at `https://ar5iv.labs.arxiv.org/html/<id>/<rel>`, so we just
+/// re-attach the prefix the parser stripped.  Already-downloaded files
+/// are skipped unless `force_refresh` is set (so warm runs cost nothing
+/// and don't churn mtimes, which would invalidate the PNG-normalisation
+/// cache keyed on path+mtime).  Every per-file failure is non-fatal:
+/// a missing asset degrades to a blank figure cell, never an error.
+pub fn fetch_ar5iv_assets(id: &str, rel_paths: &[PathBuf], force_refresh: bool) -> PathBuf {
+  let asset_dir = prepare_ar5iv_asset_dir(id);
+  let force_refresh = force_refresh || std::env::var_os("TREAD_REFRESH").is_some();
+
+  let client = match reqwest::blocking::Client::builder()
+    .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
+    .build()
+  {
+    Ok(c) => c,
+    Err(_) => return asset_dir,
+  };
+
+  let mut seen = std::collections::HashSet::new();
+  for rel in rel_paths {
+    if !seen.insert(rel.clone()) {
+      continue;
+    }
+    let dest = asset_dir.join(rel);
+    // Zip-slip guard: a crafted `..`-laden path must not write outside
+    // the asset dir.  Component-level prefix check (see `write_asset`).
+    if !dest.starts_with(&asset_dir) {
+      continue;
+    }
+    if dest.exists() && !force_refresh {
+      continue;
+    }
+    let url = format!(
+      "https://ar5iv.labs.arxiv.org/html/{id}/{}",
+      rel.to_string_lossy()
+    );
+    let _ = download_asset(&client, &url, &dest);
+  }
+  asset_dir
+}
+
+/// Fetch one asset URL to `dest` with the same size cap, atomic-write,
+/// and best-effort semantics as the main cache path.
+fn download_asset(
+  client: &reqwest::blocking::Client,
+  url: &str,
+  dest: &Path,
+) -> Result<(), String> {
+  let resp = client.get(url).send().map_err(|e| e.to_string())?;
+  if !resp.status().is_success() {
+    return Err(format!("HTTP {}", resp.status()));
+  }
+  let bytes = resp.bytes().map_err(|e| e.to_string())?;
+  if bytes.len() > MAX_ASSET_BYTES {
+    return Err(format!("asset too large: {} bytes", bytes.len()));
+  }
+  if let Some(parent) = dest.parent() {
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+  }
+  let tmp = append_ext(dest, ".tmp");
+  std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+  std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+/// Per-id directory for ar5iv-downloaded figure assets.  Kept separate
+/// from the tarball `sources/<id>` tree so the two parser paths don't
+/// write into each other's space.  Falls back to `$TMPDIR` when `HOME`
+/// is unset, mirroring `prepare_asset_dir`.
+fn prepare_ar5iv_asset_dir(id: &str) -> PathBuf {
+  let base = if let Some(home) = std::env::var_os("HOME") {
+    PathBuf::from(home)
+      .join(".cache")
+      .join("tread")
+      .join("ar5iv-assets")
+  } else {
+    std::env::temp_dir().join("tread").join("ar5iv-assets")
+  };
+  let dir = base.join(id);
+  let _ = std::fs::create_dir_all(&dir);
+  dir
+}
+
 /// Disk-backed conditional HTTP GET.
 ///
 /// On warm runs, sends `If-None-Match: <cached ETag>`.  If the server
@@ -452,4 +547,35 @@ fn strip_version(id: &str) -> Option<String> {
     }
   }
   Some(id.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Network-gated: downloads two real ar5iv figure assets (one flat,
+  /// one in a `Figures/` subdir) and asserts they land on disk as valid
+  /// PNGs at the joined relative path.  `#[ignore]` so default `cargo
+  /// test` stays offline; run with `--ignored`.
+  #[test]
+  #[ignore]
+  fn fetch_ar5iv_assets_downloads_real_pngs() {
+    let id = "1706.03762";
+    let rels = vec![
+      PathBuf::from("assets/x1.png"),
+      PathBuf::from("assets/Figures/ModalNet-21.png"),
+    ];
+    let dir = fetch_ar5iv_assets(id, &rels, true);
+    for rel in &rels {
+      let dest = dir.join(rel);
+      let bytes = std::fs::read(&dest)
+        .unwrap_or_else(|e| panic!("expected {} on disk: {e}", dest.display()));
+      assert!(
+        bytes.starts_with(&[0x89, b'P', b'N', b'G']),
+        "{} should be a PNG, got {:?}",
+        dest.display(),
+        &bytes[..bytes.len().min(4)]
+      );
+    }
+  }
 }

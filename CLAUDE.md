@@ -153,7 +153,7 @@ Pinned papers and their EXPECTED counts (Pandoc-fallback path):
 
 When parser or layout changes shift the counts intentionally, bump the per-test EXPECTED_BLOCKS / EXPECTED_VISUAL_LINES constants and note the new baseline in the ADR that justified the change.  The shared `parse_and_check_block_count` + `assert_visual_line_count` helpers in the module keep new-paper additions short.
 
-Known gap: arXiv:2602.06006 fails Pandoc parse on `\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}` — no Pandoc-path golden today; would need an ar5iv-path golden (separate pipeline using `ar5iv_parse::to_blocks`).
+Resolved gap: arXiv:2602.06006 used to fail Pandoc parse on `\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}`. The `strip_newcolumntype` pass in `pandoc_parse/preprocess.rs` now drops those parameterised preamble definitions before Pandoc sees them, so the Pandoc path parses it (~2138 blocks). A Pandoc-path golden could now be pinned for it.
 
 ```bash
 # Run a single golden:
@@ -162,7 +162,7 @@ cargo test -p arxiv-render attention_parse_and_layout_golden --release -- --igno
 cargo test -p arxiv-render golden --release -- --ignored --nocapture
 ```
 
-The parser-parity probe at `crates/arxiv-render/examples/parity_probe.rs` runs both the ar5iv (primary) and Pandoc (fallback) parsers on the same paper and prints a per-`Block`-kind count table.  Use it to spot regressions in either parser and to track the ar5iv feature-parity gaps documented in `docs/backlog.md` (B9 — no `Block::Figure`; B10 — no `Block::ListItem`).  On Attention today: ar5iv emits 385 blocks, pandoc 379; ar5iv produces 0 figures vs pandoc's 5 (B9), 0 ListItem vs 3 (B10).
+The parser-parity probe at `crates/arxiv-render/examples/parity_probe.rs` runs both the ar5iv (primary) and Pandoc (fallback) parsers on the same paper and prints a per-`Block`-kind count table.  Use it to spot regressions in either parser.  The historical ar5iv feature gaps are now closed: B9 (`Block::Figure`, via `emit_figure` + `fetch_ar5iv_assets`) and B10 (`Block::ListItem`, via `emit_list`).  Parity against the Pandoc reference where Pandoc parses: Attention 5=5 figures / 3=3 list items, 2602.06006 49=49 list items.  The probe continues past a Pandoc failure and prints ar5iv-only counts.
 
 ```bash
 cargo run --release -p arxiv-render --example parity_probe -- 1706.03762

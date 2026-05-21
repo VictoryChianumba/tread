@@ -21,7 +21,7 @@
 //                  one `Block::StyledLine` per bibitem, each prefixed with
 //                  an `Anchor` carrying the cite-key.
 
-use doc_model::{Block, InlineSpan, LinkTarget};
+use doc_model::{Block, ImageItem, InlineSpan, LinkTarget};
 use scraper::{ElementRef, Html, Node, Selector};
 use std::collections::HashMap;
 
@@ -60,7 +60,30 @@ pub fn to_blocks(html: &str) -> Vec<Block> {
     for child in article.child_elements() {
         walk_top(child, &mut out);
     }
+    number_figures(&mut out);
     out
+}
+
+/// Assign sequential `figure_id` (one per `Block::Figure`) and `kitty_id`
+/// (one per image) in document order.  The walk emits placeholder zeros
+/// because the free-function walkers don't thread counter state through;
+/// numbering in a single post-pass keeps every walk signature untouched
+/// and matches the Pandoc path's document-order numbering.
+fn number_figures(blocks: &mut [Block]) {
+    let mut fig = 0u32;
+    let mut kitty = 0u32;
+    for b in blocks.iter_mut() {
+        if let Block::Figure { rows, figure_id, .. } = b {
+            fig += 1;
+            *figure_id = fig;
+            for row in rows.iter_mut() {
+                for item in row.iter_mut() {
+                    kitty += 1;
+                    item.kitty_id = kitty;
+                }
+            }
+        }
+    }
 }
 
 fn walk_top(el: ElementRef, out: &mut Vec<Block>) {
@@ -124,25 +147,17 @@ fn walk_section(el: ElementRef, level: u8, out: &mut Vec<Block>) {
         } else if has_class(&classes, "ltx_table") {
             emit_table(child, out);
         } else if has_class(&classes, "ltx_figure") {
-            emit_figure_caption(child, out);
+            emit_figure(child, out);
         } else if has_class(&classes, "ltx_equation")
             || has_class(&classes, "ltx_equationgroup")
         {
             emit_display_math(child, out);
-        } else if has_class(&classes, "ltx_itemize")
-            || has_class(&classes, "ltx_enumerate")
-            || has_class(&classes, "ltx_description")
-        {
-            // Lists in ar5iv carry their own item structure; for the
-            // prototype we flatten into the section stream so any nested
-            // paragraphs / equations / figures get emitted.  Real list
-            // semantics (Block::ListItem with markers) would be the next
-            // polish step.
-            walk_section(child, level, out);
-        } else if tag == "div" || tag == "li" || tag == "ol" || tag == "ul" {
+        } else if is_list_el(child) {
+            emit_list(child, 0, out);
+        } else if tag == "div" || tag == "li" {
             // Fall through into any unrecognised structural container so
             // we don't silently drop content (e.g. LaTeXML wrapping a
-            // paragraph in an unnumbered list inside an appendix).
+            // paragraph in an unnumbered div inside an appendix).
             walk_section(child, level, out);
         }
     }
@@ -211,19 +226,15 @@ fn emit_para(el: ElementRef, out: &mut Vec<Block>) {
             emit_table(child, out);
             emitted_any = true;
         } else if has_class(&classes, "ltx_figure") {
-            emit_figure_caption(child, out);
+            emit_figure(child, out);
             emitted_any = true;
-        } else if has_class(&classes, "ltx_itemize")
-            || has_class(&classes, "ltx_enumerate")
-            || has_class(&classes, "ltx_description")
-            || (tag == "div" && has_class(&classes, "ltx_para"))
-            || tag == "ol"
-            || tag == "ul"
-            || tag == "li"
-        {
+        } else if is_list_el(child) {
+            emit_list(child, 0, out);
+            emitted_any = true;
+        } else if (tag == "div" && has_class(&classes, "ltx_para")) || tag == "li" {
             // Nested structural content inside a paragraph wrapper —
-            // delegate to the section walker so list items, sub-paragraphs,
-            // and the equations buried inside them get the right treatment
+            // delegate to the section walker so sub-paragraphs and the
+            // equations buried inside them get the right treatment
             // (cf. GPT-3 paper, Appendix A.1 enumerate-with-equation).
             walk_section(child, 1, out);
             emitted_any = true;
@@ -508,27 +519,174 @@ fn emit_table(el: ElementRef, out: &mut Vec<Block>) {
     }
 }
 
-fn emit_figure_caption(el: ElementRef, out: &mut Vec<Block>) {
-    // Caption-only emission: surface the figure as a bold "Figure N: …"
-    // line so the reader still has something to navigate to with `]f` /
-    // `[f`.  No `Block::Figure` is emitted — that would require fetching
-    // image assets from ar5iv (or piggy-backing on the Pandoc-path
-    // tarball fetch) and resolving paths.
-    //
-    // Tracked as backlog item B9 (`docs/backlog.md`); HIGH severity
-    // because ar5iv is the primary path for ~95% of papers, so most
-    // production users currently see captions-only.  Run
-    // `cargo run --release -p arxiv-render --example parity_probe -- <id>`
-    // to confirm the gap on a specific paper.
-    if let Some(cap) = el
+/// Emit a figure as a `Block::Figure` carrying its image grid plus the
+/// caption, falling back to a caption-only `StyledLine` when the figure
+/// has no raster image (e.g. a TikZ/tabular-only float).
+///
+/// ar5iv hosts each image at a root-relative `/html/<id>/assets/xN.png`
+/// URL.  We strip the `/html/<id>/` prefix so the emitted
+/// `ImageItem.path` is tarball-relative (`assets/xN.png`) — the same
+/// shape the Pandoc path produces — which lets the shared
+/// `absolutize_image_paths` resolve it against the downloaded asset dir
+/// (and read its pixel dims), and the non-kitty
+/// `degrade_images_to_captions` turn it back into a `[caption]` line.
+///
+/// Subfigures (multiple `<img>` inside one `<figure>`, common in
+/// Attention/GAN) are flattened into a single row for now — they usually
+/// sit side-by-side, which is how the preview tiles a row.  `figure_id` /
+/// `kitty_id` are placeholders; `number_figures` assigns them in document
+/// order after the walk completes.
+fn emit_figure(el: ElementRef, out: &mut Vec<Block>) {
+    let caption = el
         .child_elements()
         .find(|c| c.value().name() == "figcaption")
-    {
-        let text = collect_text(cap);
-        if !text.trim().is_empty() {
-            out.push(Block::StyledLine(vec![InlineSpan::bold(text.trim())]));
+        .map(collect_text)
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+
+    let img_sel = Selector::parse("img.ltx_graphics").unwrap();
+    let items: Vec<ImageItem> = el
+        .select(&img_sel)
+        .filter_map(|img| img.value().attr("src"))
+        .map(|src| ImageItem {
+            path: std::path::PathBuf::from(strip_ar5iv_asset_prefix(src)),
+            kitty_id: 0,
+            dims: None,
+        })
+        .collect();
+
+    if items.is_empty() {
+        // No raster image (TikZ-rendered, or LaTeXML couldn't emit one) —
+        // keep the legacy caption-only line so the reader still has a
+        // navigable "Figure N: …" target for `]f` / `[f`.
+        if let Some(cap) = caption {
+            out.push(Block::StyledLine(vec![InlineSpan::bold(cap)]));
             out.push(Block::Blank);
         }
+        return;
+    }
+
+    out.push(Block::Figure {
+        rows: vec![items],
+        alt: caption.unwrap_or_default(),
+        figure_id: 0,
+        column_gaps_after: Vec::new(),
+        header_rows: Vec::new(),
+    });
+    out.push(Block::Blank);
+}
+
+/// Convert an ar5iv image `src` to a tarball-relative asset path.  ar5iv
+/// serves images at `/html/<id>/assets/x1.png`; downstream resolution
+/// joins the path against the per-paper asset dir, so we drop the
+/// `/html/<id>/` prefix and keep `assets/x1.png`.  Anything not matching
+/// that shape passes through with only a leading slash trimmed.
+fn strip_ar5iv_asset_prefix(src: &str) -> String {
+    if let Some(rest) = src.strip_prefix("/html/")
+        && let Some(slash) = rest.find('/')
+    {
+        return rest[slash + 1..].to_string();
+    }
+    src.trim_start_matches('/').to_string()
+}
+
+/// Walk an ar5iv list container and emit one `Block::ListItem` per
+/// `<li class="ltx_item">`, recursing into nested lists at `depth + 1`.
+///
+/// LaTeXML hands us the rendered marker in each item's
+/// `<span class="ltx_tag ltx_tag_item">` — "•" for itemize, the actual
+/// "1."/"a."/… label for enumerate — so we reuse it verbatim (custom
+/// enumerate labels come through for free) instead of synthesising
+/// counters the way the Pandoc path does.
+fn emit_list(list_el: ElementRef, depth: u8, out: &mut Vec<Block>) {
+    for li in list_el.child_elements() {
+        let classes: Vec<&str> = li.value().classes().collect();
+        if has_class(&classes, "ltx_item") {
+            emit_list_item(li, depth, out);
+        }
+    }
+}
+
+fn emit_list_item(li: ElementRef, depth: u8, out: &mut Vec<Block>) {
+    let marker = li
+        .select(&Selector::parse(".ltx_tag_item").unwrap())
+        .next()
+        .map(collect_text)
+        .map(|t| normalize_marker(&t))
+        .unwrap_or_else(|| "• ".to_string());
+
+    // The item's own text is its first `<p class="ltx_p">` that isn't
+    // buried inside a nested list — inline math / citations / styling are
+    // handled by `inline_spans_from`.
+    let content = first_item_paragraph(li)
+        .map(inline_spans_from)
+        .unwrap_or_default();
+    if !content.is_empty() {
+        out.push(Block::ListItem { depth, marker, content });
+    }
+
+    // LaTeXML nests sub-lists inside the item's para div (as a sibling of
+    // the `<p>`); recurse into each one level deeper.
+    let mut sublists = Vec::new();
+    collect_immediate_sublists(li, &mut sublists);
+    for sub in sublists {
+        emit_list(sub, depth + 1, out);
+    }
+}
+
+/// First `<p class="ltx_p">` reachable from `el` without descending into a
+/// nested list or `<li>` — i.e. the item's *own* text, not a child
+/// item's.  Document order alone isn't enough when a parent item has no
+/// text of its own but a child does.
+fn first_item_paragraph(el: ElementRef) -> Option<ElementRef> {
+    for child in el.child_elements() {
+        let classes: Vec<&str> = child.value().classes().collect();
+        if child.value().name() == "p" && has_class(&classes, "ltx_p") {
+            return Some(child);
+        }
+        if is_list_el(child) || child.value().name() == "li" {
+            continue;
+        }
+        if let Some(found) = first_item_paragraph(child) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Collect the list containers nested directly under `el` — descending
+/// through wrapper elements (e.g. `<div class="ltx_para">`) but stopping
+/// at the first list on each branch (its items are handled by the
+/// recursive `emit_list` call) and never crossing into a nested `<li>`.
+fn collect_immediate_sublists<'a>(el: ElementRef<'a>, acc: &mut Vec<ElementRef<'a>>) {
+    for child in el.child_elements() {
+        if is_list_el(child) {
+            acc.push(child);
+        } else if child.value().name() != "li" {
+            collect_immediate_sublists(child, acc);
+        }
+    }
+}
+
+fn is_list_el(el: ElementRef) -> bool {
+    let classes: Vec<&str> = el.value().classes().collect();
+    let tag = el.value().name();
+    has_class(&classes, "ltx_itemize")
+        || has_class(&classes, "ltx_enumerate")
+        || has_class(&classes, "ltx_description")
+        || tag == "ul"
+        || tag == "ol"
+}
+
+/// Normalise a LaTeXML item tag into a list marker with a single trailing
+/// space, matching the doc-model convention ("• ", "1. ").  Empty tags
+/// (LaTeXML occasionally renders none) fall back to a bullet.
+fn normalize_marker(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        "• ".to_string()
+    } else {
+        format!("{t} ")
     }
 }
 
@@ -586,5 +744,178 @@ fn heading_level(classes: &[&str], _section_level: u8) -> u8 {
         4
     } else {
         2
+    }
+}
+
+#[cfg(test)]
+mod figure_tests {
+    use super::{strip_ar5iv_asset_prefix, to_blocks};
+    use doc_model::Block;
+
+    fn doc(body: &str) -> String {
+        format!(r#"<html><body><article class="ltx_document">{body}</article></body></html>"#)
+    }
+
+    fn figures(blocks: &[Block]) -> Vec<&Block> {
+        blocks
+            .iter()
+            .filter(|b| matches!(b, Block::Figure { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn strips_html_id_prefix() {
+        assert_eq!(strip_ar5iv_asset_prefix("/html/1512.03385/assets/x1.png"), "assets/x1.png");
+        assert_eq!(
+            strip_ar5iv_asset_prefix("/html/1706.03762/assets/Figures/ModalNet-21.png"),
+            "assets/Figures/ModalNet-21.png"
+        );
+        // Non-ar5iv shapes only lose a leading slash.
+        assert_eq!(strip_ar5iv_asset_prefix("assets/x1.png"), "assets/x1.png");
+    }
+
+    #[test]
+    fn single_image_figure_emits_block_figure() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure id="S1.F1" class="ltx_figure">
+                   <img src="/html/9/assets/x1.png" class="ltx_graphics" width="461" height="152">
+                   <figcaption>Figure 1: A caption.</figcaption>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let figs = figures(&blocks);
+        assert_eq!(figs.len(), 1);
+        let Block::Figure { rows, alt, figure_id, .. } = figs[0] else { unreachable!() };
+        assert_eq!(*figure_id, 1);
+        assert_eq!(alt, "Figure 1: A caption.");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].len(), 1);
+        assert_eq!(rows[0][0].path.to_str().unwrap(), "assets/x1.png");
+        assert_eq!(rows[0][0].kitty_id, 1);
+    }
+
+    #[test]
+    fn subfigures_flatten_into_one_row_with_sequential_ids() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure id="S1.F1" class="ltx_figure">
+                   <figure class="ltx_figure"><img src="/html/9/assets/a.png" class="ltx_graphics"></figure>
+                   <figure class="ltx_figure"><img src="/html/9/assets/b.png" class="ltx_graphics"></figure>
+                   <figcaption>Figure 1: Two panels.</figcaption>
+                 </figure>
+                 <figure id="S1.F2" class="ltx_figure">
+                   <img src="/html/9/assets/c.png" class="ltx_graphics">
+                   <figcaption>Figure 2: Solo.</figcaption>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let figs = figures(&blocks);
+        assert_eq!(figs.len(), 2);
+        let Block::Figure { rows, figure_id, .. } = figs[0] else { unreachable!() };
+        assert_eq!(*figure_id, 1);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].len(), 2);
+        // kitty_ids are document-global and sequential across figures.
+        assert_eq!(rows[0][0].kitty_id, 1);
+        assert_eq!(rows[0][1].kitty_id, 2);
+        let Block::Figure { rows, figure_id, .. } = figs[1] else { unreachable!() };
+        assert_eq!(*figure_id, 2);
+        assert_eq!(rows[0][0].kitty_id, 3);
+    }
+
+    fn list_items(blocks: &[Block]) -> Vec<(&u8, &str, String)> {
+        blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::ListItem { depth, marker, content } => Some((
+                    depth,
+                    marker.as_str(),
+                    content.iter().map(|s| s.text.as_str()).collect::<String>(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn itemize_emits_bullet_list_items() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <ul class="ltx_itemize">
+                   <li class="ltx_item"><span class="ltx_tag ltx_tag_item">•</span>
+                     <div class="ltx_para"><p class="ltx_p">First point.</p></div></li>
+                   <li class="ltx_item"><span class="ltx_tag ltx_tag_item">•</span>
+                     <div class="ltx_para"><p class="ltx_p">Second point.</p></div></li>
+                 </ul>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let items = list_items(&blocks);
+        assert_eq!(items.len(), 2);
+        assert_eq!((*items[0].0, items[0].1, items[0].2.as_str()), (0, "• ", "First point."));
+        assert_eq!((*items[1].0, items[1].1, items[1].2.as_str()), (0, "• ", "Second point."));
+    }
+
+    #[test]
+    fn enumerate_preserves_latexml_numeric_markers() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <ol class="ltx_enumerate">
+                   <li class="ltx_item"><span class="ltx_tag ltx_tag_item">1.</span>
+                     <div class="ltx_para"><p class="ltx_p">One.</p></div></li>
+                   <li class="ltx_item"><span class="ltx_tag ltx_tag_item">2.</span>
+                     <div class="ltx_para"><p class="ltx_p">Two.</p></div></li>
+                 </ol>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let items = list_items(&blocks);
+        assert_eq!(items.iter().map(|i| i.1).collect::<Vec<_>>(), vec!["1. ", "2. "]);
+    }
+
+    #[test]
+    fn nested_list_recurses_at_increasing_depth() {
+        // Mirrors the LaTeXML shape: the sub-list is a sibling of the
+        // parent item's `<p>`, inside the same `ltx_para` div.
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <ol class="ltx_enumerate">
+                   <li class="ltx_item"><span class="ltx_tag ltx_tag_item">1.</span>
+                     <div class="ltx_para">
+                       <p class="ltx_p">Parent.</p>
+                       <ol class="ltx_enumerate">
+                         <li class="ltx_item"><span class="ltx_tag ltx_tag_item">(a)</span>
+                           <div class="ltx_para"><p class="ltx_p">Child.</p></div></li>
+                       </ol>
+                     </div></li>
+                 </ol>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let items = list_items(&blocks);
+        assert_eq!(items.len(), 2);
+        assert_eq!((*items[0].0, items[0].1, items[0].2.as_str()), (0, "1. ", "Parent."));
+        assert_eq!((*items[1].0, items[1].1, items[1].2.as_str()), (1, "(a) ", "Child."));
+    }
+
+    #[test]
+    fn imageless_figure_falls_back_to_caption_line() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure id="S1.F1" class="ltx_figure">
+                   <figcaption>Figure 1: TikZ-only float.</figcaption>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        assert!(figures(&blocks).is_empty(), "no raster image → no Block::Figure");
+        assert!(
+            blocks.iter().any(|b| matches!(b, Block::StyledLine(spans)
+                if spans.iter().any(|s| s.text.contains("TikZ-only float")))),
+            "caption should survive as a StyledLine"
+        );
     }
 }

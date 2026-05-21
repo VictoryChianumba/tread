@@ -31,11 +31,60 @@ use super::spec::utf8_char_width;
 /// - `\cmidrule[W](T){N-M}` → ``. Pandoc drops the command name but keeps the
 ///   brace content as plain text (e.g. "2-3"), which leaks into the next cell.
 pub(super) fn preprocess_latex_source(src: &str) -> String {
-    let after_resizebox = strip_resizebox(src);
+    let after_newcoltype = strip_newcolumntype(src);
+    let after_resizebox = strip_resizebox(&after_newcoltype);
     let after_adjustbox = strip_adjustbox(&after_resizebox);
     let after_scalebox = strip_scalebox(&after_adjustbox);
     let after_multirow = strip_multirow(&after_scalebox);
     strip_cmidrule(&after_multirow)
+}
+
+/// Drop `\newcolumntype{X}[N]{BODY}` (and the non-parameterised
+/// `\newcolumntype{X}{BODY}`) definitions entirely.  Pandoc's LaTeX
+/// reader chokes on the `[N]{...#1...}` parameter form — it reports
+/// `unexpected #1` and produces no output — so these preamble macros
+/// abort the whole parse.  We drop the declaration; the custom column
+/// letter then survives as an unknown alignment char in the tabular
+/// colspec, which Pandoc tolerates (it ignores letters it can't map).
+fn strip_newcolumntype(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let cmd = b"\\newcolumntype";
+    let mut out = String::with_capacity(src.len());
+    let mut copy_from = 0usize;
+    let mut i = 0;
+    while i + cmd.len() <= bytes.len() {
+        if &bytes[i..i + cmd.len()] == cmd {
+            let after = i + cmd.len();
+            let bnd_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
+            if bnd_ok
+                && let Some(end) = parse_newcolumntype_args(bytes, after) {
+                    out.push_str(&src[copy_from..i]);
+                    i = end;
+                    copy_from = end;
+                    continue;
+                }
+        }
+        i += 1;
+    }
+    out.push_str(&src[copy_from..]);
+    out
+}
+
+/// Parse `\newcolumntype` arguments: required `{X}`, optional `[N]`,
+/// required `{BODY}`.  Returns the byte position just past the final `}`.
+fn parse_newcolumntype_args(bytes: &[u8], mut pos: usize) -> Option<usize> {
+    pos = skip_ascii_ws(bytes, pos);
+    let close1 = match_brace(bytes, pos)?;
+    pos = skip_ascii_ws(bytes, close1 + 1);
+    if pos < bytes.len() && bytes[pos] == b'[' {
+        pos = match_delim(bytes, pos, b'[', b']')? + 1;
+        pos = skip_ascii_ws(bytes, pos);
+    }
+    if pos >= bytes.len() || bytes[pos] != b'{' {
+        return None;
+    }
+    let close2 = match_brace(bytes, pos)?;
+    Some(close2 + 1)
 }
 
 fn strip_resizebox(src: &str) -> String {
@@ -284,5 +333,36 @@ pub(super) fn match_brace(bytes: &[u8], open: usize) -> Option<usize> {
         i += utf8_char_width(bytes[i]);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_newcolumntype;
+
+    #[test]
+    fn drops_parameterised_newcolumntype() {
+        // The `[1]{...#1...}` form is what makes Pandoc emit `unexpected #1`.
+        let src = "before\n\\newcolumntype{x}[1]{>{\\centering}p{#1pt}}\nafter";
+        assert_eq!(strip_newcolumntype(src), "before\n\nafter");
+    }
+
+    #[test]
+    fn drops_plain_newcolumntype() {
+        let src = "a\\newcolumntype{C}{>{\\centering\\arraybackslash}X}b";
+        assert_eq!(strip_newcolumntype(src), "ab");
+    }
+
+    #[test]
+    fn leaves_unrelated_text_untouched() {
+        let src = "\\begin{tabular}{x x x}\\end{tabular}";
+        assert_eq!(strip_newcolumntype(src), src);
+    }
+
+    #[test]
+    fn drops_multiple_definitions() {
+        let src = "\\newcolumntype{L}[1]{>{\\raggedright}m{#1}}\
+                   \\newcolumntype{R}[1]{>{\\raggedleft}m{#1}}body";
+        assert_eq!(strip_newcolumntype(src), "body");
+    }
 }
 

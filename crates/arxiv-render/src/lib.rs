@@ -454,10 +454,10 @@ mod golden_tests {
         assert_visual_line_count(ID, blocks, EXPECTED_VISUAL_LINES);
     }
 
-    // ── Known gap: Diffusion Geometry (2602.06006) ─────────────────
-    // Source uses `\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}`
-    // which Pandoc errors on during parse — so this paper has no
-    // Pandoc-path golden today.  An ar5iv-path golden (separate
-    // pipeline using `ar5iv_parse::to_blocks`) would cover it; not
-    // yet wired up.  See test-papers.txt for the source link.
+    // Diffusion Geometry (2602.06006) used to fail the Pandoc parse on
+    // `\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}`; the
+    // `strip_newcolumntype` preprocess pass now drops those preamble
+    // definitions, so the Pandoc path parses it (~2138 blocks).  A
+    // Pandoc-path golden for it could be pinned here following the
+    // existing helpers; not yet wired up.
 }

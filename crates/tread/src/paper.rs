@@ -241,18 +241,32 @@ fn fetch_paper_inner(
     let (mut blocks, bibitems, asset_dir) = match ar5iv_result {
       Ok(html) => {
         let blocks = bench::time("ar5iv_parse", || ar5iv_parse::to_blocks(&html));
-        if blocks.is_empty() {
+        if ar5iv_is_stub(&blocks) {
           // ar5iv served us something but the parser couldn't make
-          // anything of it — fall back so the user still gets a paper.
+          // anything of it — either a literally empty body or a stub
+          // "Untitled Document" page for a paper ar5iv never processed
+          // (e.g. 1412.6980, which yields one title line + a blank).
+          // Fall back so the user still gets a paper.
           fallback_tarball_parse(id, force_refresh)?
         } else {
           let bibitems = bench::time("extract_bibitems_ar5iv", || {
             ar5iv_parse::extract_bibitems(&blocks)
           });
-          // ar5iv hosts figure assets externally; the prototype emits
-          // captions only.  Use an empty asset_dir — downstream image
-          // resolution is a no-op when there are no Figure blocks.
-          (blocks, bibitems, std::path::PathBuf::new())
+          // ar5iv hosts figure assets externally (the parser emits
+          // tarball-relative paths like `assets/x1.png`).  Download them
+          // into a per-id dir so the shared `absolutize_image_paths` /
+          // image pipeline resolves them exactly like the tarball path.
+          // Only on graphics-capable terminals — otherwise figures
+          // degrade to captions and fetching the bytes is wasted work.
+          let asset_dir = if kitty_supported {
+            let rels = figure_asset_paths(&blocks);
+            bench::time("fetch_ar5iv_assets", || {
+              fetch::fetch_ar5iv_assets(id, &rels, force_refresh)
+            })
+          } else {
+            std::path::PathBuf::new()
+          };
+          (blocks, bibitems, asset_dir)
         }
       }
       Err(_) => fallback_tarball_parse(id, force_refresh)?,
@@ -281,6 +295,42 @@ fn fetch_paper_inner(
       asset_dir,
     })
   })
+}
+
+/// Whether an ar5iv parse produced too little to be a real paper, in
+/// which case the caller should fall back to the tarball + Pandoc path.
+///
+/// ar5iv doesn't fail loudly for papers it never processed: it serves a
+/// tiny "Untitled Document" stub whose body parses to a handful of
+/// blocks (1412.6980 yields exactly one title `StyledLine` + a `Blank`).
+/// The old `blocks.is_empty()` guard missed this — the stub is non-empty
+/// — so the user got a near-blank reader instead of the Pandoc render.
+/// We count content-bearing blocks (anything that isn't structural
+/// whitespace) and treat a near-empty result as a stub.  Real papers,
+/// even one-page notes, clear this threshold by a wide margin.
+fn ar5iv_is_stub(blocks: &[Block]) -> bool {
+  let content = blocks
+    .iter()
+    .filter(|b| !matches!(b, Block::Blank | Block::Anchor(_) | Block::Rule))
+    .count();
+  content < 3
+}
+
+/// Collect the (tarball-relative) image paths every `Block::Figure`
+/// references, in document order.  Called before `absolutize_image_paths`
+/// runs, so the paths are still relative — the exact form
+/// `fetch_ar5iv_assets` re-attaches the ar5iv host prefix to.
+fn figure_asset_paths(blocks: &[Block]) -> Vec<std::path::PathBuf> {
+  blocks
+    .iter()
+    .filter_map(|b| match b {
+      Block::Figure { rows, .. } => Some(rows),
+      _ => None,
+    })
+    .flatten()
+    .flatten()
+    .map(|item| item.path.clone())
+    .collect()
 }
 
 /// Slow-path parser kept around for papers ar5iv hasn't processed
@@ -450,6 +500,38 @@ fn format_from_content_type(ct: &str) -> Option<Format> {
     "text/plain" => Format::PlainText,
     _ => return None,
   })
+}
+
+#[cfg(test)]
+mod ar5iv_figure_integration {
+  use super::*;
+
+  /// Network-gated end-to-end check: the ar5iv primary path for a
+  /// figure-heavy paper (ResNet) should emit `Block::Figure`s whose
+  /// images were downloaded, absolutised to existing files, and had
+  /// their pixel dims read.  Proves steps 1–3 connect.  `#[ignore]`d so
+  /// default `cargo test` stays offline; run with `--ignored`.
+  #[test]
+  #[ignore]
+  fn resnet_figures_render_via_ar5iv() {
+    let paper = fetch_paper("1512.03385", true).expect("fetch ResNet");
+    let figs: Vec<_> = paper
+      .blocks
+      .iter()
+      .filter_map(|b| match b {
+        Block::Figure { rows, .. } => Some(rows),
+        _ => None,
+      })
+      .collect();
+    assert!(!figs.is_empty(), "ar5iv path should emit Block::Figure");
+    for rows in figs {
+      for item in rows.iter().flatten() {
+        assert!(item.path.is_absolute(), "path absolutised: {}", item.path.display());
+        assert!(item.path.exists(), "asset on disk: {}", item.path.display());
+        assert!(item.dims.is_some(), "dims read for {}", item.path.display());
+      }
+    }
+  }
 }
 
 #[cfg(test)]

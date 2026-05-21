@@ -2,9 +2,9 @@
 //!
 //! Runs both the ar5iv (primary) and Pandoc (fallback) parsers against
 //! one paper and prints a per-`Block`-kind count table.  Useful for
-//! tracking the ar5iv feature parity gaps documented in
-//! `docs/backlog.md` (B9 / B10) and for spotting new divergences when
-//! either parser changes.
+//! spotting new divergences when either parser changes — the historical
+//! ar5iv figure/list gaps (B9 / B10 in `docs/backlog.md`) are now closed,
+//! so Figure and ListItem counts should track the Pandoc reference.
 //!
 //! Invocation:
 //!
@@ -66,18 +66,19 @@ fn main() {
     let ar5iv_blocks = ar5iv_parse::to_blocks(&html);
 
     eprintln!("fetching tarball + running pandoc for {id} ...");
-    let fetched = match fetch::fetch_source(&id) {
-        Ok(f) => f,
+    let pandoc_blocks = match fetch::fetch_source(&id) {
+        Ok(f) => match pandoc_parse::try_pandoc(&f.tex) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("pandoc parse failed: {e}");
+                eprintln!("(continuing with ar5iv-only counts)");
+                Vec::new()
+            }
+        },
         Err(e) => {
             eprintln!("tarball fetch failed: {e}");
-            std::process::exit(1);
-        }
-    };
-    let pandoc_blocks = match pandoc_parse::try_pandoc(&fetched.tex) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("pandoc parse failed: {e}");
-            std::process::exit(1);
+            eprintln!("(continuing with ar5iv-only counts)");
+            Vec::new()
         }
     };
 

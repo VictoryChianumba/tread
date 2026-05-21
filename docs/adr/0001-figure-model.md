@@ -122,6 +122,16 @@ including the Attention and Ava-256 stress cases.
   at all — figures degrade to a plain `Block::Line("[Figure: <cap>]")`
   text caption when Pandoc is missing.~~ Moot — the hand-rolled
   parser was removed entirely in commit `0a60ea7`.  The parser
-  layout is now ar5iv (primary) + Pandoc (fallback); both emit
-  `Block::Figure`.  ADR-0007 documents the Pandoc-side split that
-  consolidated figure extraction behind `pandoc_parse::figure`.
+  layout is now ar5iv (primary) + Pandoc (fallback).  ADR-0007
+  documents the Pandoc-side split that consolidated figure extraction
+  behind `pandoc_parse::figure`.
+- ~~ar5iv (the primary path) emitted captions only, never
+  `Block::Figure` — so the ~95% of papers on that path showed a bold
+  caption line with no image (backlog B9).~~ Done 2026-05 (this
+  session): `ar5iv_parse::emit_figure` emits `Block::Figure` with
+  tarball-relative paths (subfigures flattened to one row); a new
+  `fetch::fetch_ar5iv_assets` downloads the referenced PNGs into
+  `~/.cache/tread/ar5iv-assets/<id>/` on graphics terminals, and
+  `paper.rs` wires that dir as `asset_dir` so the shared
+  `absolutize_image_paths` resolves+dims them.  Both parser paths now
+  genuinely emit figures.
