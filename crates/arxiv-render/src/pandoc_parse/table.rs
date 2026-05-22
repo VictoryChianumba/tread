@@ -6,11 +6,27 @@
 //! source), and emits one `Block::Matrix` per header zone plus one
 //! per data zone, separated by `Block::Rule` blocks.
 
-use doc_model::Block;
+use doc_model::{Alignment, Block};
 use serde_json::Value;
 
 use super::inline::walk_inlines_text;
 use super::{SectionCounters, TableSpec};
+
+/// Per-column alignment from Pandoc's `colspec` (`c[2]`): each entry is
+/// `[alignment, colwidth]` where alignment is `{"t":"AlignLeft|Right|
+/// Center|Default"}`.  `AlignDefault` and anything unrecognised → Left.
+fn extract_alignments(colspec: &Value) -> Vec<Alignment> {
+    let Some(cols) = colspec.as_array() else {
+        return Vec::new();
+    };
+    cols.iter()
+        .map(|cs| match cs.get(0).and_then(|a| a.get("t")).and_then(|t| t.as_str()) {
+            Some("AlignRight") => Alignment::Right,
+            Some("AlignCenter") => Alignment::Center,
+            _ => Alignment::Left,
+        })
+        .collect()
+}
 
 pub(super) fn parse_table(
     c: &Value,
@@ -56,6 +72,7 @@ pub(super) fn parse_table(
     let table_cols = c[2].as_array().map(|a| a.len()).unwrap_or(0);
     let spec = take_matching_spec(specs, table_cols);
     let vertical_rules = spec.vertical_rules;
+    let alignments = extract_alignments(&c[2]);
 
     let head_size = head_rows.len();
     let total_rows = head_size + data_rows.len();
@@ -75,6 +92,7 @@ pub(super) fn parse_table(
         out.push(Block::Matrix {
             rows: head_rows,
             vertical_rules: vertical_rules.clone(),
+            alignments: alignments.clone(),
         });
         out.push(Block::Rule);
     }
@@ -103,6 +121,7 @@ pub(super) fn parse_table(
             out.push(Block::Matrix {
                 rows: data_rows,
                 vertical_rules,
+                alignments,
             });
             out.push(Block::Rule);
         } else {
@@ -113,6 +132,7 @@ pub(super) fn parse_table(
                     out.push(Block::Matrix {
                         rows: chunk,
                         vertical_rules: vertical_rules.clone(),
+                        alignments: alignments.clone(),
                     });
                     out.push(Block::Rule);
                 }
@@ -123,6 +143,7 @@ pub(super) fn parse_table(
                 out.push(Block::Matrix {
                     rows: chunk,
                     vertical_rules,
+                    alignments,
                 });
                 out.push(Block::Rule);
             }

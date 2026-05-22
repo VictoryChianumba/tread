@@ -16,13 +16,19 @@ use crate::{
 
 /// Expand a block list into the flat visual line table.
 ///
-/// Called once at document load and again on terminal resize.  Both
-/// `terminal_width` and `terminal_height` are needed so figures can be
-/// scaled to fit (the height budget caps image rows so a single figure
-/// + caption never overflows the visible viewport).
+/// Called once at document load and again on terminal resize.
+///
+/// `terminal_width` is the full content width; tables, figures, display
+/// math and rules use it so they can "break out" to the whole area.
+/// `prose_width` (≤ `terminal_width`) is the narrower reading measure
+/// that body prose, lists and quotes wrap to — the caller centres that
+/// column at render time.  Pass `prose_width == terminal_width` to
+/// disable the measure (everything full width).  `terminal_height` caps
+/// figure image rows so one figure + caption never overflows the view.
 pub fn build_visual_lines(
     blocks: &[Block],
     terminal_width: usize,
+    prose_width: usize,
     terminal_height: usize,
 ) -> Vec<VisualLine> {
     let figure_budget = figure_row_budget(terminal_height);
@@ -66,13 +72,34 @@ pub fn build_visual_lines(
                 });
             }
 
-            Block::Header { level, text } => {
+            Block::Header { level, text, number } => {
+                // Breathing room above every header so a new section
+                // reads as a break while scrolling.  Skip when the
+                // previous emitted line is already blank (avoid doubling
+                // on the parser's own spacing) or when the header is the
+                // very first line.
+                let needs_gap = out
+                    .last()
+                    .is_some_and(|vl| !matches!(vl.kind, VisualLineKind::Blank));
+                if needs_gap {
+                    out.push(VisualLine {
+                        block_idx,
+                        line_in_block: 0,
+                        text: String::new(),
+                        kind: VisualLineKind::Blank,
+                        block_byte_start: 0,
+                        block_byte_end: 0,
+                    });
+                }
                 let len = text.len();
                 out.push(VisualLine {
                     block_idx,
                     line_in_block: 0,
                     text: text.clone(),
-                    kind: VisualLineKind::Header(*level),
+                    kind: VisualLineKind::Header {
+                        level: *level,
+                        number: number.clone(),
+                    },
                     block_byte_start: 0,
                     block_byte_end: len,
                 });
@@ -112,7 +139,7 @@ pub fn build_visual_lines(
                 // "Block text" for highlight purposes is the concatenation of the
                 // wrapped lines joined by single spaces — this is the canonical
                 // post-normalization form (wrap_spans collapses whitespace).
-                let wrapped = wrap_spans(spans, terminal_width);
+                let wrapped = wrap_spans(spans, prose_width);
                 let mut byte_cursor = 0usize;
                 let n = wrapped.len();
                 for (li, (line_spans, plain)) in wrapped.into_iter().enumerate() {
@@ -138,7 +165,7 @@ pub fn build_visual_lines(
                 marker,
                 content,
             } => {
-                let wrapped = wrap_list_item(*depth, marker, content, terminal_width);
+                let wrapped = wrap_list_item(*depth, marker, content, prose_width);
                 let mut byte_cursor = 0usize;
                 let n = wrapped.len();
                 for (li, (_line_spans, plain, is_continuation)) in wrapped.into_iter().enumerate() {
@@ -187,7 +214,7 @@ pub fn build_visual_lines(
             }
 
             Block::Quote(spans) => {
-                let quote_width = terminal_width.saturating_sub(4).max(1);
+                let quote_width = prose_width.saturating_sub(4).max(1);
                 let wrapped = wrap_spans(spans, quote_width);
                 let mut byte_cursor = 0usize;
                 let n = wrapped.len();
@@ -240,6 +267,51 @@ fn center_line(line: &str, block_width: usize, terminal_width: usize) -> String 
 mod tests {
     use super::*;
 
+    /// Headers get a leading blank for breathing room (unless one is
+    /// already there) and carry their level + number into the visual
+    /// line; the `text` stays the clean title.
+    #[test]
+    fn header_emits_leading_gap_and_carries_number() {
+        let blocks = vec![
+            Block::Line("body".into()),
+            Block::Header {
+                level: 1,
+                text: "Background".into(),
+                number: Some("2".into()),
+            },
+        ];
+        let out = build_visual_lines(&blocks, 40, 40, 24);
+        // body, inserted blank, header
+        assert_eq!(out.len(), 3);
+        assert!(matches!(out[1].kind, VisualLineKind::Blank));
+        assert_eq!(out[2].text, "Background");
+        assert!(matches!(
+            out[2].kind,
+            VisualLineKind::Header { level: 1, number: Some(ref n) } if n == "2"
+        ));
+    }
+
+    /// No doubled gap when the previous line is already blank, and an
+    /// unnumbered header carries `number: None`.
+    #[test]
+    fn header_dedupes_existing_blank_and_allows_no_number() {
+        let blocks = vec![
+            Block::Blank,
+            Block::Header {
+                level: 1,
+                text: "References".into(),
+                number: None,
+            },
+        ];
+        let out = build_visual_lines(&blocks, 40, 40, 24);
+        // blank, header — no extra blank inserted.
+        assert_eq!(out.len(), 2);
+        assert!(matches!(
+            out[1].kind,
+            VisualLineKind::Header { number: None, .. }
+        ));
+    }
+
     /// DisplayMath blocks emit one VL per line; every line is centered;
     /// the last line carries the (right-aligned) equation tag when
     /// `num` is Some.  Pins both the centering and the tag-placement.
@@ -249,7 +321,7 @@ mod tests {
             lines: vec!["a + b".into(), "= c".into()],
             num: Some(42),
         };
-        let out = build_visual_lines(std::slice::from_ref(&block), 40, 24);
+        let out = build_visual_lines(std::slice::from_ref(&block), 40, 40, 24);
         assert_eq!(out.len(), 2, "two math lines → two VLs");
 
         // First line: centered, no tag.

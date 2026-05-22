@@ -19,7 +19,7 @@ Given an arXiv ID or URL, the reader:
 - **Cross-reference resolution** — `\ref{eq:elbo}` resolves to the equation number; `\cite{vaswani}` to `[1]`.
 - **Bibliography** — full references section with formatted entries.
 - **Math rendering** — Greek letters, calculus, relations, set theory, arrows, fractions, square roots, super/subscripts. Compact one-line Unicode rendering with `dₘₒdₑₗ⁻⁰·⁵`-style super/subscripts; `\frac{a}{b}` → `a/b`, `\sqrt{x}` → `√x`. Disambiguation brackets `⁽…⁾` wrap superscripts containing fraction slashes so `pos/10000⁽²ⁱ⁄ᵈₘₒdₑₗ⁾` reads cleanly next to outer division. Decorative `\\` line-breaks in single-equation envs (`equation`, `split`) collapse to a space; multi-equation envs (`align`, `gather`, `eqnarray`) preserve the row separators.
-- **Tables** — booktabs-style horizontal rules by default. Vertical rules from `tabular` column specs (`c|cccccc|ccc`). Body-internal `\hline` / `\specialrule` separators. Multi-row headers with proper spanning. Centered horizontally on screen.
+- **Tables** — booktabs-style horizontal rules by default. Vertical rules from `tabular` column specs (`c|cccccc|ccc`). Per-column text alignment (`l`/`c`/`r`) is honoured — numeric columns right-align instead of everything flushing left. Body-internal `\hline` / `\specialrule` separators. Multi-row headers with proper spanning. Centered horizontally on screen.
 - **Captions above tables** (academic convention); below figures.
 - **Inline pixel figures** — on terminals that speak the Kitty graphics protocol (Kitty, WezTerm, Ghostty, iTerm2 3.5+), figures render as actual images. On the ar5iv primary path, the LaTeXML-rendered PNGs are downloaded directly from `ar5iv.labs.arxiv.org` and cached under `~/.cache/tread/ar5iv-assets/`; on the Pandoc fallback path, PDF figures are converted via `pdftoppm`. Subfigures render side-by-side, and on the Pandoc path stacked panels are detected from the LaTeX source structure (minipages, `\\` separators, `width=\textwidth`). Aspect-ratio-aware sizing scales each panel to fit the terminal. Captions render beneath, centered. On non-graphics terminals, figures degrade to `[Figure N: caption]` text.
 - **Algorithms / pseudocode** — `algorithmic` environments rendered as plain-text indented blocks.
@@ -32,19 +32,24 @@ Given an arXiv ID or URL, the reader:
 
 - **Per-paper persistence** — reading position, named marks, and highlights all save automatically to `~/.config/trench/` keyed by arXiv ID. Re-launch and you're back where you were.
 - **Section-jump navigation** — `[` / `]` to walk section headers; `:goto 3.2` or `:goto Introduction` to jump by number or name.
-- **Toggleable TOC panel** — `\` opens/closes a side pane listing every section header; current section is highlighted as you scroll.
+- **Toggleable TOC panel** — `\` opens/closes a side pane listing every section header; the current section is marked with a `▸` and its ancestor sections (the breadcrumb to where you are) are brightened, so you keep your place even deep in a subsection.
+- **Full-screen contents view** — `:contents` opens a browsable overview of the whole section tree; `j`/`k` move a selection, `Enter` jumps to that section (and `Ctrl+O` rewinds), `Esc` closes. Distinct from the passive `\` sidebar.
 - **Back-navigation stack** — every jump (search, section, mark, sentence) pushes onto a history; `Ctrl+O` rewinds.
 - **Header bar** — title and authors pinned above the content area when paper metadata is available.
 - **Help overlay** — `?` for a compact keybinding reference.
 - **Visual mode** — `v` (char) and `V` (line) selection; `y` yanks to clipboard via OSC 52, `H` commits as a persistent highlight.
 - **Text objects** — vim-style `yi<obj>` / `ya<obj>` for word, quote, paren/bracket/brace pair, paragraph, and sentence. `yy` yanks the current line.
 - **Cross-reference jumping** — section/figure/table refs and citations render with the link colour and an underline. `Enter` on one jumps to the target (one line above so the target is fully visible); `Ctrl+O` rewinds. `K` (or `Shift+Enter` on supporting terminals) shows a citation's bib entry in a popup without leaving your reading position. Phrases like "Table 3" and "Section 6.2" are styled as a whole, not just the number.
+- **Contextual preview pane** — with the side pane open (`i`), it follows the cursor: land on a citation and it shows that reference; land on a `\ref{fig:N}` and it shows that figure. When the cursor isn't on a cross-reference it falls back to the manually-browsed figure (`]f` / `[f` still step through figures).
 - **Search** — `/` forward, `*` to search the word under the cursor, `n` / `N` to step.
 - **Bookmarks (vim-style marks)** — `m{a}` to set, `'{a}` / `` `{a} `` to jump. Letter-keyed slots `a..z`. Marked lines tinted amber.
 - **Persistent character-range highlights** — `H` in visual mode commits a selection as a highlight; `X` removes the one under the cursor. Stored at block-byte granularity so they survive terminal resize.
 - **Command mode** — `:` opens an Ex-style command bar (see [hotkeys.md](hotkeys.md) for the command list). Includes `:reload` to re-fetch + re-parse the current paper while preserving cursor / scroll / bookmarks / highlights.
 - **Voice / TTS playback** — see [Voice / TTS](#voice--tts) below.
 - **Themes** — 16 built-in themes (Dark, Light, AMOLED, Solarized, Gruvbox, Nord, Tokyo Night, Catppuccin Mocha, Powder family). `:set theme=<id>` switches at runtime; `:set theme=trench` syncs with the trench feed UI's theme.
+- **Reading measure** — body prose wraps to a comfortable column (default 72 cells) centred on wide terminals, while tables, figures and display math break out to the full width so they're never clipped. `:set width=<n>` adjusts the prose column; `:set width=0` (or `off`) disables the cap. Persists across sessions.
+- **Section headings** — every heading gets a blank line above it for breathing room while scrolling. Numbered sections show their number (`2  Background`, `2.1  …`); numbering is consistent across both parser paths and feeds the TOC and `:goto 3.2`. The paper title, Abstract, and References stay unnumbered.
+- **Inline code & block quotes** — inline `code` spans get a subtle background "pill" so they stand out from prose instead of blending in. Block quotes lead with a coloured left rule bar (`▌`) and dimmed italic text rather than a bare indent.
 
 ## Voice / TTS
 

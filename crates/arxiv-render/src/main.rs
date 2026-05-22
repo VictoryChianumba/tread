@@ -58,7 +58,7 @@ fn main() {
     // collapse Image/ImageRow to caption lines for cleaner output.
     arxiv_render::degrade_images_to_captions(&mut blocks);
     let _ = &fetched.asset_dir; // kept on disk; not consumed here.
-    let visual_lines = build_visual_lines(&blocks, 80, 50);
+    let visual_lines = build_visual_lines(&blocks, 80, 80, 50);
 
     for vl in &visual_lines {
         println!("{}", vl.text);

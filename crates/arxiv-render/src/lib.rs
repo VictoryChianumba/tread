@@ -160,7 +160,7 @@ mod golden_tests {
         expected_visual_lines: usize,
     ) {
         degrade_images_to_captions(&mut blocks);
-        let visual_lines = build_visual_lines(&blocks, 80, 50);
+        let visual_lines = build_visual_lines(&blocks, 80, 80, 50);
         assert_eq!(
             visual_lines.len(),
             expected_visual_lines,
@@ -182,7 +182,9 @@ mod golden_tests {
         /// Post-`build_visual_lines` count at the binary's 80×50 layout
         /// after `degrade_images_to_captions` (matches what
         /// `cargo run -p arxiv-render -- 1706.03762` produces on stdout).
-        const EXPECTED_VISUAL_LINES: usize = 675;
+        /// 675 → 678 when headings gained a leading blank line for
+        /// vertical breathing room (+3 headers lacked a preceding blank).
+        const EXPECTED_VISUAL_LINES: usize = 678;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 
@@ -190,7 +192,7 @@ mod golden_tests {
         assert!(
             blocks.iter().any(|b| matches!(
                 b,
-                Block::Header { level: 1, text }
+                Block::Header { level: 1, text, .. }
                     if text == "Attention Is All You Need"
             )),
             "[{ID}] expected H1 title \"Attention Is All You Need\" not found",
@@ -247,8 +249,7 @@ mod golden_tests {
             .iter()
             .filter(|b| matches!(
                 b,
-                Block::Header { level: 1, text }
-                    if text.chars().next().is_some_and(|c| c.is_ascii_digit())
+                Block::Header { level: 1, number: Some(_), .. }
             ))
             .count();
         assert_eq!(
@@ -289,7 +290,7 @@ mod golden_tests {
         assert!(
             blocks.iter().any(|b| matches!(
                 b,
-                Block::Header { level: 1, text }
+                Block::Header { level: 1, text, .. }
                     if text.contains("Language Models")
                        && text.contains("Few-Shot Learners")
             )),
@@ -320,11 +321,7 @@ mod golden_tests {
         let numbered_sections: Vec<&str> = blocks
             .iter()
             .filter_map(|b| match b {
-                Block::Header { level: 1, text }
-                    if text.chars().next().is_some_and(|c| c.is_ascii_digit()) =>
-                {
-                    Some(text.as_str())
-                }
+                Block::Header { level: 1, text, number: Some(_) } => Some(text.as_str()),
                 _ => None,
             })
             .collect();
@@ -398,7 +395,9 @@ mod golden_tests {
     fn gaussian_head_parse_and_layout_golden() {
         const ID: &str = "2605.04035";
         const EXPECTED_BLOCKS: usize = 789;
-        const EXPECTED_VISUAL_LINES: usize = 1496;
+        // 1496 → 1500 when headings gained a leading blank line for
+        // vertical breathing room (+4 headers lacked a preceding blank).
+        const EXPECTED_VISUAL_LINES: usize = 1500;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 
@@ -406,7 +405,7 @@ mod golden_tests {
         assert!(
             blocks.iter().any(|b| matches!(
                 b,
-                Block::Header { level: 1, text }
+                Block::Header { level: 1, text, .. }
                     if text.contains("Gaussian Head Reconstruction")
             )),
             "[{ID}] expected H1 title containing 'Gaussian Head Reconstruction'",
@@ -442,8 +441,7 @@ mod golden_tests {
             .iter()
             .filter(|b| matches!(
                 b,
-                Block::Header { level: 1, text }
-                    if text.chars().next().is_some_and(|c| c.is_ascii_digit())
+                Block::Header { level: 1, number: Some(_), .. }
             ))
             .count();
         assert!(

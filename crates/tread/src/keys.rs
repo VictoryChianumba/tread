@@ -10,6 +10,23 @@ use crate::state::{FindKind, Mode, Operator, Reader};
 use crate::text_objects;
 use crossterm::event::{KeyCode, KeyModifiers};
 
+/// Key handling while the full-screen contents view is open.  `j`/`k`
+/// move the selection, `g`/`G` jump to ends, `Enter` jumps to the
+/// selected section (and closes), `Esc`/`q` close without moving.
+/// Returns `false` always — the contents view never quits the reader.
+fn handle_contents(reader: &mut Reader, code: KeyCode) -> bool {
+  match code {
+    KeyCode::Char('j') | KeyCode::Down => reader.contents_move(1),
+    KeyCode::Char('k') | KeyCode::Up => reader.contents_move(-1),
+    KeyCode::Char('g') | KeyCode::Home => reader.contents_jump_edge(false),
+    KeyCode::Char('G') | KeyCode::End => reader.contents_jump_edge(true),
+    KeyCode::Enter => reader.contents_jump_selected(),
+    KeyCode::Esc | KeyCode::Char('q') => reader.close_contents(),
+    _ => {}
+  }
+  false
+}
+
 pub(crate) fn take_count(reader: &mut Reader) -> usize {
   if reader.count_buf().is_empty() {
     1
@@ -21,6 +38,12 @@ pub(crate) fn take_count(reader: &mut Reader) -> usize {
 }
 
 pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool {
+  // Full-screen contents view is interactive: consume motion / jump /
+  // close keys before anything else.  Never quits the reader.
+  if reader.contents_visible() {
+    return handle_contents(reader, code);
+  }
+
   // Dismiss help overlay on any key.
   if reader.help_visible {
     reader.help_visible = false;
@@ -459,20 +482,7 @@ pub(crate) fn handle_awaiting_text_object(
 /// `cursor_x`.  Returns `None` for non-styled lines, non-prose blocks,
 /// or when the cursor doesn't sit on a linked span.
 fn link_at_cursor(reader: &Reader) -> Option<doc_model::LinkTarget> {
-  let vl = reader.visual_lines().get(reader.current_line())?;
-  let spans = match &vl.kind {
-    doc_model::VisualLineKind::StyledProse(s) => s,
-    _ => return None,
-  };
-  let mut byte = 0usize;
-  for span in spans {
-    let next = byte + span.text.len();
-    if reader.cursor_x() >= byte && reader.cursor_x() < next {
-      return span.link_target.clone();
-    }
-    byte = next;
-  }
-  None
+  reader.link_under_cursor()
 }
 
 /// Enter dispatch: jump to whatever the cursor is sitting on.  No-op if

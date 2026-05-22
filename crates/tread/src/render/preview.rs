@@ -9,9 +9,9 @@
 
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Margin, Rect},
     style::Style,
-    widgets::{Block, Borders, Clear},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use ui_theme::Theme;
 
@@ -19,8 +19,15 @@ use crate::state::Reader;
 use super::preview_image_area;
 
 pub(super) fn draw_preview_pane(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
+    // Context-first: when the cursor is on a citation, the pane shows that
+    // reference instead of a figure (the figure is the fallback when the
+    // cursor isn't on a cross-reference).
+    if let Some((key, text)) = reader.cursor_citation() {
+        draw_citation_pane(frame, &key, &text, area, t);
+        return;
+    }
     let title = reader
-        .current_figure_position()
+        .preview_figure_position()
         .map(|(idx, total)| format!(" Figure {idx}/{total} "))
         .unwrap_or_else(|| " Figure ".to_string());
     // First: `Clear` writes default-styled spaces into every cell.  This
@@ -52,7 +59,7 @@ pub(super) fn draw_preview_pane(frame: &mut Frame, reader: &Reader, area: Rect, 
     // headers inherit the user's terminal palette instead of forcing the
     // theme's bg, which would clash with whatever's behind the image
     // grid.
-    if let Some(entry) = reader.current_figure_entry() {
+    if let Some(entry) = reader.preview_figure_entry() {
         let image_area = preview_image_area(area);
         let layout = entry.layout(image_area);
         for hrow in &layout.headers {
@@ -92,4 +99,25 @@ pub(super) fn draw_preview_pane(frame: &mut Frame, reader: &Reader, area: Rect, 
             }
         }
     }
+}
+
+/// Render the cursor's citation as a text panel: `[key]` title + the
+/// wrapped bibliography entry.  Same border shape as the figure pane so
+/// the two read as one surface; unlike the figure pane it carries a
+/// background since there's no image to keep transparent.
+fn draw_citation_pane(frame: &mut Frame, key: &str, text: &str, area: Rect, t: &Theme) {
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(format!(" [{key}] "))
+        .borders(Borders::LEFT | Borders::TOP | Borders::BOTTOM)
+        .border_style(Style::default().fg(t.border_active))
+        .style(Style::default().bg(t.bg_popup));
+    let inner = block
+        .inner(area)
+        .inner(Margin { horizontal: 1, vertical: 0 });
+    frame.render_widget(block, area);
+    let para = Paragraph::new(text.to_string())
+        .style(Style::default().fg(t.text).bg(t.bg_popup))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, inner);
 }

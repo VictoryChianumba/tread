@@ -118,6 +118,91 @@ pub(super) fn draw_text_popup(frame: &mut Frame, area: Rect, t: &Theme, popup: &
     frame.render_widget(para, popup_area);
 }
 
+/// Full-screen browsable contents view (`:contents`).  Lists every
+/// section (numbered via `build_sections`, indented by level); a leading
+/// `▸` and accent colour mark the section the reader is currently in,
+/// while a full-width selection bar marks the browse cursor.  Interactive
+/// keys are handled in `keys::handle_contents`.
+pub(super) fn draw_contents(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
+    // A near-full-screen page (small inset so the document peeks at the
+    // edges, signalling it's a transient overlay).
+    let outer = Rect {
+        x: area.x.saturating_add(2),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(4).max(1),
+        height: area.height.saturating_sub(2).max(1),
+    };
+    frame.render_widget(Clear, outer);
+    let block = Block::default()
+        .title(Span::styled(
+            " Contents ",
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Span::styled(
+            " j/k move · Enter jump · Esc close ",
+            Style::default().fg(t.text_dim),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.text_dim))
+        .style(Style::default().bg(t.bg_popup));
+    let inner = block
+        .inner(outer)
+        .inner(Margin {
+            horizontal: 1,
+            vertical: 0,
+        });
+    frame.render_widget(block, outer);
+
+    let sections = reader.sections();
+    let total = sections.len();
+    let rows = inner.height as usize;
+    let inner_w = inner.width as usize;
+    let selected = reader.contents_selected();
+    let current = reader.current_section_idx();
+
+    // Keep the selection vertically centred, clamped to the list bounds.
+    let max_scroll = total.saturating_sub(rows);
+    let scroll = selected.saturating_sub(rows / 2).min(max_scroll);
+
+    let lines: Vec<Line> = (0..rows)
+        .map(|row| {
+            let idx = scroll + row;
+            if idx >= total {
+                return Line::raw("");
+            }
+            let (_, level, title) = &sections[idx];
+            let indent = match level {
+                1 => 0usize,
+                2 => 2usize,
+                _ => 4usize,
+            };
+            let is_selected = idx == selected;
+            let is_current = current == Some(idx);
+            let marker = if is_current { "▸ " } else { "  " };
+            let avail = inner_w.saturating_sub(indent + 2);
+            let mut label = format!("{marker}{}{}", " ".repeat(indent), toc_trunc(title, avail));
+            // Pad to full width so the selection bar spans the row.
+            let pad = inner_w.saturating_sub(label.chars().count());
+            label.push_str(&" ".repeat(pad));
+            let style = if is_selected {
+                Style::default()
+                    .bg(t.bg_selection)
+                    .fg(t.text)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_current {
+                Style::default().fg(t.accent)
+            } else {
+                Style::default().fg(t.text_dim)
+            };
+            Line::styled(label, style)
+        })
+        .collect();
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(t.bg_popup)),
+        inner,
+    );
+}
+
 pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
     const W: u16 = 94;
     const H: u16 = 32;
@@ -231,7 +316,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
             &[
                 ("i", "toggle figure preview"),
                 ("]f / [f", "next / previous figure"),
-                ("\\", "toggle TOC"),
+                ("\\  :contents", "TOC sidebar · contents view"),
                 ("v / V", "enter char / line visual mode"),
                 ("y", "yank selection"),
                 ("yy", "yank current line"),
@@ -256,7 +341,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
                 (":goto <N|text>", "jump to section"),
                 (":abstract", "jump to abstract"),
                 (":references", "jump to references"),
-                (":set theme=<id>", "change theme"),
+                (":set theme/width", "theme · reading column width"),
                 (":marks  :highlights", "inspect marks / highlights"),
                 (":about  :url  :cite", "metadata / copy URL / copy BibTeX"),
                 (":open  :reload  :q", "open / reload / quit"),

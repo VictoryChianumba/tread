@@ -192,7 +192,11 @@ impl Walker {
                 collect_text(el, &mut buf, /* in_pre */ false);
                 let text = buf.trim().to_string();
                 if !text.is_empty() {
-                    self.blocks.push(Block::Header { level, text });
+                    self.blocks.push(Block::Header {
+                        level,
+                        text,
+                        number: None,
+                    });
                     self.blocks.push(Block::Blank);
                 }
             }
@@ -363,6 +367,7 @@ impl Walker {
                         self.blocks.push(Block::Matrix {
                             rows: state.rows,
                             vertical_rules: Vec::new(), // HTML has no per-column rules
+                            alignments: Vec::new(),     // not tracked; left-align
                         });
                         self.blocks.push(Block::Blank);
                     }

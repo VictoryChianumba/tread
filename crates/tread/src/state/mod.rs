@@ -28,18 +28,19 @@ pub use figures::{
 
 pub const TOC_WIDTH: usize = 28;
 const PREVIEW_TEXT_PERCENT: usize = 60;
-const READER_HORIZONTAL_MARGIN: usize = 4;
-const READER_HORIZONTAL_MARGIN_MIN_WIDTH: usize = 60;
-const READER_VERTICAL_MARGIN: usize = 1;
-const READER_VERTICAL_MARGIN_MIN_HEIGHT: usize = 6;
+const READER_VERTICAL_MARGIN: usize = 2;
+const READER_VERTICAL_MARGIN_MIN_HEIGHT: usize = 8;
 
-pub(crate) fn reader_horizontal_margin(width: usize) -> usize {
-    if width >= READER_HORIZONTAL_MARGIN_MIN_WIDTH {
-        READER_HORIZONTAL_MARGIN.min(width / 2)
-    } else {
-        0
-    }
-}
+/// Default reading measure (max body-text column width, in cells).
+/// Long lines hurt readability — typographic research puts the
+/// comfortable range at 50–75 characters — so on wide terminals body
+/// prose wraps to this width and is centred.  There is no separate
+/// horizontal page margin: the whitespace either side of the prose
+/// column is exactly the centering slack, and tables / figures / math
+/// use the full content width so they're never starved.  0 disables the
+/// cap (prose flows full width); the user adjusts it with `:set width=N`
+/// (persisted in `block_reader.json`).
+pub(crate) const DEFAULT_MAX_MEASURE: usize = 72;
 
 pub(crate) fn reader_vertical_margin(height: usize) -> usize {
     if height >= READER_VERTICAL_MARGIN_MIN_HEIGHT {
@@ -56,8 +57,14 @@ pub(crate) fn reader_vertical_margin(height: usize) -> usize {
 /// the figures weren't there.  Captions stay because they live as
 /// separate prose blocks, so users keep a textual anchor for `]f` /
 /// `[f` navigation in the preview pane.
-fn build_lines_for(blocks: &[Block], cw: usize, height: usize, text_only: bool) -> Vec<VisualLine> {
-    let mut lines = build_visual_lines(blocks, cw, height);
+fn build_lines_for(
+    blocks: &[Block],
+    cw: usize,
+    prose_width: usize,
+    height: usize,
+    text_only: bool,
+) -> Vec<VisualLine> {
+    let mut lines = build_visual_lines(blocks, cw, prose_width, height);
     if text_only {
         lines.retain(|vl| {
             !matches!(
@@ -85,6 +92,8 @@ pub struct LayoutCache {
     pub label_lines: HashMap<String, usize>,
     pub bib_entries: HashMap<String, String>,
     pub bib_entry_lines: HashMap<String, usize>,
+    /// Figure cross-reference label → figure entry index (preview slot).
+    pub figure_labels: HashMap<String, usize>,
 }
 
 impl LayoutCache {
@@ -92,6 +101,7 @@ impl LayoutCache {
         reason: LayoutRebuildReason,
         blocks: &[Block],
         content_width: usize,
+        prose_width: usize,
         height: usize,
         text_only: bool,
         external_bibitems: &HashMap<String, String>,
@@ -103,9 +113,9 @@ impl LayoutCache {
             LayoutRebuildReason::TextOnlyToggle => "layout_build_text_only",
             LayoutRebuildReason::TocToggle => "layout_build_toc_toggle",
         });
-        let visual_lines = build_lines_for(blocks, content_width, height, text_only);
+        let visual_lines = build_lines_for(blocks, content_width, prose_width, height, text_only);
         let sections = build_sections(&visual_lines);
-        let (label_lines, mut bib_entries, bib_entry_lines) =
+        let (label_lines, mut bib_entries, bib_entry_lines, figure_labels) =
             build_link_indexes(blocks, &visual_lines);
         for (key, value) in external_bibitems {
             bib_entries.insert(key.clone(), value.clone());
@@ -116,6 +126,7 @@ impl LayoutCache {
             label_lines,
             bib_entries,
             bib_entry_lines,
+            figure_labels,
         }
     }
 }
@@ -297,6 +308,13 @@ pub struct Reader {
     pub help_visible: bool,
     pub help_query: String,
     pub help_selected: usize,
+    /// Full-screen contents view (`:contents`).  Interactive: j/k move
+    /// `contents_selected`, Enter jumps to that section, Esc closes.
+    /// Distinct from the passive `toc_visible` sidebar.  Private; managed
+    /// via `open_contents` / `close_contents` / `contents_*`.
+    contents_visible: bool,
+    /// Selected section index in the full-screen contents view.
+    contents_selected: usize,
     /// Viewport top in absolute-line indices.  Private so every
     /// scroll/jump lands in `cursor.rs`.  Read via `Reader::offset()`.
     offset: usize,
@@ -305,6 +323,12 @@ pub struct Reader {
     cursor_y: usize,
     pub width: usize,
     pub height: usize,
+    /// Reading-measure cap: max body-text column width in cells, 0 =
+    /// off (flow edge-to-edge).  Defaults to [`DEFAULT_MAX_MEASURE`];
+    /// hydrated from config in `init` and changed at runtime via
+    /// `:set width=N` (`set_max_measure`).  Private so writes go through
+    /// the setter, which reflows; read via `Reader::max_measure()`.
+    max_measure: usize,
     pub search_query: String,
     /// Visual-line indices of `/`-search matches.  Private; writes
     /// happen via `update_search_matches` / `remap_search_matches_after_layout`
@@ -344,6 +368,11 @@ pub struct Reader {
     /// citation jumps here (line *before* the entry).  Private; read
     /// via `Reader::bib_entry_lines()`.
     bib_entry_lines: HashMap<String, usize>,
+    /// Figure cross-reference label → figure entry index.  Lets the
+    /// contextual preview pane show the figure a `\ref{fig:…}` under the
+    /// cursor points at.  Mirrored from `LayoutCache.figure_labels` on
+    /// each rebuild.  Private; consulted by `ref_figure_under_cursor`.
+    figure_labels: HashMap<String, usize>,
     source_bibitems: HashMap<String, String>,
     /// Effective byte column of the cursor on the current line.  Always
     /// represents the rendered position — horizontal motions write here.
@@ -502,12 +531,18 @@ impl Reader {
         let text_only = false;
         let current_figure: Option<usize> = None;
         let cw = content_width_for(width, false, false);
+        let prose_width = if DEFAULT_MAX_MEASURE > 0 {
+            DEFAULT_MAX_MEASURE.min(cw)
+        } else {
+            cw
+        };
         let ch = content_height_for(height, false, false);
         let source_bibitems = bibitems;
         let layout_cache = LayoutCache::rebuild_layout(
             LayoutRebuildReason::Initial,
             &blocks,
             cw,
+            prose_width,
             ch,
             text_only,
             &source_bibitems,
@@ -522,15 +557,19 @@ impl Reader {
             label_lines: layout_cache.label_lines.clone(),
             bib_entries: layout_cache.bib_entries.clone(),
             bib_entry_lines: layout_cache.bib_entry_lines.clone(),
+            figure_labels: layout_cache.figure_labels.clone(),
             source_bibitems,
             toc_visible: false,
             help_visible: false,
             help_query: String::new(),
             help_selected: 0,
+            contents_visible: false,
+            contents_selected: 0,
             offset: 0,
             cursor_y: 0,
             width,
             height,
+            max_measure: DEFAULT_MAX_MEASURE,
             search_query: String::new(),
             search_matches: Vec::new(),
             search_idx: 0,
@@ -613,7 +652,11 @@ impl Reader {
         // the hermetic constructor.  The setter does the right rebuild
         // dance (text_only sync + current_figure seed) when the value
         // differs from the constructor's default of false.
-        reader.set_figure_preview_active(crate::config::load().figure_preview_default);
+        let cfg = crate::config::load();
+        reader.set_figure_preview_active(cfg.figure_preview_default);
+        // Apply the persisted reading measure.  Only reflows when it
+        // differs from the constructor's DEFAULT_MAX_MEASURE.
+        reader.set_max_measure(cfg.max_measure);
 
         if let Some(ref key) = progress_key {
             let map = crate::progress::load();
@@ -793,6 +836,7 @@ impl Reader {
             reason,
             &self.blocks,
             self.content_width(),
+            self.prose_width(),
             self.content_height(),
             self.text_only,
             &self.source_bibitems,
@@ -802,6 +846,7 @@ impl Reader {
         self.label_lines = self.layout_cache.label_lines.clone();
         self.bib_entries = self.layout_cache.bib_entries.clone();
         self.bib_entry_lines = self.layout_cache.bib_entry_lines.clone();
+        self.figure_labels = self.layout_cache.figure_labels.clone();
         self.remap_search_matches_after_layout();
         // ADR-0002 follow-up: a rebuild can move every visual line, so
         // the cached preview geometry (in cell coords relative to the
@@ -898,9 +943,87 @@ impl Reader {
         self.clamp_position();
     }
 
-    /// Effective text column width after subtracting the TOC panel (if visible).
+    /// Full content (structural) width after subtracting the TOC panel
+    /// (if visible) and the preview pane.  Tables, figures, display math
+    /// and the draw area span this; prose wraps to the narrower
+    /// [`prose_width`](Self::prose_width).
     pub fn content_width(&self) -> usize {
         content_width_for(self.width, self.toc_visible, self.preview_layout_active())
+    }
+
+    /// Width body prose wraps to: the reading measure capped by the
+    /// available content width (so prose never exceeds the column even
+    /// when the measure is wider than the terminal).  Equals
+    /// `content_width` when the measure is off (`max_measure == 0`).
+    /// The renderer centres this column inside `content_width`.
+    pub fn prose_width(&self) -> usize {
+        let cw = self.content_width();
+        if self.max_measure > 0 {
+            self.max_measure.min(cw)
+        } else {
+            cw
+        }
+    }
+
+    /// Current reading-measure cap (max body-text column, in cells; 0 =
+    /// off / full width).  Read by the renderer to centre the prose
+    /// column inside the full content width.
+    pub fn max_measure(&self) -> usize {
+        self.max_measure
+    }
+
+    /// The link the cursor currently sits on, if any.  Walks the spans of
+    /// the current `StyledProse` visual line for the one covering
+    /// `cursor_x`.  `None` on non-styled lines or when not over a link.
+    /// Canonical home for cursor→link resolution (keys.rs delegates here,
+    /// and the contextual preview pane consults it).
+    pub fn link_under_cursor(&self) -> Option<doc_model::LinkTarget> {
+        let vl = self.visual_lines().get(self.current_line())?;
+        let spans = match &vl.kind {
+            VisualLineKind::StyledProse(s) => s,
+            _ => return None,
+        };
+        let mut byte = 0usize;
+        for span in spans {
+            let next = byte + span.text.len();
+            if self.cursor_x() >= byte && self.cursor_x() < next {
+                return span.link_target.clone();
+            }
+            byte = next;
+        }
+        None
+    }
+
+    /// If the cursor is on a citation whose bibliography entry is known,
+    /// returns `(key, entry_text)`.  Drives the contextual preview pane
+    /// (cursor on `\cite` → reference shown in the side pane) and mirrors
+    /// what the `K` popup surfaces on demand.
+    pub fn cursor_citation(&self) -> Option<(String, String)> {
+        match self.link_under_cursor()? {
+            doc_model::LinkTarget::Citation(key) => {
+                let text = self.bib_entries.get(&key)?.clone();
+                Some((key, text))
+            }
+            _ => None,
+        }
+    }
+
+    /// Set the reading-measure cap and reflow.  `:set width=N` routes
+    /// here (0 disables the cap).  Preserves the on-screen source
+    /// position across the reflow, mirroring `resize`.
+    pub fn set_max_measure(&mut self, measure: usize) {
+        if self.max_measure == measure {
+            return;
+        }
+        let anchor = ReflowAnchor::capture(self);
+        self.max_measure = measure;
+        self.rebuild_layout(LayoutRebuildReason::Resize);
+        if let Some(anchor) = anchor
+            && anchor.restore(self)
+        {
+            return;
+        }
+        self.clamp_position();
     }
 
     /// Reflow visual lines for a new terminal size.  Embedded hosts
@@ -1044,6 +1167,50 @@ impl Reader {
         self.figure_index.get(id)
     }
 
+    /// The figure entry index a `\ref{fig:…}` under the cursor points at,
+    /// if any.  When set, the preview pane shows this figure instead of
+    /// the manually-selected one (context-first; `]f`/`[f` is the
+    /// fallback).
+    pub fn ref_figure_under_cursor(&self) -> Option<usize> {
+        match self.link_under_cursor()? {
+            doc_model::LinkTarget::Internal(label) => self.figure_labels.get(&label).copied(),
+            _ => None,
+        }
+    }
+
+    /// `kitty_id` of the figure the preview pane should show: the
+    /// cursor's figure reference if any, else the manual selection.
+    pub(crate) fn preview_figure_kitty_id(&self) -> Option<u32> {
+        match self.ref_figure_under_cursor() {
+            Some(idx) => self
+                .figure_index
+                .entries
+                .get(idx)
+                .map(|e| e.representative_kitty_id()),
+            None => self.current_figure_kitty_id(),
+        }
+    }
+
+    /// `FigureEntry` the preview pane should render (ref figure or manual).
+    pub(crate) fn preview_figure_entry(&self) -> Option<&FigureEntry> {
+        match self.ref_figure_under_cursor() {
+            Some(idx) => self.figure_index.entries.get(idx),
+            None => self.current_figure_entry(),
+        }
+    }
+
+    /// `(position, total)` for the pane title — reflects the ref figure
+    /// when the cursor is on a figure reference, else the manual figure.
+    pub(crate) fn preview_figure_position(&self) -> Option<(usize, usize)> {
+        match self.ref_figure_under_cursor() {
+            Some(idx) => {
+                let total = self.figure_count();
+                (total > 0).then_some((idx + 1, total))
+            }
+            None => self.current_figure_position(),
+        }
+    }
+
     pub(crate) fn set_preview_geometry(&self, area: Option<Rect>) {
         self.preview_state
             .last_geometry
@@ -1089,6 +1256,63 @@ impl Reader {
             }
         }
         self.clamp_position();
+    }
+
+    // ── Full-screen contents view (`:contents`) ───────────────────────
+
+    /// Whether the full-screen contents view is open.
+    pub fn contents_visible(&self) -> bool {
+        self.contents_visible
+    }
+
+    /// Selected section index in the contents view (for the renderer).
+    pub fn contents_selected(&self) -> usize {
+        self.contents_selected
+    }
+
+    /// Open the contents view, seeding the selection at the section the
+    /// reader is currently in.  No-op when the document has no sections.
+    pub fn open_contents(&mut self) {
+        if self.sections().is_empty() {
+            return;
+        }
+        self.contents_selected = self.current_section_idx().unwrap_or(0);
+        self.contents_visible = true;
+    }
+
+    /// Close the contents view without moving.
+    pub fn close_contents(&mut self) {
+        self.contents_visible = false;
+    }
+
+    /// Move the contents selection by `delta` rows (clamped).
+    pub fn contents_move(&mut self, delta: i32) {
+        let n = self.sections().len();
+        if n == 0 {
+            return;
+        }
+        let next = (self.contents_selected as i32 + delta).clamp(0, n as i32 - 1);
+        self.contents_selected = next as usize;
+    }
+
+    /// Jump the selection to the first / last section.
+    pub fn contents_jump_edge(&mut self, last: bool) {
+        if last {
+            self.contents_selected = self.sections().len().saturating_sub(1);
+        } else {
+            self.contents_selected = 0;
+        }
+    }
+
+    /// Jump to the selected section and close the view.  Pushes a nav
+    /// mark so `Ctrl+O` returns to the prior reading position.
+    pub fn contents_jump_selected(&mut self) {
+        let line = self.sections().get(self.contents_selected).map(|s| s.0);
+        self.contents_visible = false;
+        if let Some(line) = line {
+            self.push_nav_mark();
+            self.jump_to_line(line);
+        }
     }
 
     /// Clamp offset and cursor_y to stay within current document bounds.
@@ -1208,7 +1432,11 @@ impl Reader {
     }
 }
 
-/// Compute text column width given terminal width and TOC visibility.
+/// Compute the full content (structural) width given terminal width,
+/// TOC visibility, and the figure-preview pane.  This is the width
+/// tables, figures, display math and the draw area use.  The narrower
+/// reading measure for prose is derived separately by
+/// `Reader::prose_width`.
 fn content_width_for(terminal_width: usize, toc_visible: bool, preview_visible: bool) -> usize {
     let content_width = if toc_visible {
         // +1 for the border column.
@@ -1217,10 +1445,9 @@ fn content_width_for(terminal_width: usize, toc_visible: bool, preview_visible: 
         terminal_width
     };
     if preview_visible {
-        let pane_width = content_width.saturating_mul(PREVIEW_TEXT_PERCENT) / 100;
-        pane_width.saturating_sub(reader_horizontal_margin(pane_width) * 2)
+        content_width.saturating_mul(PREVIEW_TEXT_PERCENT) / 100
     } else {
-        content_width.saturating_sub(reader_horizontal_margin(content_width) * 2)
+        content_width
     }
 }
 
@@ -1237,8 +1464,14 @@ fn build_sections(visual_lines: &[VisualLine]) -> Vec<(usize, u8, String)> {
         .iter()
         .enumerate()
         .filter_map(|(i, vl)| {
-            if let VisualLineKind::Header(level) = &vl.kind {
-                Some((i, *level, vl.text.clone()))
+            if let VisualLineKind::Header { level, number } = &vl.kind {
+                // Bake the number into the section title so the TOC shows
+                // it and `:goto 3.2` can match it — on both parser paths.
+                let title = match number {
+                    Some(n) => format!("{n}  {}", vl.text),
+                    None => vl.text.clone(),
+                };
+                Some((i, *level, title))
             } else {
                 None
             }
@@ -1265,6 +1498,7 @@ fn build_link_indexes(
     HashMap<String, usize>,
     HashMap<String, String>,
     HashMap<String, usize>,
+    HashMap<String, usize>,
 ) {
     // Map block_idx → first VL with that block_idx.  O(n) once.
     let mut block_to_vl: HashMap<usize, usize> = HashMap::new();
@@ -1272,9 +1506,22 @@ fn build_link_indexes(
         block_to_vl.entry(vl.block_idx).or_insert(vl_idx);
     }
 
+    // Map each `Block::Figure`'s block_idx → its figure entry index
+    // (0-based, document order) — matches `FigureIndex::entries`.  Lets a
+    // figure cross-reference resolve to a slot in the preview pane.
+    let mut figure_entry_of_block: HashMap<usize, usize> = HashMap::new();
+    let mut fig_idx = 0usize;
+    for (bi, block) in blocks.iter().enumerate() {
+        if matches!(block, Block::Figure { .. }) {
+            figure_entry_of_block.insert(bi, fig_idx);
+            fig_idx += 1;
+        }
+    }
+
     let mut label_lines = HashMap::new();
     let mut bib_entries = HashMap::new();
     let mut bib_entry_lines = HashMap::new();
+    let mut figure_labels = HashMap::new();
 
     for (bi, block) in blocks.iter().enumerate() {
         if let Block::Anchor(label) = block {
@@ -1297,9 +1544,15 @@ fn build_link_indexes(
                     label_lines.insert(label.clone(), vl);
                 }
             }
+            // Figure label: when the anchored target is a figure, also map
+            // the label to its preview-pane slot (independent of whether
+            // the figure had a visual line, e.g. in text-only mode).
+            if let Some(entry) = target_block.and_then(|j| figure_entry_of_block.get(&j)) {
+                figure_labels.insert(label.clone(), *entry);
+            }
         }
     }
-    (label_lines, bib_entries, bib_entry_lines)
+    (label_lines, bib_entries, bib_entry_lines, figure_labels)
 }
 
 /// Extract the rendered text of a block for bib-entry popup display.
@@ -1318,6 +1571,144 @@ fn block_text(block: &Block) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_citation_resolves_entry_under_cursor() {
+        use doc_model::{InlineSpan, LinkTarget};
+        // Leading citation span so byte 0 of the wrapped line is on it.
+        let blocks = vec![Block::StyledLine(vec![
+            InlineSpan {
+                text: "[1]".into(),
+                link_target: Some(LinkTarget::Citation("smith".into())),
+                ..Default::default()
+            },
+            InlineSpan {
+                text: " and more text".into(),
+                ..Default::default()
+            },
+        ])];
+        let bibitems = HashMap::from([(
+            "smith".to_string(),
+            "Smith, J. A great paper. 2020.".to_string(),
+        )]);
+        let mut reader = Reader::new_with_bibitems(blocks, 80, 24, bibitems);
+
+        reader.set_cursor_x(0);
+        assert_eq!(
+            reader.cursor_citation(),
+            Some((
+                "smith".to_string(),
+                "Smith, J. A great paper. 2020.".to_string()
+            ))
+        );
+
+        // A plain line (no link span) yields no citation context.
+        let mut plain = Reader::new(vec![Block::Line("just prose".into())], 80, 24);
+        plain.set_cursor_x(2);
+        assert_eq!(plain.cursor_citation(), None);
+    }
+
+    #[test]
+    fn figure_ref_under_cursor_resolves_to_figure_index() {
+        use doc_model::{InlineSpan, LinkTarget};
+        let blocks = vec![
+            Block::StyledLine(vec![InlineSpan {
+                text: "fig1".into(),
+                link_target: Some(LinkTarget::Internal("fig:1".into())),
+                ..Default::default()
+            }]),
+            Block::Anchor("fig:1".into()),
+            Block::Figure {
+                rows: vec![vec![doc_model::ImageItem {
+                    path: std::path::PathBuf::from("a.png"),
+                    kitty_id: 7,
+                    dims: Some((100, 100)),
+                }]],
+                alt: "a figure".into(),
+                figure_id: 1,
+                column_gaps_after: Vec::new(),
+                header_rows: Vec::new(),
+            },
+        ];
+        let mut reader = Reader::new(blocks, 80, 24);
+
+        // Cursor on the figure reference resolves to figure entry 0 and
+        // the pane focuses that figure's representative image.
+        reader.set_cursor_x(0);
+        assert_eq!(reader.ref_figure_under_cursor(), Some(0));
+        assert_eq!(reader.preview_figure_kitty_id(), Some(7));
+        assert_eq!(reader.preview_figure_position(), Some((1, 1)));
+
+        // A non-figure label doesn't resolve.
+        let plain = Reader::new(vec![Block::Line("prose".into())], 80, 24);
+        assert_eq!(plain.ref_figure_under_cursor(), None);
+    }
+
+    #[test]
+    fn contents_view_open_move_and_jump() {
+        let blocks = vec![
+            Block::Header {
+                level: 1,
+                text: "One".into(),
+                number: Some("1".into()),
+            },
+            Block::Line("a".into()),
+            Block::Header {
+                level: 1,
+                text: "Two".into(),
+                number: Some("2".into()),
+            },
+            Block::Line("b".into()),
+            Block::Header {
+                level: 2,
+                text: "Two-One".into(),
+                number: Some("2.1".into()),
+            },
+            Block::Line("c".into()),
+        ];
+        let mut reader = Reader::new(blocks, 80, 24);
+        assert_eq!(reader.sections().len(), 3);
+
+        reader.open_contents();
+        assert!(reader.contents_visible());
+        // Seeded at the section the reader is in (top → section 0).
+        assert_eq!(reader.contents_selected(), 0);
+
+        reader.contents_move(1);
+        assert_eq!(reader.contents_selected(), 1);
+        reader.contents_move(-5); // clamps at 0
+        assert_eq!(reader.contents_selected(), 0);
+        reader.contents_jump_edge(true);
+        assert_eq!(reader.contents_selected(), 2);
+
+        // Enter jumps and closes the view.
+        reader.contents_jump_selected();
+        assert!(!reader.contents_visible());
+    }
+
+    #[test]
+    fn sections_bake_number_into_title_for_toc_and_goto() {
+        let reader = Reader::new(
+            vec![
+                Block::Header {
+                    level: 1,
+                    text: "Background".to_string(),
+                    number: Some("2".to_string()),
+                },
+                Block::Line("body".to_string()),
+                Block::Header {
+                    level: 1,
+                    text: "References".to_string(),
+                    number: None,
+                },
+            ],
+            80,
+            24,
+        );
+        let titles: Vec<&str> = reader.sections().iter().map(|s| s.2.as_str()).collect();
+        // Numbered section gets "N  Title"; unnumbered stays bare.
+        assert_eq!(titles, vec!["2  Background", "References"]);
+    }
 
     fn doc_with_one_image() -> Vec<Block> {
         vec![
@@ -1539,15 +1930,40 @@ mod tests {
     }
 
     #[test]
+    fn reading_measure_narrows_prose_not_content_width() {
+        // Wide terminal: full content width is 200 (no horizontal page
+        // margin), unchanged by the measure (tables/figures use it).
+        // Only the prose column is capped.
+        let mut reader = Reader::new(vec![Block::Line("hi".to_string())], 200, 24);
+        assert_eq!(reader.content_width(), 200);
+        assert_eq!(reader.prose_width(), DEFAULT_MAX_MEASURE);
+
+        // 0 disables the cap → prose flows the full content width.
+        reader.set_max_measure(0);
+        assert_eq!(reader.content_width(), 200);
+        assert_eq!(reader.prose_width(), 200);
+
+        // A custom cap below the available width takes effect on prose.
+        reader.set_max_measure(100);
+        assert_eq!(reader.prose_width(), 100);
+
+        // A cap wider than what's available clamps to the content width.
+        reader.set_max_measure(500);
+        assert_eq!(reader.prose_width(), 200);
+    }
+
+    #[test]
     fn figure_preview_reflows_to_reader_pane_width() {
         let mut blocks = doc_with_one_image();
         blocks.insert(0, Block::Rule);
         let mut reader = Reader::new(blocks, 100, 24);
-        assert_eq!(reader.content_width(), 92);
+        // Full structural width: 100 (no horizontal page margin).
+        assert_eq!(reader.content_width(), 100);
 
         reader.set_figure_preview_active(true);
 
-        assert_eq!(reader.content_width(), 52);
+        // Preview text pane is 60% of 100 = 60.
+        assert_eq!(reader.content_width(), 60);
         assert_eq!(
             reader
                 .visual_lines
@@ -1726,6 +2142,7 @@ mod tests {
                 Block::Header {
                     level: 1,
                     text: "Intro".to_string(),
+                    number: None,
                 },
                 Block::Anchor("fig:intro".to_string()),
                 Block::Figure {
@@ -1770,6 +2187,7 @@ mod tests {
                 Block::Header {
                     level: 1,
                     text: "Reloaded".to_string(),
+                    number: None,
                 },
                 Block::Line("body".to_string()),
             ],

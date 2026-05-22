@@ -276,6 +276,7 @@ mod tests {
         Block::Matrix {
             rows: vec![vec![("cell".to_string(), 1)]],
             vertical_rules: vec![],
+            alignments: vec![],
         }
     }
 

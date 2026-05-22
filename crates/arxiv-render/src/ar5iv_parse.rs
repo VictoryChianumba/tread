@@ -21,7 +21,7 @@
 //                  one `Block::StyledLine` per bibitem, each prefixed with
 //                  an `Anchor` carrying the cite-key.
 
-use doc_model::{Block, ImageItem, InlineSpan, LinkTarget};
+use doc_model::{Alignment, Block, ImageItem, InlineSpan, LinkTarget};
 use scraper::{ElementRef, Html, Node, Selector};
 use std::collections::HashMap;
 
@@ -91,7 +91,11 @@ fn walk_top(el: ElementRef, out: &mut Vec<Block>) {
     let tag = el.value().name();
 
     if has_class(&classes, "ltx_title_document") {
-        out.push(Block::Header { level: 1, text: collect_text(el) });
+        out.push(Block::Header {
+            level: 1,
+            text: collect_text(el),
+            number: None,
+        });
         out.push(Block::Blank);
     } else if has_class(&classes, "ltx_authors") {
         emit_authors(el, out);
@@ -132,7 +136,11 @@ fn walk_section(el: ElementRef, level: u8, out: &mut Vec<Block>) {
             || has_class(&classes, "ltx_title_bibliography")
         {
             let lvl = heading_level(&classes, level);
-            out.push(Block::Header { level: lvl, text: collect_heading_text(child) });
+            out.push(Block::Header {
+                level: lvl,
+                text: collect_heading_text(child),
+                number: extract_heading_number(child),
+            });
             out.push(Block::Blank);
         } else if has_class(&classes, "ltx_subsection") {
             walk_section(child, level + 1, out);
@@ -187,7 +195,11 @@ fn emit_authors(el: ElementRef, out: &mut Vec<Block>) {
 }
 
 fn emit_abstract(el: ElementRef, out: &mut Vec<Block>) {
-    out.push(Block::Header { level: 2, text: "Abstract".into() });
+    out.push(Block::Header {
+        level: 2,
+        text: "Abstract".into(),
+        number: None,
+    });
     out.push(Block::Blank);
     for child in el.child_elements() {
         let classes: Vec<&str> = child.value().classes().collect();
@@ -472,6 +484,21 @@ fn emit_display_math(el: ElementRef, out: &mut Vec<Block>) {
     out.push(Block::Blank);
 }
 
+/// Column alignment from a LaTeXML cell's `ltx_align_*` class, or `None`
+/// when the cell carries no explicit alignment (caller defaults to Left).
+fn ar5iv_cell_alignment(cell: ElementRef) -> Option<Alignment> {
+    let classes: Vec<&str> = cell.value().classes().collect();
+    if classes.contains(&"ltx_align_right") {
+        Some(Alignment::Right)
+    } else if classes.contains(&"ltx_align_center") {
+        Some(Alignment::Center)
+    } else if classes.contains(&"ltx_align_left") {
+        Some(Alignment::Left)
+    } else {
+        None
+    }
+}
+
 fn emit_table(el: ElementRef, out: &mut Vec<Block>) {
     // Pull the caption first as a heading-style line.
     if let Some(cap) = el
@@ -490,16 +517,32 @@ fn emit_table(el: ElementRef, out: &mut Vec<Block>) {
     };
 
     let mut rows: Vec<Vec<(String, usize)>> = Vec::new();
+    // Per-raw-column alignment, captured from single-span DATA (`td`)
+    // cells — first explicit `ltx_align_*` class per column wins.  Header
+    // (`th`) cells are skipped because LaTeXML centres them regardless of
+    // the column spec, which would mislabel the column's true alignment.
+    let mut alignments: Vec<Alignment> = Vec::new();
     let row_sel = Selector::parse("tr").unwrap();
     let cell_sel = Selector::parse("td, th").unwrap();
     for tr in table.select(&row_sel) {
         let mut row: Vec<(String, usize)> = Vec::new();
+        let mut col = 0usize;
         for cell in tr.select(&cell_sel) {
             let span = cell
                 .value()
                 .attr("colspan")
                 .and_then(|s| s.parse::<usize>().ok())
                 .unwrap_or(1);
+            if span == 1 && cell.value().name() == "td" {
+                if col >= alignments.len() {
+                    alignments.resize(col + 1, Alignment::Left);
+                }
+                if alignments[col] == Alignment::Left
+                    && let Some(a) = ar5iv_cell_alignment(cell)
+                {
+                    alignments[col] = a;
+                }
+            }
             // Walk the cell as inline content so `<math>` nodes contribute
             // their rendered form once (instead of bleeding both the
             // presentation MathML text and the LaTeX annotation).
@@ -508,13 +551,18 @@ fn emit_table(el: ElementRef, out: &mut Vec<Block>) {
                 .map(|s| s.text)
                 .collect();
             row.push((text.trim().to_string(), span));
+            col += span;
         }
         if !row.is_empty() {
             rows.push(row);
         }
     }
     if !rows.is_empty() {
-        out.push(Block::Matrix { rows, vertical_rules: Vec::new() });
+        out.push(Block::Matrix {
+            rows,
+            vertical_rules: Vec::new(),
+            alignments,
+        });
         out.push(Block::Blank);
     }
 }
@@ -566,6 +614,12 @@ fn emit_figure(el: ElementRef, out: &mut Vec<Block>) {
         return;
     }
 
+    // Anchor the figure on its LaTeXML id (the `\ref{fig:…}` target) so
+    // the reader can resolve figure cross-references — parity with the
+    // section anchors above and the Pandoc path.
+    if let Some(id) = el.value().attr("id") {
+        out.push(Block::Anchor(id.to_string()));
+    }
     out.push(Block::Figure {
         rows: vec![items],
         alt: caption.unwrap_or_default(),
@@ -691,7 +745,11 @@ fn normalize_marker(raw: &str) -> String {
 }
 
 fn walk_bibliography(el: ElementRef, out: &mut Vec<Block>) {
-    out.push(Block::Header { level: 1, text: "References".into() });
+    out.push(Block::Header {
+        level: 1,
+        text: "References".into(),
+        number: None,
+    });
     out.push(Block::Blank);
     let item_sel = Selector::parse("li.ltx_bibitem").unwrap();
     for item in el.select(&item_sel) {
@@ -713,17 +771,35 @@ fn collect_text(el: ElementRef) -> String {
 
 /// Like `collect_text` but strips the leading `<span class="ltx_tag">…</span>`
 /// LaTeXML inserts for the numeric prefix on section headings ("1 Introduction"
-/// → "Introduction").  Tread already auto-numbers, so the prefix would double.
+/// → "Introduction").  The number is captured separately by
+/// [`extract_heading_number`] and carried on `Block::Header.number`, so the
+/// reader (not the parser) decides how to present it.
 fn collect_heading_text(el: ElementRef) -> String {
+    let full = collect_text(el);
+    // Strip the leading section number (captured separately on
+    // `Block::Header.number`) so the title is clean.  The old prefix-match
+    // against the raw `.ltx_tag` text was whitespace-fragile and silently
+    // failed on ar5iv's markup, leaving "1 Introduction" in the title; we
+    // now strip the exact extracted number, then drop any "." / whitespace
+    // separator that followed it.
+    let stripped = extract_heading_number(el)
+        .and_then(|num| full.trim_start().strip_prefix(&num).map(str::to_string));
+    stripped
+        .unwrap_or(full)
+        .trim_start_matches(|c: char| c == '.' || c.is_whitespace())
+        .trim_end()
+        .to_string()
+}
+
+/// The section number LaTeXML renders in `<span class="ltx_tag">` ("2",
+/// "2.1", "A").  `None` when the heading is unnumbered (no tag, or an
+/// empty one).  This is the ground-truth numbering from LaTeXML, so
+/// appendix letters and unnumbered front/back matter come out right.
+fn extract_heading_number(el: ElementRef) -> Option<String> {
     let tag_sel = Selector::parse(".ltx_tag").unwrap();
-    let mut full = collect_text(el);
-    for tag in el.select(&tag_sel) {
-        let prefix = collect_text(tag);
-        if let Some(rest) = full.strip_prefix(&prefix) {
-            full = rest.to_string();
-        }
-    }
-    full.trim().to_string()
+    let tag = el.select(&tag_sel).next()?;
+    let num = collect_text(tag).trim().to_string();
+    if num.is_empty() { None } else { Some(num) }
 }
 
 fn has_class(classes: &[&str], target: &str) -> bool {

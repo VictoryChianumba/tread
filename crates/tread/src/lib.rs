@@ -219,6 +219,13 @@ pub fn after_draw(reader: &Reader, state: &mut ImageState, area: Rect, kitty_sup
   if !kitty_supported {
     return;
   }
+  // The full-screen contents view covers the document; delete any placed
+  // Kitty images so they don't float over the overlay.
+  if reader.contents_visible() {
+    images::clear_inline(state);
+    images::clear_preview(state);
+    return;
+  }
   let (_, _, content_area, _, _) = render::split_layout(area, reader);
   let (reader_area, preview_area) = render::split_content_for_preview(content_area, reader);
   images::place_visible(reader, state, reader_area, kitty_supported);
@@ -242,7 +249,16 @@ fn emit_preview(
   fallback_rect: Rect,
   kitty_supported: bool,
 ) {
-  let kid = preview_area.and_then(|_| reader.current_figure_kitty_id());
+  // Context-first: when the pane is showing a citation (cursor on a
+  // `\cite`), there's no figure to place — pass `None` so any prior
+  // figure placement is cleared and the text panel shows unobscured.
+  let kid = preview_area.and_then(|_| {
+    if reader.cursor_citation().is_some() {
+      None
+    } else {
+      reader.preview_figure_kitty_id()
+    }
+  });
   reader.set_preview_geometry(preview_area);
   let rect = preview_area.unwrap_or(fallback_rect);
   images::place_one_figure(reader, state, kid, rect, kitty_supported);
@@ -280,6 +296,11 @@ pub fn after_draw_guarded(
   burst_in_progress: bool,
 ) {
   if !kitty_supported {
+    return;
+  }
+  if reader.contents_visible() {
+    images::clear_inline(state);
+    images::clear_preview(state);
     return;
   }
   let (_, _, content_area, _, _) = render::split_layout(area, reader);
@@ -537,6 +558,7 @@ mod acceptance_tests {
       Block::Header {
         level: 1,
         text: "Abstract".to_string(),
+        number: None,
       },
       Block::Line("alpha beta gamma delta".to_string()),
       Block::Line("method paragraph with mark target".to_string()),
@@ -544,6 +566,7 @@ mod acceptance_tests {
       Block::Header {
         level: 1,
         text: "Results".to_string(),
+        number: None,
       },
       Block::StyledLine(vec![
         InlineSpan::plain("See "),
@@ -602,7 +625,8 @@ mod acceptance_tests {
     reader.set_figure_preview_active(true);
     assert!(reader.figure_preview_visible());
     assert_eq!(reader.current_figure_kitty_id(), Some(1));
-    assert_eq!(reader.content_width(), 52);
+    // 60% text pane of a 100-wide area, no horizontal margin.
+    assert_eq!(reader.content_width(), 60);
 
     for _ in 0..8 {
       reader.handle_event(char_key('j'));
@@ -639,7 +663,8 @@ mod acceptance_tests {
 
     reader.handle_event(char_key('\\'));
     assert!(reader.toc_visible);
-    assert_eq!(reader.content_width(), 63);
+    // 100 - (TOC_WIDTH 28 + 1 border) = 71, no horizontal margin.
+    assert_eq!(reader.content_width(), 71);
 
     reader.handle_event(char_key(':'));
     send_chars(&mut reader, "2");

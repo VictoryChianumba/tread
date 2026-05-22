@@ -59,6 +59,7 @@ pub fn epub_to_blocks(bytes: &[u8]) -> Result<Vec<Block>, String> {
         out.push(Block::Header {
             level: 1,
             text: header_text,
+            number: None,
         });
         out.push(Block::Blank);
         out.extend(chapter_blocks);

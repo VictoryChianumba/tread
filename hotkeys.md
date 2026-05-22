@@ -188,6 +188,7 @@ Press `:` to open the command bar. Type, then `Enter` to execute or `Esc` to can
 | `:abstract` | — | Jump to the Abstract section |
 | `:references` | `:bib`, `:r` | Jump to References / Bibliography |
 | `:set theme=<id>` | — | Change theme (see [Themes](#themes) below) |
+| `:set width=<n>` | — | Cap the body-text reading column at `<n>` cells (centred); `0` / `off` flows edge-to-edge. Default `72`. Persists. |
 | `:marks` | — | Popup listing all set marks with their lines and snippets |
 | `:delmarks <letter>` | `:dm` | Delete one or more marks |
 | `:highlights` | `:hl` | Popup listing all highlights in this paper |
@@ -197,7 +198,8 @@ Press `:` to open the command bar. Type, then `Enter` to execute or `Esc` to can
 | `:open` | — | Open the arXiv abstract URL in the system browser |
 | `:back` | `:bk` | Same as `Ctrl+O` |
 | `:help` | `:h` | Open help overlay |
-| `:toc` | `:tree` | Toggle TOC panel |
+| `:toc` | `:tree` | Toggle the TOC side panel (passive; follows reading position) |
+| `:contents` | `:cont` | Open the full-screen contents view — `j`/`k` browse, `Enter` jumps to a section, `Esc` closes |
 | `:reload` | `:e` | Re-fetch source and re-parse the paper in place. Preserves cursor, scroll, bookmarks, highlights. |
 | `:placement` | — | Diagnostic popup showing each parsed Matrix table's block index and caption |
 

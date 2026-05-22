@@ -29,7 +29,10 @@ fn main() {
     eprintln!("# blocks: {}", blocks.len());
     for b in &blocks {
         match b {
-            Block::Header { level, text } => println!("{} {text}", "#".repeat(*level as usize)),
+            Block::Header { level, text, number } => {
+                let n = number.as_deref().map(|n| format!("{n}  ")).unwrap_or_default();
+                println!("{} {n}{text}", "#".repeat(*level as usize))
+            }
             Block::Line(s) => println!("{s}"),
             Block::StyledLine(spans) => {
                 let s: String = spans.iter().map(|sp| sp.text.as_str()).collect();

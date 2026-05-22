@@ -75,6 +75,7 @@ fn command_table() -> &'static [(&'static str, &'static [&'static str], Handler)
     ("quit",       &["q", "exit"],     cmd_quit),
     ("help",       &["h"],             cmd_help),
     ("toc",        &["tree"],          cmd_toc),
+    ("contents",   &["cont"],          cmd_contents),
     ("back",       &["bk"],            cmd_back),
     ("set",        &[],                cmd_set),
     ("goto",       &["g"],             cmd_goto),
@@ -141,6 +142,16 @@ fn cmd_help(_: &mut Reader, _: &[&str]) -> ReaderAction {
 
 fn cmd_toc(reader: &mut Reader, _: &[&str]) -> ReaderAction {
   reader.toggle_toc();
+  ReaderAction::Continue
+}
+
+/// `:contents` — open the full-screen, browsable contents view (distinct
+/// from the `:toc` sidebar).  j/k browse, Enter jumps, Esc closes.
+fn cmd_contents(reader: &mut Reader, _: &[&str]) -> ReaderAction {
+  if reader.sections().is_empty() {
+    return ReaderAction::Error("no sections in this document".to_string());
+  }
+  reader.open_contents();
   ReaderAction::Continue
 }
 
@@ -219,7 +230,7 @@ fn jump_to_section_named(reader: &mut Reader, candidates: &[&str]) -> ReaderActi
 
 // ── :set ─────────────────────────────────────────────────────────────────────
 
-fn cmd_set(_reader: &mut Reader, args: &[&str]) -> ReaderAction {
+fn cmd_set(reader: &mut Reader, args: &[&str]) -> ReaderAction {
   if args.is_empty() {
     return ReaderAction::Error("set: missing argument (e.g. theme=light)".to_string());
   }
@@ -231,8 +242,37 @@ fn cmd_set(_reader: &mut Reader, args: &[&str]) -> ReaderAction {
   let value = value.trim();
   match key {
     "theme" => set_theme(value),
+    "width" => set_width(reader, value),
     other => ReaderAction::Error(format!("set: unknown option: {other}")),
   }
+}
+
+/// `:set width=N` — cap the body-text reading measure at N cells (0,
+/// `off`, or `none` disables the cap and flows edge-to-edge).  Reflows
+/// immediately and persists the choice to `block_reader.json`.
+fn set_width(reader: &mut Reader, value: &str) -> ReaderAction {
+  const MIN_MEASURE: usize = 20;
+  let measure = match value {
+    "off" | "none" => 0,
+    _ => match value.parse::<usize>() {
+      Ok(n) => n,
+      Err(_) => {
+        return ReaderAction::Error(format!(
+          "set width: expected a number or 'off', got: {value}"
+        ));
+      }
+    },
+  };
+  if measure != 0 && measure < MIN_MEASURE {
+    return ReaderAction::Error(format!(
+      "set width: minimum is {MIN_MEASURE} (or 0 / 'off' to disable)"
+    ));
+  }
+  reader.set_max_measure(measure);
+  let mut cfg = config::load();
+  cfg.max_measure = measure;
+  config::save(&cfg);
+  ReaderAction::Continue
 }
 
 fn set_theme(value: &str) -> ReaderAction {

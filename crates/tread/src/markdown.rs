@@ -221,7 +221,11 @@ impl Walker {
                 if let Some(level) = self.heading_level.take() {
                     let text: String = self.pending.iter().map(|s| s.text.as_str()).collect();
                     self.pending.clear();
-                    self.blocks.push(Block::Header { level, text });
+                    self.blocks.push(Block::Header {
+                        level,
+                        text,
+                        number: None,
+                    });
                     self.blocks.push(Block::Blank);
                 }
             }
@@ -284,6 +288,7 @@ impl Walker {
                         self.blocks.push(Block::Matrix {
                             rows: state.rows,
                             vertical_rules: Vec::new(),
+                            alignments: Vec::new(), // not tracked yet; left-align
                         });
                         self.blocks.push(Block::Blank);
                     }

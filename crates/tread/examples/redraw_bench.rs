@@ -32,6 +32,7 @@ fn synth_blocks() -> Vec<Block> {
         out.push(Block::Header {
             level: 1,
             text: format!("Section {sec} — Synthetic Content for Redraw Benchmarking"),
+            number: Some((sec + 1).to_string()),
         });
         out.push(Block::Blank);
         for para in 0..20 {

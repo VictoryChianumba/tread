@@ -43,6 +43,12 @@ pub(super) fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &T
     let voice_word = crate::state::voice_control::active_voice_word(reader);
     let voice_active = crate::state::voice_control::voice_rendering_active(reader);
 
+    // Left pad that centres the narrow prose column within the full
+    // content width.  Zero when the reading measure is off or wider than
+    // the area.  Only text-column lines get it; tables / figures / math /
+    // rules render at full width so they "break out" of the column.
+    let prose_pad = (area.width as usize).saturating_sub(reader.prose_width()) / 2;
+
     let lines: Vec<Line> = (0..ch)
         .map(|row| {
             let vl_idx = reader.offset() + row;
@@ -104,6 +110,24 @@ pub(super) fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &T
                 &highlight_ranges,
                 t,
             );
+            // Centre the prose column: prepend the left pad to text-column
+            // lines.  Prepending a span just shifts the already-rendered
+            // spans (cursor cell, highlights) right, so byte coordinates
+            // stay correct.  The pad carries the line's bg so a selected /
+            // bookmarked line tints its left margin too.
+            if prose_pad > 0 && is_text_column(&vl.kind) {
+                let bg = if is_selected {
+                    t.bg_selection
+                } else if is_bookmarked {
+                    t.bookmark_bg
+                } else {
+                    Color::Reset
+                };
+                let mut spans = Vec::with_capacity(line.spans.len() + 1);
+                spans.push(Span::styled(" ".repeat(prose_pad), Style::default().bg(bg)));
+                spans.extend(line.spans);
+                line = Line::from(spans);
+            }
             // Dim non-paragraph lines during voice playback so the active
             // paragraph reads as the focused region.
             if voice_active && crate::state::voice_control::voice_line_dimmed(reader, vl_idx) {
@@ -115,6 +139,21 @@ pub(super) fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &T
 
     let paragraph = Paragraph::new(lines).block(Block::default());
     frame.render_widget(paragraph, area);
+}
+
+/// Whether a line belongs to the centred reading column (prose-like) and
+/// should receive the centering left pad.  Wide block content — tables,
+/// figures, display math, rules — is excluded so it spans the full width.
+fn is_text_column(kind: &doc_model::VisualLineKind) -> bool {
+    matches!(
+        kind,
+        doc_model::VisualLineKind::Prose
+            | doc_model::VisualLineKind::StyledProse(_)
+            | doc_model::VisualLineKind::ListItem { .. }
+            | doc_model::VisualLineKind::Quote { .. }
+            | doc_model::VisualLineKind::Header { .. }
+            | doc_model::VisualLineKind::Code { .. }
+    )
 }
 
 fn render_visual_line<'a>(
@@ -166,19 +205,33 @@ fn render_visual_line<'a>(
 
         VisualLineKind::MathLine { .. } => Line::styled(text.clone(), base_style.fg(t.math)),
 
-        VisualLineKind::Header(level) => {
+        VisualLineKind::Header { level, number } => {
             let (fg, modifier) = match level {
                 1 => (t.accent, Modifier::BOLD),
                 2 => (t.header, Modifier::BOLD),
                 _ => (t.header, Modifier::empty()),
             };
             let hdr_style = base_style.fg(fg).add_modifier(modifier);
-            if let Some(col) = cursor_col {
+            // Number prefix on numbered sections (e.g. "2  ", "3.1  ").
+            // It is NOT part of the addressable title, so cursor / search /
+            // highlight keep operating on `text` (the clean title).
+            let prefix = match number {
+                Some(n) => format!("{n}  "),
+                None => String::new(),
+            };
+            let title_line = if let Some(col) = cursor_col {
                 apply_char_cursor(text, col, bg, t)
             } else if !highlight_ranges.is_empty() {
                 overlay_highlights(text, hdr_style, highlight_ranges, t.bg_highlight)
             } else {
                 Line::styled(text.clone(), hdr_style)
+            };
+            if prefix.is_empty() {
+                title_line
+            } else {
+                let mut spans = vec![Span::styled(prefix, hdr_style)];
+                spans.extend(title_line.spans);
+                Line::from(spans)
             }
         }
 
@@ -268,7 +321,7 @@ fn render_visual_line<'a>(
                             style = style.add_modifier(Modifier::CROSSED_OUT);
                         }
                         if s.monospace {
-                            style = style.fg(t.mono);
+                            style = style.fg(t.mono).bg(t.bg_code);
                         }
                         if let Some((r, g, b)) = s.color {
                             style = style.fg(Color::Rgb(r, g, b));
@@ -336,19 +389,29 @@ fn render_visual_line<'a>(
         }
 
         VisualLineKind::Quote { .. } => {
+            // A left rule bar reads as a blockquote far better than a bare
+            // indent.  `BAR` is the bar glyph + a space; its byte length is
+            // the prefix offset for the cursor/highlight paths, which render
+            // the whole line in one style.
+            const BAR: &str = "▌ ";
+            let prefix_len = BAR.len();
             let quote_style = base_style.fg(t.text_dim).add_modifier(Modifier::ITALIC);
-            let combined = format!("    {}", text);
-            let prefix_len = 4; // "    "
+            let bar_style = base_style.fg(t.border_active);
             if let Some(col) = cursor_col {
-                apply_inline_cursor(&combined, quote_style, prefix_len + col, t)
+                apply_inline_cursor(&format!("{BAR}{text}"), quote_style, prefix_len + col, t)
             } else if !highlight_ranges.is_empty() {
                 let shifted: Vec<(usize, usize)> = highlight_ranges
                     .iter()
                     .map(|&(s, e)| (s + prefix_len, e + prefix_len))
                     .collect();
-                overlay_highlights(&combined, quote_style, &shifted, t.bg_highlight)
+                overlay_highlights(&format!("{BAR}{text}"), quote_style, &shifted, t.bg_highlight)
             } else {
-                Line::styled(combined, quote_style)
+                // Bar and text as separate spans so the rule colour is
+                // distinct from the (dimmed, italic) quote body.
+                Line::from(vec![
+                    Span::styled(BAR, bar_style),
+                    Span::styled(text.clone(), quote_style),
+                ])
             }
         }
     }
@@ -436,7 +499,7 @@ fn overlay_highlights_styled(
             style = style.add_modifier(Modifier::CROSSED_OUT);
         }
         if ispan.monospace {
-            style = style.fg(t.mono);
+            style = style.fg(t.mono).bg(t.bg_code);
         }
         if let Some((r, g, b)) = ispan.color {
             style = style.fg(Color::Rgb(r, g, b));
@@ -631,7 +694,7 @@ fn apply_styled_cursor(
             style = style.add_modifier(Modifier::CROSSED_OUT);
         }
         if ispan.monospace {
-            style = style.fg(t.mono);
+            style = style.fg(t.mono).bg(t.bg_code);
         }
         if let Some((r, g, b)) = ispan.color {
             style = style.fg(Color::Rgb(r, g, b));
@@ -750,7 +813,7 @@ fn highlight_spans(
             style = style.add_modifier(Modifier::CROSSED_OUT);
         }
         if s.monospace {
-            style = style.fg(t.mono);
+            style = style.fg(t.mono).bg(t.bg_code);
         }
         if let Some((r, g, b)) = s.color {
             style = style.fg(Color::Rgb(r, g, b));
@@ -790,7 +853,7 @@ fn highlight_spans(
 mod tests {
     use super::*;
 
-    fn rendered_text(line: &Line<'static>) -> String {
+    fn rendered_text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
@@ -829,5 +892,46 @@ mod tests {
             &crate::config::resolve_theme(),
         );
         assert_eq!(rendered_text(&line), "café — foo bar");
+    }
+
+    fn vl(text: &str, kind: VisualLineKind) -> doc_model::VisualLine {
+        doc_model::VisualLine {
+            block_idx: 0,
+            line_in_block: 0,
+            text: text.to_string(),
+            kind,
+            block_byte_start: 0,
+            block_byte_end: text.len(),
+        }
+    }
+
+    /// Inline code (a monospace span) gets the code background as a
+    /// "pill" so it stops blending into surrounding prose.
+    #[test]
+    fn inline_code_span_gets_background_pill() {
+        let t = crate::config::resolve_theme();
+        let v = vl(
+            "code",
+            VisualLineKind::StyledProse(vec![doc_model::InlineSpan {
+                text: "code".to_string(),
+                monospace: true,
+                ..Default::default()
+            }]),
+        );
+        let line = render_visual_line(&v, false, false, false, None, "", &[], 0, &[], &t);
+        assert_eq!(line.spans[0].style.bg, Some(t.bg_code));
+        assert_eq!(line.spans[0].style.fg, Some(t.mono));
+    }
+
+    /// Blockquotes lead with a coloured left rule bar instead of a bare
+    /// indent; the bar is its own span so its colour is distinct.
+    #[test]
+    fn blockquote_leads_with_coloured_bar() {
+        let t = crate::config::resolve_theme();
+        let v = vl("quoted", VisualLineKind::Quote { is_continuation: false });
+        let line = render_visual_line(&v, false, false, false, None, "", &[], 0, &[], &t);
+        assert_eq!(line.spans[0].content.as_ref(), "▌ ");
+        assert_eq!(line.spans[0].style.fg, Some(t.border_active));
+        assert_eq!(rendered_text(&line), "▌ quoted");
     }
 }

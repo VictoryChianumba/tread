@@ -6,13 +6,15 @@ mod toc;
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Margin, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
 };
 use ui_theme::Theme;
 
 use crate::state::{
-    Mode, Reader, TOC_WIDTH, reader_horizontal_margin, reader_vertical_margin,
+    Mode, Reader, TOC_WIDTH, reader_vertical_margin,
 };
+
+const PREVIEW_HORIZONTAL_MARGIN: u16 = 7;
 
 pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
     let (header_area, toc_area, content_area, status_area, search_area) =
@@ -55,6 +57,9 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
     if reader.help_visible {
         overlays::draw_help_overlay(frame, area, t);
     }
+    if reader.contents_visible() {
+        overlays::draw_contents(frame, area, reader, t);
+    }
 }
 
 /// Carve out the figure-preview pane from the reader's content area.
@@ -79,26 +84,31 @@ pub fn split_content_for_preview(area: Rect, reader: &Reader) -> (Rect, Option<R
     (reader_text_area(cols[0]), Some(cols[1]))
 }
 
+/// The painted content Rect inside `area`: the full width, inset only by
+/// the vertical margin.  There's no horizontal page margin — tables,
+/// figures and math span the full width, and the narrower prose column is
+/// centred *within* it at render time (see `draw_content`), so the
+/// whitespace either side of prose is just the centering slack.
 pub fn reader_text_area(area: Rect) -> Rect {
-    let horizontal = reader_horizontal_margin(area.width as usize) as u16;
     let vertical = reader_vertical_margin(area.height as usize) as u16;
+    Rect::new(
+        area.x,
+        area.y.saturating_add(vertical),
+        area.width,
+        area.height.saturating_sub(vertical.saturating_mul(2)),
+    )
+}
+
+pub fn preview_image_area(area: Rect) -> Rect {
+    let horizontal = PREVIEW_HORIZONTAL_MARGIN.min(area.width.saturating_sub(1) / 2);
+    let vertical = (reader_vertical_margin(area.height as usize) as u16)
+        .min(area.height.saturating_sub(1) / 2);
     Rect::new(
         area.x.saturating_add(horizontal),
         area.y.saturating_add(vertical),
         area.width.saturating_sub(horizontal.saturating_mul(2)),
         area.height.saturating_sub(vertical.saturating_mul(2)),
     )
-}
-
-pub fn preview_image_area(area: Rect) -> Rect {
-    if area.width <= 2 || area.height <= 2 {
-        area
-    } else {
-        area.inner(Margin {
-            horizontal: 1,
-            vertical: 1,
-        })
-    }
 }
 
 pub fn split_layout(
@@ -215,7 +225,8 @@ mod tests {
         let (reader_area, preview_area) =
             split_content_for_preview(Rect::new(0, 0, 100, 20), &reader);
 
-        assert_eq!(reader_area, Rect::new(4, 1, 52, 18));
+        // No horizontal margin: the 60% text pane is used in full.
+        assert_eq!(reader_area, Rect::new(0, 2, 60, 16));
         assert_eq!(preview_area, Some(Rect::new(60, 0, 40, 20)));
     }
 
@@ -225,15 +236,18 @@ mod tests {
         let (reader_area, preview_area) =
             split_content_for_preview(Rect::new(0, 0, 100, 20), &reader);
 
-        assert_eq!(reader_area, Rect::new(4, 1, 92, 18));
+        // Full width, vertical margin only.  The reading measure centres
+        // the prose column at render time instead of narrowing the draw
+        // area, so wide content (tables/figures) isn't clipped.
+        assert_eq!(reader_area, Rect::new(0, 2, 100, 16));
         assert_eq!(preview_area, None);
     }
 
     #[test]
-    fn preview_image_area_leaves_room_for_frame() {
+    fn preview_image_area_adds_preview_padding() {
         let area = preview_image_area(Rect::new(60, 2, 40, 20));
 
-        assert_eq!(area, Rect::new(61, 3, 38, 18));
+        assert_eq!(area, Rect::new(67, 4, 26, 16));
     }
 
 }

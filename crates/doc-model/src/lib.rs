@@ -88,6 +88,15 @@ impl InlineSpan {
     }
 }
 
+/// Per-column text alignment for a `Block::Matrix`, from the LaTeX
+/// column spec (`l` → Left, `c` → Center, `r` → Right).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Alignment {
+    Left,
+    Center,
+    Right,
+}
+
 /// Semantic block — the producer's view of the document.
 #[derive(Debug, Clone)]
 pub enum Block {
@@ -100,16 +109,29 @@ pub enum Block {
         num: Option<usize>,
     },
     /// A section header. level: 1=section, 2=subsection, 3=subsubsection/paragraph.
-    Header { level: u8, text: String },
+    /// `text` is the clean title with no number prefix.  `number` carries the
+    /// section number as a display string ("2", "2.1", "A") when the section is
+    /// numbered, or `None` for unnumbered headers (the paper title, Abstract,
+    /// References, `\section*{}`).  Parsers supply the ground-truth number; the
+    /// reader owns how it's formatted (glyph, colour, placement).
+    Header {
+        level: u8,
+        text: String,
+        number: Option<String>,
+    },
     /// A matrix rendered as a grid of cells (row-major).
     /// Each cell is `(text, col_span)` — `\multicolumn{N}` cells carry span > 1.
     /// `vertical_rules` lists raw column indices BEFORE which a `│` is drawn.
     /// Empty Vec = booktabs default (no vertical lines). 0 = left edge,
     /// raw_col_count = right edge. The renderer translates raw indices to
     /// active-column space (after blank-column collapse).
+    /// `alignments` is the per-raw-column text alignment from the LaTeX
+    /// column spec (`l`/`c`/`r`).  Empty (or short) = left-align, which is
+    /// the default for producers that don't carry alignment.
     Matrix {
         rows: Vec<Vec<(String, usize)>>,
         vertical_rules: Vec<usize>,
+        alignments: Vec<Alignment>,
     },
     /// Explicit vertical space (blank line).
     Blank,
@@ -222,7 +244,14 @@ pub enum VisualLineKind {
         is_first: bool,
         is_last: bool,
     },
-    Header(u8),
+    /// A section header line.  `number` is the display section number
+    /// ("2", "2.1", "A") or `None` for unnumbered headers; the renderer
+    /// decides how to present it (glyph, colour).  `text` (on the
+    /// `VisualLine`) is the clean title.
+    Header {
+        level: u8,
+        number: Option<String>,
+    },
     MatrixLine {
         is_first: bool,
         is_last: bool,

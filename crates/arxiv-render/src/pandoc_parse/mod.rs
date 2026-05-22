@@ -141,6 +141,7 @@ pub fn try_pandoc(sources: &[(String, String)]) -> Result<Vec<Block>, String> {
         blocks.push(Block::Header {
             level: 1,
             text: "References".to_string(),
+            number: None,
         });
         blocks.extend(synthesize_bibliography());
     }
@@ -175,7 +176,11 @@ fn extract_meta_blocks(meta: &Value) -> Vec<Block> {
         && let Some(inlines) = title_meta["c"].as_array() {
             let text = walk_inlines_text(inlines);
             if !text.is_empty() {
-                out.push(Block::Header { level: 1, text });
+                out.push(Block::Header {
+                    level: 1,
+                    text,
+                    number: None,
+                });
             }
         }
 
@@ -382,12 +387,20 @@ fn walk_blocks(
                 if let Some(inlines) = c[2].as_array() {
                     let raw = walk_inlines_text(inlines);
                     if !raw.is_empty() {
-                        let text = if unnumbered {
-                            raw
+                        // Clean title in `text`; the section number (if any)
+                        // rides on `number` for the reader to format.  The
+                        // counter still advances for numbered sections so the
+                        // sequence stays correct.
+                        let number = if unnumbered {
+                            None
                         } else {
-                            format!("{}  {}", counters.bump(level), raw)
+                            Some(counters.bump(level))
                         };
-                        out.push(Block::Header { level, text });
+                        out.push(Block::Header {
+                            level,
+                            text: raw,
+                            number,
+                        });
                     }
                 }
             }

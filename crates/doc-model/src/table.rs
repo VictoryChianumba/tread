@@ -6,7 +6,7 @@
 //! render as plain horizontal separators.  The orchestrator calls
 //! `emit_table_group_lines` once per group.
 
-use crate::{Block, VisualLine, VisualLineKind, visual_width};
+use crate::{Alignment, Block, VisualLine, VisualLineKind, visual_width};
 
 // Column separator widths.  Booktabs style by default (no vertical
 // lines).  When a table has vertical rules, gaps widen to RULED_COL_SEP
@@ -152,6 +152,18 @@ fn render_table_group(
         })
         .unwrap_or(&[]);
 
+    // Column alignments: same first-Matrix pattern as the rules above.
+    let raw_alignments: &[Alignment] = group
+        .iter()
+        .find_map(|b| {
+            if let Block::Matrix { alignments, .. } = b {
+                Some(alignments.as_slice())
+            } else {
+                None
+            }
+        })
+        .unwrap_or(&[]);
+
     // ncols = max total column positions (summing all spans in a row).
     let ncols = all_matrix_rows
         .iter()
@@ -182,6 +194,12 @@ fn render_table_group(
     }
     let active_cols: Vec<usize> = (0..ncols).filter(|&j| col_ever_nonempty[j]).collect();
     let n_active = active_cols.len();
+    // Per-active-column alignment (raw spec mapped through the
+    // blank-column collapse); columns past the spec default to Left.
+    let active_alignments: Vec<Alignment> = active_cols
+        .iter()
+        .map(|&j| raw_alignments.get(j).copied().unwrap_or(Alignment::Left))
+        .collect();
     if n_active == 0 {
         return;
     }
@@ -370,6 +388,7 @@ fn render_table_group(
                         &active_cols,
                         &col_widths,
                         &active_rules,
+                        &active_alignments,
                         gap_width,
                     );
                     let text = format!("{pad}{row_text}");
@@ -413,6 +432,7 @@ fn render_row_with_spans(
     active_cols: &[usize],
     col_widths: &[usize],
     active_rules: &[usize],
+    align: &[Alignment],
     gap_width: usize,
 ) -> String {
     let n_active = active_cols.len();
@@ -460,7 +480,16 @@ fn render_row_with_spans(
                 let t: String = text.chars().take(display_width.saturating_sub(1)).collect();
                 format!("{t}…")
             } else {
-                format!("{:<width$}", text, width = display_width)
+                // Single cell: align per the column spec.
+                let pad = display_width - tw;
+                match align.get(ai_start).copied().unwrap_or(Alignment::Left) {
+                    Alignment::Left => format!("{}{}", text, " ".repeat(pad)),
+                    Alignment::Right => format!("{}{}", " ".repeat(pad), text),
+                    Alignment::Center => {
+                        let pl = pad / 2;
+                        format!("{}{}{}", " ".repeat(pl), text, " ".repeat(pad - pl))
+                    }
+                }
             };
             result.push_str(&content);
         }
@@ -477,6 +506,37 @@ fn render_row_with_spans(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A right-aligned column pads on the LEFT, so a short value sits
+    /// flush against the next column / edge instead of trailing spaces.
+    #[test]
+    fn right_aligned_column_pads_on_the_left() {
+        let group = vec![Block::Matrix {
+            rows: vec![
+                vec![("name".into(), 1), ("9".into(), 1)],
+                vec![("x".into(), 1), ("1234".into(), 1)],
+            ],
+            vertical_rules: vec![],
+            alignments: vec![Alignment::Left, Alignment::Right],
+        }];
+        let mut out = Vec::new();
+        emit_table_group_lines(&mut out, &group, 0, 80);
+        let matrix_lines: Vec<&str> = out
+            .iter()
+            .filter(|vl| matches!(vl.kind, VisualLineKind::MatrixLine { .. }))
+            .map(|vl| vl.text.as_str())
+            .collect();
+        // Right column width = 4 ("1234"); the "9" cell becomes "   9".
+        assert!(
+            matrix_lines.iter().any(|l| l.contains("   9")),
+            "expected right-aligned '   9', got {matrix_lines:?}"
+        );
+        // Left-aligned "name"/"x" still pad on the right (default behaviour).
+        assert!(
+            matrix_lines.iter().any(|l| l.contains("1234")),
+            "wide value should render in full, got {matrix_lines:?}"
+        );
+    }
 
     /// Rule positions: 0 means left edge → 0 in active space; n_raw means
     /// right edge → n_active in active space; internal rules translate via
@@ -521,6 +581,7 @@ mod tests {
                 vec![("D".into(), 1), ("".into(), 1), ("F".into(), 1)],
             ],
             vertical_rules: vec![],
+            alignments: vec![],
         }];
         let mut out = Vec::new();
         emit_table_group_lines(&mut out, &group, 0, 80);
@@ -569,6 +630,7 @@ mod tests {
                 vec![("a".into(), 1), ("b".into(), 1), ("Z".into(), 1)],
             ],
             vertical_rules: vec![],
+            alignments: vec![],
         }];
         let mut out = Vec::new();
         emit_table_group_lines(&mut out, &group, 0, 80);
