@@ -268,7 +268,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
         height: cols[1].height,
     };
 
-    let left_lines = help_section(
+    let mut left_lines = help_section(
         "Movement",
         &[
             ("j / k", "scroll down / up"),
@@ -291,26 +291,28 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
         sec_fg,
         dim_fg,
     );
+    // "Search + links" lives in the LEFT column so neither column
+    // overflows the overlay's fixed height (the right column used to clip).
+    left_lines.push(Line::raw(""));
+    left_lines.extend(help_section(
+        "Search + links",
+        &[
+            ("/  n  N", "search / next / previous"),
+            ("*", "search word under cursor"),
+            ("f / F", "find char forward / backward"),
+            ("t / T", "till char forward / backward"),
+            ("%", "matching brace"),
+            ("m{a}  '{a}", "set / jump named mark"),
+            ("Enter", "follow link or citation"),
+            ("K", "show citation entry"),
+            ("Ctrl+O", "go back"),
+        ],
+        key_fg,
+        sec_fg,
+        dim_fg,
+    ));
 
     let right_lines = [
-        help_section(
-            "Search + links",
-            &[
-                ("/  n  N", "search / next / previous"),
-                ("*", "search word under cursor"),
-                ("f / F", "find char forward / backward"),
-                ("t / T", "till char forward / backward"),
-                ("%", "matching brace"),
-                ("m{a}  '{a}", "set / jump named mark"),
-                ("Enter", "follow link or citation"),
-                ("K", "show citation entry"),
-                ("Ctrl+O", "go back"),
-            ],
-            key_fg,
-            sec_fg,
-            dim_fg,
-        ),
-        vec![Line::raw("")],
         help_section(
             "Figures + selection",
             &[

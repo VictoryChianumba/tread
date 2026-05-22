@@ -29,7 +29,15 @@ pub(super) fn draw_preview_pane(frame: &mut Frame, reader: &Reader, area: Rect, 
     let title = reader
         .preview_figure_position()
         .map(|(idx, total)| format!(" Figure {idx}/{total} "))
-        .unwrap_or_else(|| " Figure ".to_string());
+        // Figure-less papers: the pane is reference-oriented, not a figure
+        // browser, so don't mislabel an empty pane as "Figure".
+        .unwrap_or_else(|| {
+            if reader.figure_count() == 0 {
+                " Reference ".to_string()
+            } else {
+                " Figure ".to_string()
+            }
+        });
     // First: `Clear` writes default-styled spaces into every cell.  This
     // gives iTerm2 the cell anchors its Kitty-graphics placement needs —
     // a bare `Block` without `.style()` only paints its border cells, so
@@ -98,6 +106,12 @@ pub(super) fn draw_preview_pane(frame: &mut Frame, reader: &Reader, area: Rect, 
                 );
             }
         }
+    } else if reader.figure_count() == 0 {
+        // Figure-less paper, cursor not on a citation: explain the pane.
+        let hint = Paragraph::new("Move the cursor onto a citation to see its reference here.")
+            .style(Style::default().fg(t.text_dim))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(hint, preview_image_area(area));
     }
 }
 

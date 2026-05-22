@@ -1132,12 +1132,20 @@ impl Reader {
         self.figure_index.ordered_kitty_ids()
     }
 
+    /// Whether the side pane has anything to show when active: the
+    /// document has figures, OR it has bibliography entries (so a citation
+    /// under the cursor can fill the pane).  Static (cursor-independent)
+    /// so the pane's layout stays stable as the cursor moves.
+    fn preview_pane_available(&self) -> bool {
+        !self.figure_index.entries.is_empty() || !self.bib_entries.is_empty()
+    }
+
     pub fn figure_preview_visible(&self) -> bool {
-        self.preview_state.active && self.preview_state.selected_kitty_id.is_some()
+        self.preview_state.active && self.preview_pane_available()
     }
 
     fn preview_layout_active(&self) -> bool {
-        self.preview_state.active && !self.figure_index.entries.is_empty()
+        self.preview_state.active && self.preview_pane_available()
     }
 
     pub fn figure_preview_state(&self) -> &FigurePreviewState {
@@ -1571,6 +1579,22 @@ fn block_text(block: &Block) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_pane_activates_on_figureless_paper_with_citations() {
+        // No figures, but a bibliography entry → the pane is available so a
+        // citation under the cursor can fill it.
+        let bibitems = HashMap::from([("k".to_string(), "An entry.".to_string())]);
+        let mut reader =
+            Reader::new_with_bibitems(vec![Block::Line("prose".into())], 80, 24, bibitems);
+        reader.set_figure_preview_active(true);
+        assert!(reader.figure_preview_visible());
+
+        // Neither figures nor references → nothing to show, pane stays hidden.
+        let mut bare = Reader::new(vec![Block::Line("prose".into())], 80, 24);
+        bare.set_figure_preview_active(true);
+        assert!(!bare.figure_preview_visible());
+    }
 
     #[test]
     fn cursor_citation_resolves_entry_under_cursor() {

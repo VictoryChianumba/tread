@@ -285,6 +285,30 @@ fn render_table_group(
         }
     }
 
+    // Fit-to-width: if the table is wider than the terminal, shrink the
+    // widest columns (keeping a readable minimum) until it fits.  Cells
+    // that no longer fit truncate with `…` in `render_row_with_spans`, so
+    // the whole table stays on-screen and centred instead of clipping its
+    // right edge off the viewport.
+    {
+        const MIN_COL: usize = 4;
+        let edges = (if active_rules.contains(&0) { 2 } else { 0 })
+            + (if active_rules.contains(&n_active) { 2 } else { 0 });
+        let fixed = n_active.saturating_sub(1) * gap_width + edges;
+        let budget = terminal_width.saturating_sub(fixed);
+        while col_widths.iter().sum::<usize>() > budget {
+            // Shave the widest column still above the floor; stop when all
+            // columns are at the minimum (table can't shrink any further).
+            let Some(widest) = (0..n_active)
+                .filter(|&i| col_widths[i] > MIN_COL)
+                .max_by_key(|&i| col_widths[i])
+            else {
+                break;
+            };
+            col_widths[widest] -= 1;
+        }
+    }
+
     // Header zone: all Matrix blocks before the first Rule whose IMMEDIATE next Matrix
     // block is data-like (non-blank first col, all span=1).  Using "immediate" (first
     // Matrix found after the Rule) prevents looking past the sub-header row to data.
@@ -536,6 +560,34 @@ mod tests {
             matrix_lines.iter().any(|l| l.contains("1234")),
             "wide value should render in full, got {matrix_lines:?}"
         );
+    }
+
+    /// A table wider than the terminal shrinks its columns to fit, so no
+    /// line exceeds the terminal width (cells truncate instead of clipping).
+    #[test]
+    fn wide_table_shrinks_to_fit_terminal_width() {
+        let group = vec![Block::Matrix {
+            rows: vec![
+                vec![("a long header cell".into(), 1), ("another long header".into(), 1)],
+                vec![("data one here".into(), 1), ("data two here".into(), 1)],
+            ],
+            vertical_rules: vec![],
+            alignments: vec![],
+        }];
+        let mut out = Vec::new();
+        emit_table_group_lines(&mut out, &group, 0, 30); // natural width ~39 > 30
+        let max_w = out
+            .iter()
+            .filter(|vl| {
+                matches!(
+                    vl.kind,
+                    VisualLineKind::MatrixLine { .. } | VisualLineKind::Rule
+                )
+            })
+            .map(|vl| visual_width(&vl.text))
+            .max()
+            .unwrap();
+        assert!(max_w <= 30, "table should fit width 30, widest line is {max_w}");
     }
 
     /// Rule positions: 0 means left edge → 0 in active space; n_raw means

@@ -81,6 +81,7 @@ struct TableState {
     rows: Vec<Vec<(String, usize)>>,
     current_row: Vec<(String, usize)>,
     current_cell: String,
+    alignments: Vec<doc_model::Alignment>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -170,9 +171,21 @@ impl Walker {
             Tag::Link { dest_url, .. } => {
                 self.link_url = Some(dest_url.into_string());
             }
-            Tag::Table(_) => {
+            Tag::Table(aligns) => {
                 self.flush_pending();
-                self.table = Some(TableState::default());
+                let alignments = aligns
+                    .iter()
+                    .map(|a| match a {
+                        pulldown_cmark::Alignment::Right => doc_model::Alignment::Right,
+                        pulldown_cmark::Alignment::Center => doc_model::Alignment::Center,
+                        // Left and None (unspecified) both render left.
+                        _ => doc_model::Alignment::Left,
+                    })
+                    .collect();
+                self.table = Some(TableState {
+                    alignments,
+                    ..TableState::default()
+                });
             }
             Tag::TableHead | Tag::TableRow => {
                 if let Some(state) = self.table.as_mut() {
@@ -288,7 +301,7 @@ impl Walker {
                         self.blocks.push(Block::Matrix {
                             rows: state.rows,
                             vertical_rules: Vec::new(),
-                            alignments: Vec::new(), // not tracked yet; left-align
+                            alignments: state.alignments,
                         });
                         self.blocks.push(Block::Blank);
                     }
@@ -368,6 +381,24 @@ mod tests {
     #[test]
     fn empty_input_emits_nothing() {
         assert!(parse("").is_empty());
+    }
+
+    #[test]
+    fn table_alignment_spec_is_captured() {
+        let md = "| L | C | R |\n|:--|:-:|--:|\n| a | b | c |\n";
+        let blocks = parse(md);
+        let aligns = blocks.iter().find_map(|b| match b {
+            Block::Matrix { alignments, .. } => Some(alignments.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            aligns,
+            Some(vec![
+                doc_model::Alignment::Left,
+                doc_model::Alignment::Center,
+                doc_model::Alignment::Right,
+            ])
+        );
     }
 
     #[test]
