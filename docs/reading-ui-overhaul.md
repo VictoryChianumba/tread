@@ -47,7 +47,7 @@ Roughly by reading-experience leverage:
 ## Shipped
 
 ### Math wrapping — over-wide display equations wrap at the relation
-- **Commit:** `cd51f91`
+- **Commit:** `dc5e084`
 - **What:** a display-math row wider than the screen now wraps at spaces
   instead of overflowing. Continuation lines align under the right-hand
   side of the first relation (`=`, `≤`, `→`, …) and lead with the

@@ -43,7 +43,7 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ### Reading-UI overhaul (2026-05) — typography, panes, tables
 - **Commits:** `c0165d9`, `9d1d6cd` (six priorities + fixes); `1015adc`
-  (paragraph rhythm); `d5523f7` (preview-pane ratio); `cd51f91` (math
+  (paragraph rhythm); `d5523f7` (preview-pane ratio); `dc5e084` (math
   wrapping).
 - **What:** a multi-part pass on the reading experience — reading measure,
   heading hierarchy, inline-code/quote styling, contextual preview pane,
