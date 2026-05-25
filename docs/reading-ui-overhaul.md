@@ -36,7 +36,6 @@ within each section.
 
 Roughly by reading-experience leverage:
 
-- **Math wrapping** — long display equations overflow instead of wrapping.
 - **Theme semantic layer** — colour roles are low-level (`bg_code`,
   `link_fg`); no `heading` / `quote_bar` / `inline_code_bg` naming layer.
 - **Reading-comfort affordances** — line-spacing toggle, focus / sentence
@@ -46,6 +45,34 @@ Roughly by reading-experience leverage:
 ---
 
 ## Shipped
+
+### Math wrapping — over-wide display equations wrap at the relation
+- **Commit:** `cd51f91`
+- **What:** a display-math row wider than the screen now wraps at spaces
+  instead of overflowing. Continuation lines align under the right-hand
+  side of the first relation (`=`, `≤`, `→`, …) and lead with the
+  binary operator carried down from the previous line; the equation
+  number stays at the right edge of the final sub-line. Rows that fit are
+  centred as before.
+- **Why:** `math_render` emits a flat Unicode string per row; layout
+  centred each row but `center_line` returned over-wide rows unpadded, so
+  they ran off-screen. The `MathLine` kind's `block_width`/`is_first`/
+  `is_last` fields turned out to be vestigial (only layout writes them;
+  the renderer prints the pre-laid-out text), so wrapping one row into
+  several `MathLine`s is free of downstream effects.
+- **Style decision:** align-at-relation (chosen over a flat hanging
+  indent or no indent). Falls back to a fixed 4-space hang when there's
+  no relation or it sits too far right to leave a usable continuation
+  width. Heuristic edge: when the leading `=` is glued to a symbol (no
+  surrounding space) it isn't a standalone token, so alignment may land
+  on a later relation and over-indent — readable, not pretty. Breaking is
+  greedy-at-space; symbol clusters (sub/superscripts) carry no spaces so
+  they never split.
+- **Key files:** `doc-model/src/layout.rs` (`wrap_math_line`,
+  `relation_indent`, `MATH_*` consts, the `DisplayMath` arm).
+- **Tests:** +`display_math_wraps_overlong_line_at_relation`. Goldens
+  re-pinned (math content): differential-algebra 1677→1733, gaussian
+  1494→1495; Attention/GPT-3 unchanged.
 
 ### Preview-pane ratio — adjustable figure/text split
 - **Commit:** `d5523f7`

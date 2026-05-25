@@ -107,27 +107,40 @@ pub fn build_visual_lines(
 
             Block::DisplayMath { lines, num } => {
                 let block_width = lines.iter().map(|l| visual_width(l)).max().unwrap_or(0);
-                let n = lines.len();
-                for (li, line) in lines.iter().enumerate() {
-                    let mut centered = center_line(line, block_width, terminal_width);
-                    if li == n - 1
-                        && let Some(eq_num) = num {
-                            let tag = format!("({})", eq_num);
-                            let used = visual_width(&centered);
-                            let avail = terminal_width.saturating_sub(tag.len());
-                            if used < avail {
-                                centered.push_str(&" ".repeat(avail - used));
-                            }
-                            centered.push_str(&tag);
-                        }
+                // Expand each logical row into one or more rendered sub-lines:
+                // rows that fit are centred; over-wide rows wrap at the relation
+                // (see `wrap_math_line`) and break out to the full width.
+                let mut rendered: Vec<String> = Vec::with_capacity(lines.len());
+                for line in lines {
+                    if visual_width(line) <= terminal_width {
+                        rendered.push(center_line(line, block_width, terminal_width));
+                    } else {
+                        rendered.extend(wrap_math_line(line, terminal_width));
+                    }
+                }
+                // The equation number sits at the right edge of the final
+                // rendered sub-line.
+                if let Some(eq_num) = num
+                    && let Some(last) = rendered.last_mut()
+                {
+                    let tag = format!("({})", eq_num);
+                    let used = visual_width(last);
+                    let avail = terminal_width.saturating_sub(tag.len());
+                    if used < avail {
+                        last.push_str(&" ".repeat(avail - used));
+                    }
+                    last.push_str(&tag);
+                }
+                let total = rendered.len();
+                for (li, text) in rendered.into_iter().enumerate() {
                     out.push(VisualLine {
                         block_idx,
                         line_in_block: li,
-                        text: centered,
+                        text,
                         kind: VisualLineKind::MathLine {
                             block_width,
                             is_first: li == 0,
-                            is_last: li == n - 1,
+                            is_last: li + 1 == total,
                         },
                         block_byte_start: 0,
                         block_byte_end: 0,
@@ -296,6 +309,104 @@ fn center_line(line: &str, block_width: usize, terminal_width: usize) -> String 
     format!("{}{}", " ".repeat(pad), line)
 }
 
+/// Fallback continuation indent for a wrapped equation with no usable
+/// relation to align on.
+const MATH_HANG: usize = 4;
+/// Minimum width a continuation line must keep; if aligning at the
+/// relation would leave less, fall back to the hanging indent.
+const MATH_MIN_CONT: usize = 8;
+
+/// Relation operators a wrapped equation aligns its continuations under
+/// (continuation lines start just past the first one).  Rendered forms
+/// after `strip_latex`, space-delimited as their own tokens.
+const MATH_RELATIONS: &[&str] = &[
+    "=", "≠", "≤", "≥", "<", ">", "≈", "≡", "≜", "→", "⟶", "⇒", "⟹", "∝", "∼", "↦",
+];
+/// Binary operators that, if they'd be left dangling at a line end, are
+/// carried down to start the continuation line instead.
+const MATH_BINARY_OPS: &[&str] = &[
+    "+", "−", "-", "±", "∓", "×", "⋅", "·", "∪", "∩", "⊕", "⊗", "∨", "∧",
+];
+
+/// Continuation indent for wrapping `tokens`: the column just past the
+/// first relation operator (so the right-hand side lines up), or
+/// [`MATH_HANG`] when there's no relation or it sits too far right to
+/// leave a usable continuation width.
+fn relation_indent(tokens: &[&str], width: usize) -> usize {
+    let cap = width.saturating_sub(MATH_MIN_CONT);
+    if let Some(idx) = tokens.iter().position(|t| MATH_RELATIONS.contains(t)) {
+        // visual width of "lhs … rel" plus the space before the RHS.
+        let prefix: usize = tokens[..=idx]
+            .iter()
+            .map(|t| visual_width(t))
+            .sum::<usize>()
+            + idx // single spaces joining tokens[0..=idx]
+            + 1; // the space after the relation
+        if prefix <= cap {
+            return prefix;
+        }
+    }
+    MATH_HANG.min(cap)
+}
+
+/// Wrap an over-wide display-math line at spaces, aligning continuation
+/// lines under the right-hand side of the first relation (see
+/// [`relation_indent`]).  A binary operator that would be left dangling
+/// at a line end is carried down so the continuation leads with it.  A
+/// single token wider than the budget is emitted as-is (we never break
+/// inside a symbol cluster).
+fn wrap_math_line(line: &str, width: usize) -> Vec<String> {
+    let tokens: Vec<&str> = line.split(' ').filter(|t| !t.is_empty()).collect();
+    if tokens.is_empty() {
+        return vec![String::new()];
+    }
+    let indent = relation_indent(&tokens, width);
+    let cont_width = width.saturating_sub(indent).max(1);
+
+    let mut lines: Vec<Vec<&str>> = vec![Vec::new()];
+    let mut cur_w = 0usize;
+    for &tok in &tokens {
+        let tw = visual_width(tok);
+        let avail = if lines.len() == 1 { width } else { cont_width };
+        let cur = lines.last_mut().unwrap();
+        if cur.is_empty() {
+            cur.push(tok);
+            cur_w = tw;
+        } else if cur_w + 1 + tw <= avail {
+            cur.push(tok);
+            cur_w += 1 + tw;
+        } else {
+            // Carry a dangling binary operator down to the new line so
+            // the continuation reads as "+ …" rather than orphaning it.
+            let carry = cur
+                .last()
+                .is_some_and(|t| MATH_BINARY_OPS.contains(t))
+                .then(|| cur.pop().unwrap());
+            let mut next = Vec::new();
+            if let Some(op) = carry {
+                next.push(op);
+            }
+            next.push(tok);
+            cur_w = next.iter().map(|t| visual_width(t)).sum::<usize>()
+                + next.len().saturating_sub(1);
+            lines.push(next);
+        }
+    }
+
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, toks)| {
+            let body = toks.join(" ");
+            if i == 0 {
+                body
+            } else {
+                format!("{}{}", " ".repeat(indent), body)
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,5 +538,50 @@ mod tests {
             "centered prefix wrong, got {:?}",
             pre_tag
         );
+    }
+
+    /// An over-wide equation wraps at spaces; continuation lines align
+    /// under the right-hand side of the relation (here `=`, at column 7),
+    /// lead with the carried-down operator, and the equation number lands
+    /// on the final sub-line.
+    #[test]
+    fn display_math_wraps_overlong_line_at_relation() {
+        let block = Block::DisplayMath {
+            lines: vec!["f(x) = a + b + c + d + e + g".into()],
+            num: Some(3),
+        };
+        // Width 20 forces a wrap; "f(x) = " is 7 cells wide.
+        let out = build_visual_lines(std::slice::from_ref(&block), 20, 20, 24);
+        assert!(out.len() >= 2, "over-wide line should wrap, got {out:?}");
+
+        // First sub-line is flush-left (no centering — it doesn't fit).
+        assert!(!out[0].text.starts_with(' '));
+        assert!(out[0].text.starts_with("f(x) = "));
+
+        // Continuation aligns under the RHS (7 spaces) and leads with the
+        // binary operator carried down from the previous line.
+        let cont = &out[1];
+        assert!(
+            cont.text.starts_with(&" ".repeat(7)),
+            "continuation should align at the relation, got {:?}",
+            cont.text
+        );
+        assert!(
+            cont.text.trim_start().starts_with('+'),
+            "continuation should lead with the operator, got {:?}",
+            cont.text
+        );
+
+        // All sub-lines are MathLine; first/last flags bracket the block.
+        assert!(matches!(
+            out[0].kind,
+            VisualLineKind::MathLine { is_first: true, .. }
+        ));
+        let last = out.last().unwrap();
+        assert!(matches!(
+            last.kind,
+            VisualLineKind::MathLine { is_last: true, .. }
+        ));
+        assert!(last.text.ends_with("(3)"), "eq number on last sub-line, got {:?}", last.text);
     }
 }

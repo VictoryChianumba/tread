@@ -43,13 +43,14 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ### Reading-UI overhaul (2026-05) — typography, panes, tables
 - **Commits:** `c0165d9`, `9d1d6cd` (six priorities + fixes); `1015adc`
-  (paragraph rhythm); `d5523f7` (preview-pane ratio).
+  (paragraph rhythm); `d5523f7` (preview-pane ratio); `cd51f91` (math
+  wrapping).
 - **What:** a multi-part pass on the reading experience — reading measure,
   heading hierarchy, inline-code/quote styling, contextual preview pane,
   full-screen contents view, table column alignment, paragraph-rhythm
-  normalization, and an adjustable preview-pane ratio.
+  normalization, adjustable preview-pane ratio, and display-math wrapping.
 - **Why / per-item detail:** see the deep-dive at
   [`docs/reading-ui-overhaul.md`](reading-ui-overhaul.md), which carries
   the what/why/files/test-deltas for each item.
-- **Remaining:** math wrapping, theme semantic layer, reading-comfort
-  affordances, TOC collapse/resize.
+- **Remaining:** theme semantic layer, reading-comfort affordances, TOC
+  collapse/resize.

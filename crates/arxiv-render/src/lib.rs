@@ -350,7 +350,9 @@ mod golden_tests {
         const ID: &str = "1707.09763";
         const EXPECTED_BLOCKS: usize = 530;
         // 1679 → 1677: normalize_blank_rhythm leading-trim + gap collapse.
-        const EXPECTED_VISUAL_LINES: usize = 1677;
+        // 1677 → 1733: over-wide display equations now wrap at the relation
+        // instead of overflowing (this paper is math-heavy).
+        const EXPECTED_VISUAL_LINES: usize = 1733;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 
@@ -403,7 +405,8 @@ mod golden_tests {
         // 1496 → 1500 when headings gained a leading blank line for
         // vertical breathing room (+4 headers lacked a preceding blank).
         // 1500 → 1494: normalize_blank_rhythm leading-trim + gap collapse.
-        const EXPECTED_VISUAL_LINES: usize = 1494;
+        // 1494 → 1495: one over-wide display equation now wraps at the relation.
+        const EXPECTED_VISUAL_LINES: usize = 1495;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 

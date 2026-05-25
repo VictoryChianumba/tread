@@ -154,10 +154,10 @@ Pinned papers and their EXPECTED counts (Pandoc-fallback path):
 
 | arXiv ID | Test | Blocks | Visual lines | Stress |
 |---|---|---:|---:|---|
-| 1706.03762 | `attention_parse_and_layout_golden` | 379 | 675 | Tables (Table 3 `c\|ccccccccc\|ccc`), 5 figures, external `\bibliography{}` (no .bib in tarball) |
-| 2005.14165 | `gpt3_parse_and_layout_golden` | 1422 | 3138 | 50+ source-file `\input{}` resolution |
-| 1707.09763 | `differential_algebra_parse_and_layout_golden` | 530 | 1679 | Math-heavy (≥30 numbered DisplayMath) |
-| 2605.04035 | `gaussian_head_parse_and_layout_golden` | 789 | 1496 | External `\bibliography{}` WITH `.bib` shipped — pins the B3a bib-reader path (References auto-append from `bibtex::extract_bibtex_entries`) |
+| 1706.03762 | `attention_parse_and_layout_golden` | 379 | 676 | Tables (Table 3 `c\|ccccccccc\|ccc`), 5 figures, external `\bibliography{}` (no .bib in tarball) |
+| 2005.14165 | `gpt3_parse_and_layout_golden` | 1422 | 3134 | 50+ source-file `\input{}` resolution |
+| 1707.09763 | `differential_algebra_parse_and_layout_golden` | 530 | 1733 | Math-heavy (≥30 numbered DisplayMath); exercises display-math wrapping |
+| 2605.04035 | `gaussian_head_parse_and_layout_golden` | 789 | 1495 | External `\bibliography{}` WITH `.bib` shipped — pins the B3a bib-reader path (References auto-append from `bibtex::extract_bibtex_entries`) |
 
 When parser or layout changes shift the counts intentionally, bump the per-test EXPECTED_BLOCKS / EXPECTED_VISUAL_LINES constants and note the new baseline in the ADR that justified the change.  The shared `parse_and_check_block_count` + `assert_visual_line_count` helpers in the module keep new-paper additions short.
 
