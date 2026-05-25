@@ -1,0 +1,17 @@
+#!/bin/sh
+# Non-blocking reminder: if a commit touches code under crates/ but not
+# the dev changelog, nudge the author to add an entry. Never blocks the
+# commit — trivial changes can ignore it.
+#
+# Enable per clone:  git config core.hooksPath .githooks
+
+staged=$(git diff --cached --name-only)
+touches_code=$(printf '%s\n' "$staged" | grep -E '^crates/.*\.rs$')
+touches_changelog=$(printf '%s\n' "$staged" | grep -F 'docs/changelog.md')
+
+if [ -n "$touches_code" ] && [ -z "$touches_changelog" ]; then
+  printf '\033[33m[changelog reminder]\033[0m commit touches crates/ but not docs/changelog.md.\n' 1>&2
+  printf '  Notable work? Add an entry (see docs/changelog.md). Trivial change? Ignore this.\n' 1>&2
+fi
+
+exit 0

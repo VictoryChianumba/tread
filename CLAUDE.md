@@ -2,6 +2,14 @@
 
 Local working notes for the dev workflow of this repo. Companion to `features.md` (user-facing) and `todo.md` (working notes).
 
+## Record-keeping (read this before committing)
+
+`docs/changelog.md` is the canonical, repo-visible dev log. **When you ship notable work — a feature, an architecture/refactor decision, or any change whose *why* isn't obvious from the diff — add an entry to `docs/changelog.md` in the same commit** (the "docs in lockstep" rule). Use the template at the top of that file. Trivial changes (typos, formatting, dep bumps) don't need an entry.
+
+Keep entries self-contained: `todo.md` and `v2.md` are **gitignored** (local working notes only), so don't reference them for anyone reading a fresh checkout. A large multi-part workstream may keep its own deep-dive doc (e.g. `docs/reading-ui-overhaul.md`) and have `changelog.md` point at it.
+
+A non-blocking `.githooks/pre-commit` reminder prints when a commit touches `crates/` but not the changelog. Enable it once per clone: `git config core.hooksPath .githooks`.
+
 ## Workspace layout
 
 ```
