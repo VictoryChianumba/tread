@@ -67,7 +67,11 @@ pub fn draw(frame: &mut Frame, area: Rect, reader: &Reader, t: &Theme) {
 /// Returns `(reader_area, preview_area)`.  When the preview is off
 /// or the document has no figures, `preview_area` is `None` and
 /// `reader_area` matches the input — the legacy single-pane layout.
-/// When on, splits the area horizontally 60/40 (text : figure).
+/// When on, the figure pane takes `reader.preview_pane_percent()` of
+/// the width (default 40) and the reader text pane the rest.  That
+/// percentage is the single source of truth for the split: the reflow
+/// width (`content_width_for`) derives the reader column from the same
+/// field, so the wrapped text and this draw Rect can't drift apart.
 ///
 /// Used by both `render::draw` (to size the reader content area) and
 /// `lib::after_draw` (to find where `place_one_figure` should paint).
@@ -77,9 +81,13 @@ pub fn split_content_for_preview(area: Rect, reader: &Reader) -> (Rect, Option<R
     if !reader.figure_preview_visible() {
         return (reader_text_area(area), None);
     }
+    let figure_pct = reader.preview_pane_percent() as u16;
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .constraints([
+            Constraint::Percentage(100 - figure_pct),
+            Constraint::Percentage(figure_pct),
+        ])
         .split(area);
     (reader_text_area(cols[0]), Some(cols[1]))
 }

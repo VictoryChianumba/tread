@@ -56,7 +56,7 @@ Small word: alphanumeric + `_`. BIG word: any non-whitespace run.
 
 | Key | Action |
 |---|---|
-| `i` | Toggle figure-preview side pane (60/40 reader+figure split). Sticky default persisted in `block_reader.json`. |
+| `i` | Toggle figure-preview side pane (reader+figure split; figure pane defaults to 40%, adjustable via `:set preview=<n>`). Sticky default persisted in `block_reader.json`. |
 | `]f` | Step to next figure |
 | `[f` | Step to previous figure |
 
@@ -189,6 +189,7 @@ Press `:` to open the command bar. Type, then `Enter` to execute or `Esc` to can
 | `:references` | `:bib`, `:r` | Jump to References / Bibliography |
 | `:set theme=<id>` | — | Change theme (see [Themes](#themes) below) |
 | `:set width=<n>` | — | Cap the body-text reading column at `<n>` cells (centred); `0` / `off` flows edge-to-edge. Default `72`. Persists. |
+| `:set preview=<n>` | — | Give the figure-preview pane `<n>`% of the width (`20`–`70`); the reader text gets the rest. Default `40`. Persists. |
 | `:marks` | — | Popup listing all set marks with their lines and snippets |
 | `:delmarks <letter>` | `:dm` | Delete one or more marks |
 | `:highlights` | `:hl` | Popup listing all highlights in this paper |

@@ -35,6 +35,12 @@ pub struct ReaderConfig {
     /// without this field opt into it.
     #[serde(default = "default_max_measure")]
     pub max_measure: usize,
+    /// Share of the content area the figure-preview pane occupies when
+    /// open, as a percentage.  Set via `:set preview=N`.  Both a missing
+    /// file and a missing field resolve to `DEFAULT_PREVIEW_PANE_PERCENT`
+    /// so older configs keep the original 40/60 split.
+    #[serde(default = "default_preview_pane_percent")]
+    pub preview_pane_percent: usize,
     /// Voice / TTS settings.  `None` (or missing in JSON) means use
     /// defaults (macOS `say` with the "Samantha" voice).  The
     /// `ELEVENLABS_API_KEY` is **environment-only** and never lands here.
@@ -89,6 +95,10 @@ fn default_max_measure() -> usize {
     crate::state::DEFAULT_MAX_MEASURE
 }
 
+fn default_preview_pane_percent() -> usize {
+    crate::state::DEFAULT_PREVIEW_PANE_PERCENT
+}
+
 impl Default for ReaderConfig {
     // Manual (not derived) so a missing config file resolves `max_measure`
     // to DEFAULT_MAX_MEASURE rather than usize's 0 (which would read as
@@ -99,6 +109,7 @@ impl Default for ReaderConfig {
             voice: None,
             figure_preview_default: false,
             max_measure: default_max_measure(),
+            preview_pane_percent: default_preview_pane_percent(),
         }
     }
 }
@@ -160,6 +171,7 @@ mod tests {
             voice: None,
             figure_preview_default: false,
             max_measure: 72,
+            preview_pane_percent: 40,
         };
         let json = serde_json::to_string(&c).unwrap();
         let back: ReaderConfig = serde_json::from_str(&json).unwrap();
@@ -194,6 +206,7 @@ mod tests {
             }),
             figure_preview_default: false,
             max_measure: 72,
+            preview_pane_percent: 40,
         };
         let json = serde_json::to_string(&c).unwrap();
         let back: ReaderConfig = serde_json::from_str(&json).unwrap();
@@ -227,6 +240,7 @@ mod tests {
             voice: None,
             figure_preview_default: true,
             max_measure: 72,
+            preview_pane_percent: 40,
         };
         let json = serde_json::to_string(&c).unwrap();
         let back: ReaderConfig = serde_json::from_str(&json).unwrap();
@@ -254,5 +268,30 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         let back: ReaderConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.max_measure, 0);
+    }
+
+    #[test]
+    fn preview_pane_percent_defaults_when_field_absent() {
+        // Older configs without the field keep the original 40/60 split.
+        let back: ReaderConfig = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(
+            back.preview_pane_percent,
+            crate::state::DEFAULT_PREVIEW_PANE_PERCENT
+        );
+        assert_eq!(
+            ReaderConfig::default().preview_pane_percent,
+            crate::state::DEFAULT_PREVIEW_PANE_PERCENT
+        );
+    }
+
+    #[test]
+    fn preview_pane_percent_round_trips() {
+        let c = ReaderConfig {
+            preview_pane_percent: 50,
+            ..ReaderConfig::default()
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        let back: ReaderConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.preview_pane_percent, 50);
     }
 }

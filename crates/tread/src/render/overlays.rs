@@ -343,7 +343,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
                 (":goto <N|text>", "jump to section"),
                 (":abstract", "jump to abstract"),
                 (":references", "jump to references"),
-                (":set theme/width", "theme · reading column width"),
+                (":set <opt>=<v>", "theme · width · preview pane %"),
                 (":marks  :highlights", "inspect marks / highlights"),
                 (":about  :url  :cite", "metadata / copy URL / copy BibTeX"),
                 (":open  :reload  :q", "open / reload / quit"),

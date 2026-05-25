@@ -243,6 +243,7 @@ fn cmd_set(reader: &mut Reader, args: &[&str]) -> ReaderAction {
   match key {
     "theme" => set_theme(value),
     "width" => set_width(reader, value),
+    "preview" => set_preview(reader, value),
     other => ReaderAction::Error(format!("set: unknown option: {other}")),
   }
 }
@@ -271,6 +272,32 @@ fn set_width(reader: &mut Reader, value: &str) -> ReaderAction {
   reader.set_max_measure(measure);
   let mut cfg = config::load();
   cfg.max_measure = measure;
+  config::save(&cfg);
+  ReaderAction::Continue
+}
+
+/// `:set preview=N` — give the figure-preview pane N% of the content
+/// area (the reader text pane gets the rest).  Reflows immediately when
+/// the pane is open and persists the choice to `block_reader.json`.
+fn set_preview(reader: &mut Reader, value: &str) -> ReaderAction {
+  const MIN_PCT: usize = 20;
+  const MAX_PCT: usize = 70;
+  let pct = match value.parse::<usize>() {
+    Ok(n) => n,
+    Err(_) => {
+      return ReaderAction::Error(format!(
+        "set preview: expected a percentage {MIN_PCT}-{MAX_PCT}, got: {value}"
+      ));
+    }
+  };
+  if !(MIN_PCT..=MAX_PCT).contains(&pct) {
+    return ReaderAction::Error(format!(
+      "set preview: percentage must be {MIN_PCT}-{MAX_PCT}"
+    ));
+  }
+  reader.set_preview_pane_percent(pct);
+  let mut cfg = config::load();
+  cfg.preview_pane_percent = pct;
   config::save(&cfg);
   ReaderAction::Continue
 }

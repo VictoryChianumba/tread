@@ -27,7 +27,10 @@ pub use figures::{
 };
 
 pub const TOC_WIDTH: usize = 28;
-const PREVIEW_TEXT_PERCENT: usize = 60;
+/// Default share of the split given to the figure-preview pane, as a
+/// percentage (the reader text pane gets the complement).  Adjustable at
+/// runtime via `:set preview=N` (`set_preview_pane_percent`).
+pub(crate) const DEFAULT_PREVIEW_PANE_PERCENT: usize = 40;
 const READER_VERTICAL_MARGIN: usize = 2;
 const READER_VERTICAL_MARGIN_MIN_HEIGHT: usize = 8;
 
@@ -329,6 +332,15 @@ pub struct Reader {
     /// `:set width=N` (`set_max_measure`).  Private so writes go through
     /// the setter, which reflows; read via `Reader::max_measure()`.
     max_measure: usize,
+    /// Share of the content area given to the figure-preview pane when
+    /// it's open, as a percentage (the reader text pane gets the rest).
+    /// Defaults to [`DEFAULT_PREVIEW_PANE_PERCENT`]; hydrated from config
+    /// in `init` and changed at runtime via `:set preview=N`
+    /// (`set_preview_pane_percent`).  Single source of truth for both the
+    /// reflow width (`content_width_for`) and the draw-time split
+    /// (`split_content_for_preview`).  Private so writes go through the
+    /// setter, which reflows; read via `Reader::preview_pane_percent()`.
+    preview_pane_percent: usize,
     pub search_query: String,
     /// Visual-line indices of `/`-search matches.  Private; writes
     /// happen via `update_search_matches` / `remap_search_matches_after_layout`
@@ -530,7 +542,7 @@ impl Reader {
         let figure_preview_active = false;
         let text_only = false;
         let current_figure: Option<usize> = None;
-        let cw = content_width_for(width, false, false);
+        let cw = content_width_for(width, false, false, DEFAULT_PREVIEW_PANE_PERCENT);
         let prose_width = if DEFAULT_MAX_MEASURE > 0 {
             DEFAULT_MAX_MEASURE.min(cw)
         } else {
@@ -570,6 +582,7 @@ impl Reader {
             width,
             height,
             max_measure: DEFAULT_MAX_MEASURE,
+            preview_pane_percent: DEFAULT_PREVIEW_PANE_PERCENT,
             search_query: String::new(),
             search_matches: Vec::new(),
             search_idx: 0,
@@ -657,6 +670,9 @@ impl Reader {
         // Apply the persisted reading measure.  Only reflows when it
         // differs from the constructor's DEFAULT_MAX_MEASURE.
         reader.set_max_measure(cfg.max_measure);
+        // Apply the persisted preview-pane split (no reflow here — the
+        // preview pane isn't visible yet at init).
+        reader.set_preview_pane_percent(cfg.preview_pane_percent);
 
         if let Some(ref key) = progress_key {
             let map = crate::progress::load();
@@ -948,7 +964,12 @@ impl Reader {
     /// and the draw area span this; prose wraps to the narrower
     /// [`prose_width`](Self::prose_width).
     pub fn content_width(&self) -> usize {
-        content_width_for(self.width, self.toc_visible, self.preview_layout_active())
+        content_width_for(
+            self.width,
+            self.toc_visible,
+            self.preview_layout_active(),
+            self.preview_pane_percent,
+        )
     }
 
     /// Width body prose wraps to: the reading measure capped by the
@@ -970,6 +991,13 @@ impl Reader {
     /// column inside the full content width.
     pub fn max_measure(&self) -> usize {
         self.max_measure
+    }
+
+    /// Percentage of the content area the figure-preview pane occupies
+    /// when open (the reader text pane gets the rest).  Read by the
+    /// renderer to size the split.  Changed via `:set preview=N`.
+    pub fn preview_pane_percent(&self) -> usize {
+        self.preview_pane_percent
     }
 
     /// The link the cursor currently sits on, if any.  Walks the spans of
@@ -1017,6 +1045,31 @@ impl Reader {
         }
         let anchor = ReflowAnchor::capture(self);
         self.max_measure = measure;
+        self.rebuild_layout(LayoutRebuildReason::Resize);
+        if let Some(anchor) = anchor
+            && anchor.restore(self)
+        {
+            return;
+        }
+        self.clamp_position();
+    }
+
+    /// Set the figure-preview pane's share of the content area (percent)
+    /// and reflow.  `:set preview=N` routes here.  Only reflows when the
+    /// preview pane is actually visible (otherwise the width is unchanged);
+    /// preserves the on-screen source position across the reflow, mirroring
+    /// `set_max_measure`.
+    pub fn set_preview_pane_percent(&mut self, percent: usize) {
+        if self.preview_pane_percent == percent {
+            return;
+        }
+        // No visible split → just record it for next time it opens.
+        if !self.preview_layout_active() {
+            self.preview_pane_percent = percent;
+            return;
+        }
+        let anchor = ReflowAnchor::capture(self);
+        self.preview_pane_percent = percent;
         self.rebuild_layout(LayoutRebuildReason::Resize);
         if let Some(anchor) = anchor
             && anchor.restore(self)
@@ -1445,7 +1498,12 @@ impl Reader {
 /// tables, figures, display math and the draw area use.  The narrower
 /// reading measure for prose is derived separately by
 /// `Reader::prose_width`.
-fn content_width_for(terminal_width: usize, toc_visible: bool, preview_visible: bool) -> usize {
+fn content_width_for(
+    terminal_width: usize,
+    toc_visible: bool,
+    preview_visible: bool,
+    preview_pane_percent: usize,
+) -> usize {
     let content_width = if toc_visible {
         // +1 for the border column.
         terminal_width.saturating_sub(TOC_WIDTH + 1)
@@ -1453,7 +1511,8 @@ fn content_width_for(terminal_width: usize, toc_visible: bool, preview_visible: 
         terminal_width
     };
     if preview_visible {
-        content_width.saturating_mul(PREVIEW_TEXT_PERCENT) / 100
+        // The reader text pane gets the complement of the preview pane.
+        content_width.saturating_mul(100 - preview_pane_percent) / 100
     } else {
         content_width
     }
@@ -1996,6 +2055,30 @@ mod tests {
                 .map(|vl| vl.text.chars().count()),
             Some(reader.content_width()),
             "preview mode should wrap text to the left reader pane"
+        );
+    }
+
+    #[test]
+    fn set_preview_pane_percent_resizes_reader_pane() {
+        let mut blocks = doc_with_one_image();
+        blocks.insert(0, Block::Rule);
+        let mut reader = Reader::new(blocks, 100, 24);
+        reader.set_figure_preview_active(true);
+        // Default figure pane is 40% → reader text pane is 60 of 100.
+        assert_eq!(reader.preview_pane_percent(), DEFAULT_PREVIEW_PANE_PERCENT);
+        assert_eq!(reader.content_width(), 60);
+
+        // Widen the figure pane to 50% → reader text pane shrinks to 50.
+        reader.set_preview_pane_percent(50);
+        assert_eq!(reader.content_width(), 50);
+        // Reflowed: the rule line tracks the narrower reader pane.
+        assert_eq!(
+            reader
+                .visual_lines
+                .iter()
+                .find(|vl| matches!(vl.kind, VisualLineKind::Rule))
+                .map(|vl| vl.text.chars().count()),
+            Some(50),
         );
     }
 
