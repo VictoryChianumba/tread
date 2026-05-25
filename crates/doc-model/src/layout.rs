@@ -251,6 +251,39 @@ pub fn build_visual_lines(
         i += 1;
     }
 
+    normalize_blank_rhythm(out)
+}
+
+/// Normalize vertical rhythm: collapse runs of blank lines to a single
+/// blank and trim leading/trailing blanks, so inter-block spacing is
+/// exactly one line regardless of how many `Block::Blank`s a given parser
+/// emitted (the two parsers don't agree, and the header path already had
+/// to dedupe against them — see `Block::Header` above).  This pass only
+/// *removes* redundant blanks; it never inserts, so the header's
+/// layout-inserted leading gap is preserved.  A blank flanked by content
+/// on both sides (e.g. a multi-panel figure's inter-panel separator) is
+/// never consecutive with another blank, so it survives untouched.
+fn normalize_blank_rhythm(lines: Vec<VisualLine>) -> Vec<VisualLine> {
+    let mut out: Vec<VisualLine> = Vec::with_capacity(lines.len());
+    for vl in lines {
+        if matches!(vl.kind, VisualLineKind::Blank) {
+            // Drop when nothing precedes (leading) or the previous emitted
+            // line is already blank (collapse the run to one).
+            let redundant = out
+                .last()
+                .is_none_or(|prev| matches!(prev.kind, VisualLineKind::Blank));
+            if redundant {
+                continue;
+            }
+        }
+        out.push(vl);
+    }
+    if out
+        .last()
+        .is_some_and(|prev| matches!(prev.kind, VisualLineKind::Blank))
+    {
+        out.pop(); // trailing blank
+    }
     out
 }
 
@@ -291,11 +324,14 @@ mod tests {
         ));
     }
 
-    /// No doubled gap when the previous line is already blank, and an
-    /// unnumbered header carries `number: None`.
+    /// No doubled gap when a blank already precedes the header, and an
+    /// unnumbered header carries `number: None`.  (Content leads so the
+    /// blank isn't trimmed as a leading blank — that case is covered by
+    /// `normalize_collapses_runs_and_trims_edges`.)
     #[test]
     fn header_dedupes_existing_blank_and_allows_no_number() {
         let blocks = vec![
+            Block::Line("body".into()),
             Block::Blank,
             Block::Header {
                 level: 1,
@@ -304,12 +340,38 @@ mod tests {
             },
         ];
         let out = build_visual_lines(&blocks, 40, 40, 24);
-        // blank, header — no extra blank inserted.
-        assert_eq!(out.len(), 2);
+        // body, blank, header — exactly one blank, no extra inserted.
+        assert_eq!(out.len(), 3);
+        assert!(matches!(out[1].kind, VisualLineKind::Blank));
         assert!(matches!(
-            out[1].kind,
+            out[2].kind,
             VisualLineKind::Header { number: None, .. }
         ));
+    }
+
+    /// Rhythm normalization: a leading blank is dropped, runs of blanks
+    /// collapse to one, and the trailing blank is trimmed — so spacing
+    /// between blocks is exactly one line whatever the parser emitted.
+    #[test]
+    fn normalize_collapses_runs_and_trims_edges() {
+        let blocks = vec![
+            Block::Blank, // leading — dropped
+            Block::Line("one".into()),
+            Block::Blank,
+            Block::Blank, // run of 2 — collapses to 1
+            Block::Line("two".into()),
+            Block::Blank, // trailing — trimmed
+        ];
+        let out = build_visual_lines(&blocks, 40, 40, 24);
+        let kinds: Vec<_> = out
+            .iter()
+            .map(|vl| matches!(vl.kind, VisualLineKind::Blank))
+            .collect();
+        // one, blank, two — no leading/trailing blank, single gap.
+        assert_eq!(out.len(), 3);
+        assert_eq!(kinds, vec![false, true, false]);
+        assert_eq!(out[0].text, "one");
+        assert_eq!(out[2].text, "two");
     }
 
     /// DisplayMath blocks emit one VL per line; every line is centered;

@@ -40,8 +40,7 @@ Given an arXiv ID or URL, the reader:
 - **Visual mode** — `v` (char) and `V` (line) selection; `y` yanks to clipboard via OSC 52, `H` commits as a persistent highlight.
 - **Text objects** — vim-style `yi<obj>` / `ya<obj>` for word, quote, paren/bracket/brace pair, paragraph, and sentence. `yy` yanks the current line.
 - **Cross-reference jumping** — section/figure/table refs and citations render with the link colour and an underline. `Enter` on one jumps to the target (one line above so the target is fully visible); `Ctrl+O` rewinds. `K` (or `Shift+Enter` on supporting terminals) shows a citation's bib entry in a popup without leaving your reading position. Phrases like "Table 3" and "Section 6.2" are styled as a whole, not just the number.
-- **Contextual preview pane** — with the side pane open (`i`), it follows the cursor: land on a citation and it shows that reference; land on a `\ref{fig:N}` and it shows that figure. When the cursor isn't on a cross-reference it falls back to the manually-browsed figure (`]f` / `[f` still step through figures).
-- **Search** — `/` forward, `*` to search the word under the cursor, `n` / `N` to step.
+- **Contextual preview pane** — with the side pane open (`i`), it follows the cursor: land on a citation and it shows that reference; land on a `\ref{fig:N}` and it shows that figure. When the cursor isn't on a cross-reference it falls back to the manually-browsed figure (`]f` / `[f` still step through figures).- **Search** — `/` forward, `*` to search the word under the cursor, `n` / `N` to step.
 - **Bookmarks (vim-style marks)** — `m{a}` to set, `'{a}` / `` `{a} `` to jump. Letter-keyed slots `a..z`. Marked lines tinted amber.
 - **Persistent character-range highlights** — `H` in visual mode commits a selection as a highlight; `X` removes the one under the cursor. Stored at block-byte granularity so they survive terminal resize.
 - **Command mode** — `:` opens an Ex-style command bar (see [hotkeys.md](hotkeys.md) for the command list). Includes `:reload` to re-fetch + re-parse the current paper while preserving cursor / scroll / bookmarks / highlights.
@@ -49,6 +48,7 @@ Given an arXiv ID or URL, the reader:
 - **Themes** — 16 built-in themes (Dark, Light, AMOLED, Solarized, Gruvbox, Nord, Tokyo Night, Catppuccin Mocha, Powder family). `:set theme=<id>` switches at runtime; `:set theme=trench` syncs with the trench feed UI's theme.
 - **Reading measure** — body prose wraps to a comfortable column (default 72 cells) centred on wide terminals, while tables, figures and display math break out to the full width so they're never clipped. `:set width=<n>` adjusts the prose column; `:set width=0` (or `off`) disables the cap. Persists across sessions.
 - **Section headings** — every heading gets a blank line above it for breathing room while scrolling. Numbered sections show their number (`2  Background`, `2.1  …`); numbering is consistent across both parser paths and feeds the TOC and `:goto 3.2`. The paper title, Abstract, and References stay unnumbered.
+- **Paragraph rhythm** — spacing between blocks is normalised at layout time to exactly one blank line, regardless of how many the source parser emitted; leading and trailing blank lines are trimmed. The rhythm reads the same on every paper and on both parser paths.
 - **Inline code & block quotes** — inline `code` spans get a subtle background "pill" so they stand out from prose instead of blending in. Block quotes lead with a coloured left rule bar (`▌`) and dimmed italic text rather than a bare indent.
 
 ## Voice / TTS

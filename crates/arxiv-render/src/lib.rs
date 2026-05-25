@@ -184,7 +184,9 @@ mod golden_tests {
         /// `cargo run -p arxiv-render -- 1706.03762` produces on stdout).
         /// 675 → 678 when headings gained a leading blank line for
         /// vertical breathing room (+3 headers lacked a preceding blank).
-        const EXPECTED_VISUAL_LINES: usize = 678;
+        /// 678 → 676 when `normalize_blank_rhythm` trimmed the leading
+        /// blank and collapsed doubled inter-block gaps to one.
+        const EXPECTED_VISUAL_LINES: usize = 676;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 
@@ -280,7 +282,9 @@ mod golden_tests {
     fn gpt3_parse_and_layout_golden() {
         const ID: &str = "2005.14165";
         const EXPECTED_BLOCKS: usize = 1422;
-        const EXPECTED_VISUAL_LINES: usize = 3138;
+        // 3138 → 3134: normalize_blank_rhythm trimmed the leading blank +
+        // collapsed doubled inter-block gaps.
+        const EXPECTED_VISUAL_LINES: usize = 3134;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 
@@ -345,7 +349,8 @@ mod golden_tests {
     fn differential_algebra_parse_and_layout_golden() {
         const ID: &str = "1707.09763";
         const EXPECTED_BLOCKS: usize = 530;
-        const EXPECTED_VISUAL_LINES: usize = 1679;
+        // 1679 → 1677: normalize_blank_rhythm leading-trim + gap collapse.
+        const EXPECTED_VISUAL_LINES: usize = 1677;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 
@@ -397,7 +402,8 @@ mod golden_tests {
         const EXPECTED_BLOCKS: usize = 789;
         // 1496 → 1500 when headings gained a leading blank line for
         // vertical breathing room (+4 headers lacked a preceding blank).
-        const EXPECTED_VISUAL_LINES: usize = 1500;
+        // 1500 → 1494: normalize_blank_rhythm leading-trim + gap collapse.
+        const EXPECTED_VISUAL_LINES: usize = 1494;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 
