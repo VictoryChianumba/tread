@@ -30,6 +30,30 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-06-09 — Figures: flatten transparency onto a padded white backdrop
+- **Commit:** `eb18d59`
+- **What:** every figure carrying an alpha channel is now alpha-composited
+  onto an opaque white background — inset inside a proportional white
+  margin — at resolve time, and the alpha channel is dropped. Fully-opaque
+  sources keep their no-decode fast path via a cheap PNG colour-type gate.
+- **Why:** ar5iv figure assets arrive as type-6 RGBA (some type-4
+  gray+alpha) PNGs with transparent backdrops; on a dark terminal the
+  background bled through and swallowed dark-ink labels and arrows. arXiv
+  figures are authored for white paper, so compositing onto white restores
+  legibility on every theme, and dropping alpha stops the terminal
+  re-exposing the dark bg on a later placement. The margin keeps content
+  drawn flush to the source canvas off the box edge. PDF figures were never
+  affected — `pdftoppm` already rasterises onto white.
+- **Key files:** `crates/tread/src/images/png.rs` — `flatten_alpha_over`
+  (composite + margin), `png_may_have_alpha` / `png_has_trns` (the IHDR
+  colour-type gate), wired into `normalize_png_for_terminal_with_limit`.
+  The cross-session cache suffix is versioned `.norm` → `.norm3` so stale
+  pre-fix artifacts (transparent, or flattened-but-unpadded) aren't
+  re-served.
+- **Tests:** +5 png unit tests (colour-type gate, composite maths, opaque
+  no-op, padded margin, and an end-to-end `resolve_png` flatten assertion);
+  full suite 175 pass.
+
 ### 2026-06-09 — Preview pane: drop the box for a single inset divider
 - **Commit:** `78ed951`
 - **What:** the figure/citation preview pane no longer draws a three-sided
