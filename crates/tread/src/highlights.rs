@@ -75,7 +75,7 @@ impl HighlightSet {
 }
 
 fn path(key: &str) -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("trench").join(format!("highlights_{key}.json")))
+    dirs::config_dir().map(|p| p.join("one-research").join(format!("highlights_{key}.json")))
 }
 
 pub fn load(key: &str) -> HighlightSet {

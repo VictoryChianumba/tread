@@ -303,7 +303,10 @@ fn set_preview(reader: &mut Reader, value: &str) -> ReaderAction {
 }
 
 fn set_theme(value: &str) -> ReaderAction {
-  if value == "trench" {
+  // `one-research` clears the override so the reader follows the host app's
+  // theme.  `trench` is kept as a back-compat alias for the host's former
+  // name so existing muscle memory and docs keep working.
+  if value == "one-research" || value == "trench" {
     let mut cfg = config::load();
     cfg.theme_override = None;
     config::save(&cfg);
@@ -319,7 +322,7 @@ fn set_theme(value: &str) -> ReaderAction {
     None => {
       let names: Vec<&str> = ThemeId::all().iter().map(|t| t.label()).collect();
       ReaderAction::Error(format!(
-        "unknown theme: {value}.  Try `trench` or one of: {}",
+        "unknown theme: {value}.  Try `one-research` or one of: {}",
         names.join(", ")
       ))
     }

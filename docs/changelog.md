@@ -30,6 +30,23 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-06-09 — Follow host rename trench → one-research (shared config dir)
+- **Commit:** `7c31b40`
+- **What:** the embedded reader's persistence (progress, bookmarks,
+  highlights, theme override) and its host-theme read now point at
+  `~/.config/one-research/` instead of `~/.config/trench/`. `:set
+  theme=one-research` is the new canonical "follow host theme" token;
+  `:set theme=trench` stays as a back-compat alias.
+- **Why:** the host TUI (formerly `trench`) was renamed to `one-research`
+  and moved its config dir accordingly. The reader hardcoded the old path
+  in each persistence module, so after the host migrated `config.json`
+  away, reader data split-brained into the stale dir and theme-following
+  silently fell back to the dark default.
+- **Key files:** `config.rs` (path + `host_theme_id`), `progress.rs`,
+  `highlights.rs`, `state/bookmarks.rs`, `commands.rs` (`set_theme` token).
+- **Tests:** no new tests; existing suite unchanged (175 pass). Path
+  constants aren't unit-covered (they hit the real config dir).
+
 ### 2026-05-25 — Record-keeping: dev changelog + commit-time guardrail
 - **What:** added this changelog, a non-blocking `.githooks/pre-commit`
   reminder, and a CLAUDE.md workflow rule, so notable work is logged in a

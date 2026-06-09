@@ -84,11 +84,11 @@ When a command returns `CommandResult::Error(msg)`, the event loop stashes it on
 
 | Data | Path |
 |---|---|
-| Reading progress | `~/.config/trench/reader_progress.json` (shared map keyed by arXiv ID) |
-| Bookmarks (marks) | `~/.config/trench/bookmarks_<id>.json` (one file per paper) |
-| Highlights | `~/.config/trench/highlights_<id>.json` |
-| Theme override | `~/.config/trench/block_reader.json` |
-| Trench's theme (read-only) | `~/.config/trench/config.json` |
+| Reading progress | `~/.config/one-research/reader_progress.json` (shared map keyed by arXiv ID) |
+| Bookmarks (marks) | `~/.config/one-research/bookmarks_<id>.json` (one file per paper) |
+| Highlights | `~/.config/one-research/highlights_<id>.json` |
+| Theme override | `~/.config/one-research/block_reader.json` |
+| Host app's theme (read-only) | `~/.config/one-research/config.json` |
 
 All loaded from `Reader::new` in `lib.rs::run`; saved on clean exit. Highlights/marks are fire-and-forget on save (no atomic rename); a crash mid-write loses the latest entry, not all entries.
 

@@ -8,7 +8,7 @@ pub struct ReaderProgress {
 }
 
 fn progress_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("trench").join("reader_progress.json"))
+    dirs::config_dir().map(|p| p.join("one-research").join("reader_progress.json"))
 }
 
 pub fn load() -> HashMap<String, ReaderProgress> {

@@ -5,15 +5,15 @@
 //!
 //! Block-reader has three theme sources, in priority order:
 //!
-//! 1. **`theme_override` set in our own config** (`~/.config/trench/block_reader.json`).
+//! 1. **`theme_override` set in our own config** (`~/.config/one-research/block_reader.json`).
 //!    Set via `:set theme=<name>`.  Highest priority.
-//! 2. **Trench's theme** read from `~/.config/trench/config.json`.
-//!    When `theme_override` is `None`, follow whatever the trench feed UI
-//!    is using.  Equivalent to `:set theme=trench`.
+//! 2. **The host app's theme** read from `~/.config/one-research/config.json`.
+//!    When `theme_override` is `None`, follow whatever the One Research feed UI
+//!    is using.  Equivalent to `:set theme=one-research`.
 //! 3. **Built-in default** (`ThemeId::Dark`) when neither file is present.
 //!
-//! Reading trench's config is done via `serde_json::Value` rather than
-//! importing trench's `Config` struct — that would create a circular
+//! Reading the host's config is done via `serde_json::Value` rather than
+//! importing its `Config` struct — that would create a circular
 //! crate dependency.  The schema's `theme` field is a kebab-case string
 //! that `ThemeId::from_id` accepts.
 
@@ -115,7 +115,7 @@ impl Default for ReaderConfig {
 }
 
 fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("trench").join("block_reader.json"))
+    dirs::config_dir().map(|p| p.join("one-research").join("block_reader.json"))
 }
 
 pub fn load() -> ReaderConfig {
@@ -135,11 +135,11 @@ pub fn save(c: &ReaderConfig) {
     }
 }
 
-/// Read trench's theme selection from `~/.config/trench/config.json`.
+/// Read the host app's theme selection from `~/.config/one-research/config.json`.
 /// Returns `None` if the file is missing, malformed, or the theme name
 /// doesn't resolve to a known `ThemeId`.
-fn trench_theme_id() -> Option<ThemeId> {
-    let p = dirs::config_dir()?.join("trench").join("config.json");
+fn host_theme_id() -> Option<ThemeId> {
+    let p = dirs::config_dir()?.join("one-research").join("config.json");
     let data = std::fs::read_to_string(&p).ok()?;
     let v: serde_json::Value = serde_json::from_str(&data).ok()?;
     let theme_str = v.get("theme")?.as_str()?;
@@ -154,7 +154,7 @@ pub fn resolve_theme() -> Theme {
         && let Some(tid) = ThemeId::from_id(id) {
             return tid.theme();
         }
-    if let Some(tid) = trench_theme_id() {
+    if let Some(tid) = host_theme_id() {
         return tid.theme();
     }
     ThemeId::Dark.theme()
