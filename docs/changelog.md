@@ -30,6 +30,23 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-06-09 — Preview pane: drop the box for a single inset divider
+- **Commit:** `78ed951`
+- **What:** the figure/citation preview pane no longer draws a three-sided
+  box (a `LEFT|TOP|BOTTOM` border with the label in the top edge). It now
+  renders a single thin vertical rule down its left edge, inset two rows
+  clear of the screen top and bottom, with the `Figure n/m` / `[key]`
+  label as a plain dim header line. The citation pane drops its background
+  fill so it reads as the same surface as the figure pane.
+- **Why:** design language — a minimal seam reads quieter than a full
+  enclosure, and insetting the rule keeps it from butting the screen
+  edges. Detaching the title from a border and dropping the citation bg
+  make the two pane variants read as one continuous surface.
+- **Key files:** `crates/tread/src/render/preview.rs` (`draw_divider`,
+  `draw_preview_title`). Figure/caption placement is untouched —
+  `preview_image_area`'s fixed margin never depended on the border.
+- **Tests:** none (pure rendering); build clean, full suite passes.
+
 ### 2026-06-09 — Follow host rename trench → one-research (shared config dir)
 - **Commit:** `7c31b40`
 - **What:** the embedded reader's persistence (progress, bookmarks,
