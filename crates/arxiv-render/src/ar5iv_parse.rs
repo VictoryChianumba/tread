@@ -685,6 +685,82 @@ fn emit_table(el: ElementRef, out: &mut Vec<Block>) {
     out.push(Block::Blank);
 }
 
+/// Convert one `<img class="ltx_graphics">` into an `ImageItem` (tarball-
+/// relative path; `kitty_id` filled in later by `number_figures`).  `None`
+/// when the img carries no `src`.
+fn ar5iv_image_item(img: ElementRef) -> Option<ImageItem> {
+    img.value().attr("src").map(|src| ImageItem {
+        path: std::path::PathBuf::from(strip_ar5iv_asset_prefix(src)),
+        kitty_id: 0,
+        dims: None,
+    })
+}
+
+/// Recover a figure's 2D image grid (`rows[stack][side-by-side]`) from the
+/// two layout shapes LaTeXML emits for multi-panel figures, falling back to
+/// a single side-by-side row otherwise:
+///
+/// 1. **Flexbox** (`<div class="ltx_flex_figure">`): panels are
+///    `ltx_flex_cell`s split into stack rows by `ltx_flex_break` divs —
+///    LaTeXML's rendering of the source `\\` row break.  Attention's
+///    Figures 4/5 use this.  We walk in document order, accumulating images
+///    into the current row and breaking on each separator.
+/// 2. **Table grid** (`<table>` with `<tr>`/`<td>`): one stack row per
+///    image-bearing `<tr>` (e.g. GPT-3's panel grids).
+/// 3. **Otherwise**: every image in one side-by-side row (single-image
+///    figures, side-by-side subfigures with no break).
+fn figure_image_rows(el: ElementRef) -> Vec<Vec<ImageItem>> {
+    let img_sel = Selector::parse("img.ltx_graphics").unwrap();
+
+    // (1) Flexbox layout — split on `ltx_flex_break`.
+    let break_sel = Selector::parse("div.ltx_flex_break").unwrap();
+    if el.select(&break_sel).next().is_some() {
+        let mut rows: Vec<Vec<ImageItem>> = vec![Vec::new()];
+        for node in el.descendants() {
+            let Some(e) = ElementRef::wrap(node) else {
+                continue;
+            };
+            let classes: Vec<&str> = e.value().classes().collect();
+            if e.value().name() == "img" && classes.contains(&"ltx_graphics") {
+                if let Some(item) = ar5iv_image_item(e) {
+                    rows.last_mut().unwrap().push(item);
+                }
+            } else if classes.contains(&"ltx_flex_break") && !rows.last().unwrap().is_empty() {
+                rows.push(Vec::new());
+            }
+        }
+        rows.retain(|r| !r.is_empty());
+        if !rows.is_empty() {
+            return rows;
+        }
+    }
+
+    // (2) Table grid — one row per image-bearing `<tr>`.  Use it only when it
+    // spans 2+ rows and captures every image; otherwise fall through (a lone
+    // row, or a mix of gridded + loose images, is safer kept side-by-side).
+    let row_sel = Selector::parse("tr").unwrap();
+    let mut grid: Vec<Vec<ImageItem>> = Vec::new();
+    for tr in el.select(&row_sel) {
+        let items: Vec<ImageItem> = tr.select(&img_sel).filter_map(ar5iv_image_item).collect();
+        if !items.is_empty() {
+            grid.push(items);
+        }
+    }
+    let total = el.select(&img_sel).filter_map(ar5iv_image_item).count();
+    let gridded: usize = grid.iter().map(|r| r.len()).sum();
+    if grid.len() >= 2 && gridded == total {
+        return grid;
+    }
+
+    // (3) Flat: a single side-by-side row of all images (empty when none).
+    let flat: Vec<ImageItem> = el.select(&img_sel).filter_map(ar5iv_image_item).collect();
+    if flat.is_empty() {
+        Vec::new()
+    } else {
+        vec![flat]
+    }
+}
+
 /// Emit a figure as a `Block::Figure` carrying its image grid plus the
 /// caption, falling back to a caption-only `StyledLine` when the figure
 /// has no raster image (e.g. a TikZ/tabular-only float).
@@ -697,11 +773,9 @@ fn emit_table(el: ElementRef, out: &mut Vec<Block>) {
 /// (and read its pixel dims), and the non-kitty
 /// `degrade_images_to_captions` turn it back into a `[caption]` line.
 ///
-/// Subfigures (multiple `<img>` inside one `<figure>`, common in
-/// Attention/GAN) are flattened into a single row for now — they usually
-/// sit side-by-side, which is how the preview tiles a row.  `figure_id` /
-/// `kitty_id` are placeholders; `number_figures` assigns them in document
-/// order after the walk completes.
+/// The 2D stack/side-by-side grid is recovered by [`figure_image_rows`].
+/// `figure_id` / `kitty_id` are placeholders; `number_figures` assigns them
+/// in document order after the walk completes.
 fn emit_figure(el: ElementRef, out: &mut Vec<Block>) {
     let caption = el
         .child_elements()
@@ -710,18 +784,9 @@ fn emit_figure(el: ElementRef, out: &mut Vec<Block>) {
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
 
-    let img_sel = Selector::parse("img.ltx_graphics").unwrap();
-    let items: Vec<ImageItem> = el
-        .select(&img_sel)
-        .filter_map(|img| img.value().attr("src"))
-        .map(|src| ImageItem {
-            path: std::path::PathBuf::from(strip_ar5iv_asset_prefix(src)),
-            kitty_id: 0,
-            dims: None,
-        })
-        .collect();
+    let rows = figure_image_rows(el);
 
-    if items.is_empty() {
+    if rows.is_empty() {
         // No raster image (TikZ-rendered, or LaTeXML couldn't emit one) —
         // keep the legacy caption-only line so the reader still has a
         // navigable "Figure N: …" target for `]f` / `[f`.
@@ -739,7 +804,7 @@ fn emit_figure(el: ElementRef, out: &mut Vec<Block>) {
         out.push(Block::Anchor(id.to_string()));
     }
     out.push(Block::Figure {
-        rows: vec![items],
+        rows,
         alt: caption.unwrap_or_default(),
         figure_id: 0,
         column_gaps_after: Vec::new(),
@@ -1018,6 +1083,104 @@ mod figure_tests {
         let Block::Figure { rows, figure_id, .. } = figs[1] else { unreachable!() };
         assert_eq!(*figure_id, 2);
         assert_eq!(rows[0][0].kitty_id, 3);
+    }
+
+    /// LaTeXML's flexbox figure layout: `ltx_flex_cell` panels split into
+    /// stack rows by `ltx_flex_break` (the `\\` row break).  This is how
+    /// Attention's Figures 4/5 stack; emit_figure must honour the break.
+    #[test]
+    fn flex_break_figure_stacks_panels() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure id="S1.F4" class="ltx_figure">
+                   <div class="ltx_flex_figure">
+                     <div class="ltx_flex_cell ltx_flex_size_1">
+                       <img src="/html/9/assets/x2.png" class="ltx_graphics ltx_figure_panel">
+                     </div>
+                     <div class="ltx_flex_break"></div>
+                     <div class="ltx_flex_cell ltx_flex_size_1">
+                       <img src="/html/9/assets/x3.png" class="ltx_graphics ltx_figure_panel">
+                     </div>
+                   </div>
+                   <figcaption>Figure 4: Two attention heads.</figcaption>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let figs = figures(&blocks);
+        let Block::Figure { rows, .. } = figs[0] else { unreachable!() };
+        // Break between the two cells → two stack rows of one panel each.
+        assert_eq!(rows.len(), 2, "rows: {rows:?}");
+        assert_eq!(rows[0].len(), 1);
+        assert_eq!(rows[1].len(), 1);
+        assert_eq!(rows[0][0].path.to_str().unwrap(), "assets/x2.png");
+        assert_eq!(rows[1][0].path.to_str().unwrap(), "assets/x3.png");
+    }
+
+    /// A flexbox figure with no `ltx_flex_break` (Figure 2: left/right
+    /// panels) stays a single side-by-side row.
+    #[test]
+    fn flex_without_break_stays_side_by_side() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure id="S1.F2" class="ltx_figure">
+                   <div class="ltx_flex_figure">
+                     <div class="ltx_flex_cell">
+                       <img src="/html/9/assets/x4.png" class="ltx_graphics">
+                     </div>
+                     <div class="ltx_flex_cell">
+                       <img src="/html/9/assets/x5.png" class="ltx_graphics">
+                     </div>
+                   </div>
+                   <figcaption>Figure 2: left and right.</figcaption>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let figs = figures(&blocks);
+        let Block::Figure { rows, .. } = figs[0] else { unreachable!() };
+        assert_eq!(rows.len(), 1, "rows: {rows:?}");
+        assert_eq!(rows[0].len(), 2);
+    }
+
+    /// LaTeXML lays a multi-panel figure out as a `<table>` grid: each `<tr>`
+    /// is a stack row, each image-bearing cell a side-by-side sibling.
+    /// emit_figure must recover that 2D structure instead of flattening it.
+    #[test]
+    fn table_grid_figure_recovers_stack_rows() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure id="S1.F1" class="ltx_figure">
+                   <table class="ltx_tabular">
+                     <tr class="ltx_tr">
+                       <td class="ltx_td"><img src="/html/9/assets/a.png" class="ltx_graphics"></td>
+                       <td class="ltx_td"><img src="/html/9/assets/b.png" class="ltx_graphics"></td>
+                     </tr>
+                     <tr class="ltx_tr">
+                       <td class="ltx_td"><img src="/html/9/assets/c.png" class="ltx_graphics"></td>
+                       <td class="ltx_td"><img src="/html/9/assets/d.png" class="ltx_graphics"></td>
+                     </tr>
+                   </table>
+                   <figcaption>Figure 1: A 2x2 grid.</figcaption>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let figs = figures(&blocks);
+        assert_eq!(figs.len(), 1);
+        let Block::Figure { rows, .. } = figs[0] else { unreachable!() };
+        // Two stack rows of two side-by-side panels each.
+        assert_eq!(rows.len(), 2, "rows: {rows:?}");
+        assert_eq!(rows[0].len(), 2);
+        assert_eq!(rows[1].len(), 2);
+        // Document-order paths and kitty ids across the grid.
+        let paths: Vec<&str> = rows
+            .iter()
+            .flatten()
+            .map(|i| i.path.to_str().unwrap())
+            .collect();
+        assert_eq!(paths, vec!["assets/a.png", "assets/b.png", "assets/c.png", "assets/d.png"]);
+        assert_eq!(rows[1][1].kitty_id, 4);
     }
 
     fn list_items(blocks: &[Block]) -> Vec<(&u8, &str, String)> {

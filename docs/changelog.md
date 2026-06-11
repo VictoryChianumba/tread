@@ -30,6 +30,30 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-06-11 — ar5iv figures: recover stacked multi-panel layout
+- **Commit:** `dc2bbf3`
+- **What:** `emit_figure` now recovers a figure's 2D image grid
+  (`rows[stack][side-by-side]`) instead of flattening every multi-panel
+  figure into one side-by-side row. New `figure_image_rows` reads the two
+  layouts LaTeXML emits: (1) **flexbox** (`ltx_flex_figure`) split into
+  stack rows by `ltx_flex_break` divs — LaTeXML's rendering of the source
+  `\\` row break (Attention's Figures 4/5); (2) **table grid** — one row
+  per image-bearing `<tr>` (GPT-3's panel grids). Single-image and
+  no-break subfigures stay a single side-by-side row.
+- **Why:** the second half of the ar5iv↔pandoc parity gap. The ar5iv path
+  flattened all subfigures into one row, so figures the author stacked
+  rendered crammed side-by-side. The `ltx_flex_break` div is the same `\\`
+  row break the pandoc fallback keyed on — ar5iv just encodes it in HTML.
+- **Key files:** `crates/arxiv-render/src/ar5iv_parse.rs`
+  (`figure_image_rows`, `ar5iv_image_item`). Renderer/model unchanged —
+  `Block::Figure.rows` already carried the 2D grid (ADR-0001).
+- **Tests:** +4 ar5iv figure tests (flex-break stacks; flex-no-break stays
+  side-by-side; table-grid stacks; existing no-grid flatten). Layout
+  verified against the real 1706.03762 (flex) and 2005.14165 (table-grid)
+  HTML. arxiv-render 71 / doc-model 15 / tread 175 pass.
+- **Caveat:** `column_gaps_after` / `header_rows` (ADR-0001's subfigure
+  column labels) stay empty on the ar5iv path — still pandoc-only.
+
 ### 2026-06-11 — ar5iv tables: recover booktabs rules, vertical rules, rowspan
 - **Commit:** `e1db8ae`
 - **What:** the ar5iv (primary) parser now emits real booktabs tables.
