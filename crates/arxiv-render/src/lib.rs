@@ -186,7 +186,10 @@ mod golden_tests {
         /// vertical breathing room (+3 headers lacked a preceding blank).
         /// 678 → 676 when `normalize_blank_rhythm` trimmed the leading
         /// blank and collapsed doubled inter-block gaps to one.
-        const EXPECTED_VISUAL_LINES: usize = 676;
+        /// 676 → 697 when bracketed `[Table N: …]` / `[Figure N: …]`
+        /// captions began wrapping to the reading measure (was one
+        /// over-long line) — see the caption-wrap changelog entry.
+        const EXPECTED_VISUAL_LINES: usize = 697;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 
@@ -284,7 +287,8 @@ mod golden_tests {
         const EXPECTED_BLOCKS: usize = 1422;
         // 3138 → 3134: normalize_blank_rhythm trimmed the leading blank +
         // collapsed doubled inter-block gaps.
-        const EXPECTED_VISUAL_LINES: usize = 3134;
+        // 3134 → 3357: bracketed captions now wrap to the reading measure.
+        const EXPECTED_VISUAL_LINES: usize = 3357;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 
@@ -406,7 +410,8 @@ mod golden_tests {
         // vertical breathing room (+4 headers lacked a preceding blank).
         // 1500 → 1494: normalize_blank_rhythm leading-trim + gap collapse.
         // 1494 → 1495: one over-wide display equation now wraps at the relation.
-        const EXPECTED_VISUAL_LINES: usize = 1495;
+        // 1495 → 1553: bracketed captions now wrap to the reading measure.
+        const EXPECTED_VISUAL_LINES: usize = 1553;
 
         let blocks = parse_and_check_block_count(ID, EXPECTED_BLOCKS);
 

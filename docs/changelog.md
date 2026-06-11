@@ -30,6 +30,20 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-06-11 — Rebaseline layout goldens for caption wrapping
+- **Commit:** `ca332e2`
+- **What:** bumped the `EXPECTED_VISUAL_LINES` golden constants now that
+  bracketed `[Table …]` / `[Figure …]` captions wrap to the reading
+  measure: attention 676→697, gpt3 3134→3357, gaussian_head 1495→1553
+  (differential_algebra 1733 unchanged — math-heavy, few bracketed
+  captions). Block counts unchanged (wrapping adds visual lines, not
+  blocks).
+- **Why:** follow-through on the caption-wrap change (`03a210e`), which
+  flagged the goldens would shift. Ran offline against the cached sources.
+- **Key files:** `crates/arxiv-render/src/lib.rs::golden_tests` (per-test
+  constants + baseline-history comments).
+- **Tests:** all 4 `#[ignore]`d goldens pass at the new baselines.
+
 ### 2026-06-11 — Tables: breathing room above a lifted table's caption
 - **Commit:** `cb55c69`
 - **What:** when `lift_tables` moves a table group to its PDF-anchored
