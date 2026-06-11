@@ -257,7 +257,15 @@ pub fn build_visual_lines(
             // label-to-line resolution by the reader.
             Block::Anchor(_) => {}
             Block::Figure { rows, alt, .. } => {
-                emit_figure_lines(&mut out, block_idx, rows, alt, terminal_width, figure_budget);
+                emit_figure_lines(
+                    &mut out,
+                    block_idx,
+                    rows,
+                    alt,
+                    terminal_width,
+                    prose_width,
+                    figure_budget,
+                );
             }
         }
 

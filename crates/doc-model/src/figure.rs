@@ -226,12 +226,21 @@ fn emit_image_row_rows(
 /// `figure_budget` is the whole-figure vertical budget (rows available
 /// for the image portion, computed via `figure_row_budget` once per
 /// document at the top of layout dispatch).
+///
+/// `prose_width` is the narrow reading measure.  The image breaks out to
+/// the full `terminal_width` (centered there at render time), but the
+/// caption is a `Prose` visual line, so the render path also prepends the
+/// measure-centering pad to it.  Centering the caption within `prose_width`
+/// here makes the two pads telescope — `(W−P)/2 + (P−L)/2 = (W−L)/2` — so
+/// the caption ends up centered in the full width, aligned under the image,
+/// instead of double-indented off the right edge.
 pub(crate) fn emit_figure_lines(
     out: &mut Vec<VisualLine>,
     block_idx: usize,
     rows: &[Vec<ImageItem>],
     alt: &str,
     terminal_width: usize,
+    prose_width: usize,
     figure_budget: u16,
 ) {
     let stack_total = rows.len() as u8;
@@ -293,7 +302,10 @@ pub(crate) fn emit_figure_lines(
         }
     }
     if !alt.is_empty() {
-        emit_caption(out, block_idx, alt, max_rows as usize, terminal_width);
+        // Center within the prose measure, not terminal_width — see the
+        // doc comment on `prose_width` above for why this avoids the
+        // double-indent the render-time measure pad would otherwise cause.
+        emit_caption(out, block_idx, alt, max_rows as usize, prose_width);
     }
 }
 
@@ -337,5 +349,35 @@ mod tests {
         // floor (6) — the stack-bonus branch only kicks in for n >= 2,
         // so n=1 is the path that can actually underflow.
         assert_eq!(panel_row_budget(2, 1), MIN_IMAGE_ROWS);
+    }
+
+    /// Regression: the caption must be centered within `prose_width`, not
+    /// `terminal_width`.  At render the caption (a Prose line) also gets the
+    /// measure-centering pad prepended; centering within prose_width here
+    /// makes the two pads telescope to full-width centering instead of
+    /// double-indenting the caption off the right edge.
+    #[test]
+    fn caption_centers_within_prose_width_not_terminal_width() {
+        let rows = vec![vec![ImageItem {
+            path: std::path::PathBuf::from("x.png"),
+            kitty_id: 1,
+            dims: Some((100, 100)),
+        }]];
+        let mut out = Vec::new();
+        let terminal_width = 100;
+        let prose_width = 40;
+        emit_figure_lines(&mut out, 0, &rows, "Hi", terminal_width, prose_width, 21);
+
+        // The caption is the lone Prose line in the output.
+        let caption = out
+            .iter()
+            .find(|vl| matches!(vl.kind, VisualLineKind::Prose))
+            .expect("a caption Prose line");
+        let lead = caption.text.len() - caption.text.trim_start().len();
+
+        // "[Hi]" is 4 cols; centered in prose_width=40 → pad 18.  Centering
+        // in terminal_width=100 would give 48 — the old double-indent bug.
+        assert_eq!(lead, (prose_width - "[Hi]".len()) / 2);
+        assert_ne!(lead, (terminal_width - "[Hi]".len()) / 2);
     }
 }

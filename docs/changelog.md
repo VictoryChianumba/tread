@@ -30,6 +30,30 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-06-11 — Figures: fix caption double-indent under the reading measure
+- **Commit:** `140b531`
+- **What:** figure captions no longer run off the right edge when the
+  reading measure is narrower than the screen. Captions are now centered
+  within `prose_width` (the measure) instead of `terminal_width` (the full
+  width).
+- **Why:** a caption is a `Prose` visual line, so `emit_caption` centered
+  it within the full `terminal_width`, and then the render path
+  (`content.rs::draw_content`) *also* prepended the measure-centering
+  `prose_pad` to every `Prose` line — double-indenting the caption off the
+  right edge. Centering within `prose_width` makes the two pads telescope
+  — `(W−P)/2 + (P−L)/2 = (W−L)/2` — so the caption lands centered in the
+  full width, aligned under the (full-width) image. Latent since the
+  reading-measure overhaul; surfaced when the figure-flatten fix made
+  images opaque and drew the eye to the figure region.
+- **Key files:** `crates/doc-model/src/figure.rs` (`emit_figure_lines` /
+  `emit_caption` now take + use `prose_width`), one call site in
+  `layout.rs`. With the measure off (`prose_width == terminal_width`)
+  behaviour is unchanged.
+- **Tests:** +1 doc-model unit test pinning caption centering to
+  `prose_width`; doc-model 15 pass, tread 175 pass. Note: captions now
+  *wrap* at `prose_width`, so the `#[ignore]`d figure-heavy layout goldens
+  will need their visual-line counts rebaselined.
+
 ### 2026-06-09 — Figures: flatten transparency onto a padded white backdrop
 - **Commit:** `eb18d59`
 - **What:** every figure carrying an alpha channel is now alpha-composited
