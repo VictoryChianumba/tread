@@ -30,6 +30,47 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-06-11 — ar5iv tables: render the caption (and wrap it)
+- **Commit:** `03a210e`
+- **What:** ar5iv table captions now appear above their table and wrap to
+  the reading measure. Two parts: (1) `emit_table` emits the caption as
+  `Block::Line("[Table N: …]")` — the exact shape the Pandoc path uses and
+  that `placement::identify_groups` captures, so the caption travels with
+  the table when it's lifted to its PDF-anchored position; (2) `layout`
+  now wraps a bracketed `Block::Line` (a `[Table …]` / `[Figure …]`
+  caption) to `prose_width` instead of leaving it as one over-long line.
+- **Why:** the ar5iv path emitted the caption as a bold `StyledLine`, which
+  placement didn't recognise — so when the table moved, the caption was
+  stranded at the parse site and vanished from above the table. And even
+  once emitted as a `Block::Line`, captions ran off the right edge because
+  `Block::Line` was never wrapped. The wrap is scoped to the `[`-prefixed
+  caption shape so PDF-extracted `Block::Line`s stay verbatim.
+- **Key files:** `crates/arxiv-render/src/ar5iv_parse.rs::emit_table`
+  (caption shape; `inline_spans_from` renders caption math once);
+  `crates/doc-model/src/layout.rs` (`Block::Line` wrap). Also fixes the
+  same latent wrap bug for Pandoc table captions and the figure-fallback
+  caption (both bracketed `Block::Line`).
+- **Tests:** +1 ar5iv (`table_caption_emits_as_placement_capturable_line`)
+  and +1 doc-model (`caption_line_wraps_to_measure_but_plain_line_stays_verbatim`).
+  arxiv-render 73 / doc-model 16 / tread 175 pass. The `#[ignore]`d layout
+  goldens' visual-line counts shift (captions now wrap) — rebaseline when next run.
+
+### 2026-06-11 — ar5iv figures: recover subfigure column labels
+- **Commit:** `03a210e`
+- **What:** `emit_figure` now recovers `header_rows` (the column labels above
+  a labelled subfigure grid, e.g. Ava-256's "250 / 500 / 1K …"). Text-only
+  `<tr>`s in a figure's layout table become header rows; leading label
+  columns are trimmed so each label sits over its image column. Closes the
+  `header_rows` half of the ADR-0001 figure-parity gap.
+- **Why:** the ar5iv path left `header_rows` empty, so labelled subfigure
+  grids lost their column labels (Pandoc already recovered them).
+- **Key files:** `crates/arxiv-render/src/ar5iv_parse.rs`
+  (`figure_table_grid`, `FigureGrid`). `column_gaps_after` stays empty —
+  `@{\hspace}` gaps aren't reliably recoverable from LaTeXML HTML (still
+  Pandoc-only).
+- **Tests:** +1 (`labeled_subfigure_grid_recovers_header_row`). Verified
+  against real 2605.04035 (Figures 3/5/6).
+
 ### 2026-06-11 — Images: keep figures in-pane inside a tmux split
 - **Commit:** `862d2ef`
 - **What:** inline (and preview) figures now render inside the reader's own

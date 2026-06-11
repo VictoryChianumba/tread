@@ -8,7 +8,7 @@
 //! and rendered together by `table::emit_table_group_lines`.
 
 use crate::{
-    Block, VisualLine, VisualLineKind, visual_width,
+    Block, InlineSpan, VisualLine, VisualLineKind, visual_width,
     figure::{emit_figure_lines, figure_row_budget},
     table::emit_table_group_lines,
     wrap::{wrap_list_item, wrap_spans},
@@ -50,15 +50,43 @@ pub fn build_visual_lines(
         let block_idx = i;
         match &blocks[i] {
             Block::Line(s) => {
-                let len = s.len();
-                out.push(VisualLine {
-                    block_idx,
-                    line_in_block: 0,
-                    text: s.clone(),
-                    kind: VisualLineKind::Prose,
-                    block_byte_start: 0,
-                    block_byte_end: len,
-                });
+                // `Block::Line` is overloaded: bracketed captions
+                // ("[Table N: …]" / "[Figure N: …]", from both parsers) are
+                // prose and must wrap to the reading measure, while
+                // PDF-extracted lines are pre-formatted and kept verbatim.
+                // Wrap the caption shape through the same path as
+                // `StyledLine`; pass everything else through as one line.
+                if s.starts_with('[') {
+                    let wrapped = wrap_spans(&[InlineSpan::plain(s.clone())], prose_width);
+                    let mut byte_cursor = 0usize;
+                    let n = wrapped.len();
+                    for (li, (line_spans, plain)) in wrapped.into_iter().enumerate() {
+                        let start = byte_cursor;
+                        let end = start + plain.len();
+                        out.push(VisualLine {
+                            block_idx,
+                            line_in_block: li,
+                            text: plain,
+                            kind: VisualLineKind::StyledProse(line_spans),
+                            block_byte_start: start,
+                            block_byte_end: end,
+                        });
+                        byte_cursor = end;
+                        if li + 1 < n {
+                            byte_cursor += 1; // separator space between wrapped lines
+                        }
+                    }
+                } else {
+                    let len = s.len();
+                    out.push(VisualLine {
+                        block_idx,
+                        line_in_block: 0,
+                        text: s.clone(),
+                        kind: VisualLineKind::Prose,
+                        block_byte_start: 0,
+                        block_byte_end: len,
+                    });
+                }
             }
 
             Block::Blank => {
@@ -441,6 +469,31 @@ mod tests {
             out[2].kind,
             VisualLineKind::Header { level: 1, number: Some(ref n) } if n == "2"
         ));
+    }
+
+    /// A bracketed caption ("[Table N: …]") is prose and wraps to the
+    /// reading measure, so a long table/figure caption no longer runs off
+    /// the right edge.  A non-bracketed `Block::Line` (a PDF-extracted line)
+    /// stays verbatim as a single line — wrapping it would re-flow the PDF's
+    /// own line breaks.
+    #[test]
+    fn caption_line_wraps_to_measure_but_plain_line_stays_verbatim() {
+        let caption = "[Table 1: a fairly long table caption that must wrap across several measure-width lines]";
+        let plain = "a pdf extracted line that is also long but should be kept verbatim by the layout";
+        let blocks = vec![Block::Line(caption.into()), Block::Line(plain.into())];
+        // terminal 80, measure 20 → the caption has to break into >1 line.
+        let out = build_visual_lines(&blocks, 80, 20, 24);
+
+        let caption_lines = out.iter().filter(|vl| vl.block_idx == 0).count();
+        assert!(caption_lines > 1, "caption should wrap, got {caption_lines} line(s)");
+        // Wrapped caption rows are a text column, so they inset with prose.
+        assert!(out
+            .iter()
+            .filter(|vl| vl.block_idx == 0)
+            .all(|vl| matches!(vl.kind, VisualLineKind::StyledProse(_))));
+
+        let plain_lines = out.iter().filter(|vl| vl.block_idx == 1).count();
+        assert_eq!(plain_lines, 1, "non-caption Block::Line must stay verbatim");
     }
 
     /// No doubled gap when a blank already precedes the header, and an

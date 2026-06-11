@@ -21,7 +21,7 @@
 //                  one `Block::StyledLine` per bibitem, each prefixed with
 //                  an `Anchor` carrying the cite-key.
 
-use doc_model::{Alignment, Block, ImageItem, InlineSpan, LinkTarget};
+use doc_model::{Alignment, Block, HeaderCell, ImageItem, InlineSpan, LinkTarget};
 use scraper::{ElementRef, Html, Node, Selector};
 use std::collections::HashMap;
 
@@ -500,14 +500,22 @@ fn ar5iv_cell_alignment(cell: ElementRef) -> Option<Alignment> {
 }
 
 fn emit_table(el: ElementRef, out: &mut Vec<Block>) {
-    // Pull the caption first as a heading-style line.
+    // Caption first (table convention: caption above the table).  Emit it the
+    // same shape the Pandoc path does — `Block::Line("[Table N: …]")` — so
+    // `placement::identify_groups` captures it into the table group; without
+    // this it was a bare bold line stranded at the parse site when the table
+    // was lifted to its PDF-anchored position.  The LaTeXML figcaption
+    // already carries the "Table N: " tag, so wrapping it in brackets yields
+    // the same "[Table N: …]" text.  `inline_spans_from` renders caption math
+    // once (vs `collect_text`, which would triple the MathML forms).
     if let Some(cap) = el
         .child_elements()
         .find(|c| c.value().name() == "figcaption")
     {
-        let text = collect_text(cap);
-        if !text.trim().is_empty() {
-            out.push(Block::StyledLine(vec![InlineSpan::bold(text.trim())]));
+        let text: String = inline_spans_from(cap).into_iter().map(|s| s.text).collect();
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !text.is_empty() {
+            out.push(Block::Line(format!("[{text}]")));
         }
     }
 
@@ -696,20 +704,29 @@ fn ar5iv_image_item(img: ElementRef) -> Option<ImageItem> {
     })
 }
 
-/// Recover a figure's 2D image grid (`rows[stack][side-by-side]`) from the
-/// two layout shapes LaTeXML emits for multi-panel figures, falling back to
-/// a single side-by-side row otherwise:
+/// A figure's recovered panel layout: the 2D image grid plus any
+/// column-label header rows (from a labelled subfigure table).
+struct FigureGrid {
+    rows: Vec<Vec<ImageItem>>,
+    header_rows: Vec<Vec<HeaderCell>>,
+}
+
+/// Recover a figure's 2D image grid (`rows[stack][side-by-side]`) — and any
+/// column-label header rows — from the layout shapes LaTeXML emits for
+/// multi-panel figures, falling back to a single side-by-side row otherwise:
 ///
 /// 1. **Flexbox** (`<div class="ltx_flex_figure">`): panels are
 ///    `ltx_flex_cell`s split into stack rows by `ltx_flex_break` divs —
 ///    LaTeXML's rendering of the source `\\` row break.  Attention's
 ///    Figures 4/5 use this.  We walk in document order, accumulating images
-///    into the current row and breaking on each separator.
-/// 2. **Table grid** (`<table>` with `<tr>`/`<td>`): one stack row per
-///    image-bearing `<tr>` (e.g. GPT-3's panel grids).
+///    into the current row and breaking on each separator.  (No headers.)
+/// 2. **Table grid** (`<table>` with `<tr>`/`<td>`): image-bearing `<tr>`s
+///    are stack rows; text-only `<tr>`s are column-label header rows
+///    (e.g. Ava-256's "250 / 500 / 1K …" over a grid of renders).  See
+///    [`figure_table_grid`].
 /// 3. **Otherwise**: every image in one side-by-side row (single-image
 ///    figures, side-by-side subfigures with no break).
-fn figure_image_rows(el: ElementRef) -> Vec<Vec<ImageItem>> {
+fn figure_image_rows(el: ElementRef) -> FigureGrid {
     let img_sel = Selector::parse("img.ltx_graphics").unwrap();
 
     // (1) Flexbox layout — split on `ltx_flex_break`.
@@ -731,34 +748,101 @@ fn figure_image_rows(el: ElementRef) -> Vec<Vec<ImageItem>> {
         }
         rows.retain(|r| !r.is_empty());
         if !rows.is_empty() {
-            return rows;
+            return FigureGrid {
+                rows,
+                header_rows: Vec::new(),
+            };
         }
     }
 
-    // (2) Table grid — one row per image-bearing `<tr>`.  Use it only when it
-    // spans 2+ rows and captures every image; otherwise fall through (a lone
-    // row, or a mix of gridded + loose images, is safer kept side-by-side).
-    let row_sel = Selector::parse("tr").unwrap();
-    let mut grid: Vec<Vec<ImageItem>> = Vec::new();
-    for tr in el.select(&row_sel) {
-        let items: Vec<ImageItem> = tr.select(&img_sel).filter_map(ar5iv_image_item).collect();
-        if !items.is_empty() {
-            grid.push(items);
-        }
-    }
-    let total = el.select(&img_sel).filter_map(ar5iv_image_item).count();
-    let gridded: usize = grid.iter().map(|r| r.len()).sum();
-    if grid.len() >= 2 && gridded == total {
+    // (2) Table grid (with optional column labels).
+    if let Some(grid) = figure_table_grid(el, &img_sel) {
         return grid;
     }
 
     // (3) Flat: a single side-by-side row of all images (empty when none).
     let flat: Vec<ImageItem> = el.select(&img_sel).filter_map(ar5iv_image_item).collect();
-    if flat.is_empty() {
-        Vec::new()
-    } else {
-        vec![flat]
+    FigureGrid {
+        rows: if flat.is_empty() { Vec::new() } else { vec![flat] },
+        header_rows: Vec::new(),
     }
+}
+
+/// Read a figure's `<table>` layout into image rows + column-label header
+/// rows, or `None` when there's no usable grid (the caller then flattens).
+///
+/// A `<tr>` with images is a panel row; a text-only `<tr>` is a header row.
+/// Leading label columns — cells before the first image, e.g. an empty
+/// corner or a row-label column — are trimmed from the headers so each
+/// label aligns with the image column beneath it (the preview maps header
+/// cell *i* straight onto image column *i*).  Mirrors the Pandoc path's
+/// `walk_table_rows_for_images`, the same shape `Block::Figure.header_rows`
+/// expects.
+fn figure_table_grid(el: ElementRef, img_sel: &Selector) -> Option<FigureGrid> {
+    let row_sel = Selector::parse("tr").unwrap();
+    let cell_sel = Selector::parse("td, th").unwrap();
+
+    let mut rows: Vec<Vec<ImageItem>> = Vec::new();
+    // Text rows held as `(raw_col, col_span, text)` until we know where the
+    // images start and can trim the leading label columns.
+    let mut text_rows: Vec<Vec<(usize, u16, String)>> = Vec::new();
+    let mut lead = usize::MAX;
+
+    for tr in el.select(&row_sel) {
+        let mut col = 0usize;
+        let mut imgs: Vec<ImageItem> = Vec::new();
+        let mut texts: Vec<(usize, u16, String)> = Vec::new();
+        for cell in tr.select(&cell_sel) {
+            let span = cell
+                .value()
+                .attr("colspan")
+                .and_then(|s| s.parse::<u16>().ok())
+                .unwrap_or(1)
+                .max(1);
+            if let Some(item) = cell.select(img_sel).next().and_then(ar5iv_image_item) {
+                if imgs.is_empty() {
+                    lead = lead.min(col);
+                }
+                imgs.push(item);
+            } else {
+                let text: String = inline_spans_from(cell).into_iter().map(|s| s.text).collect();
+                texts.push((col, span, text.trim().to_string()));
+            }
+            col += span as usize;
+        }
+        if !imgs.is_empty() {
+            rows.push(imgs);
+        } else if texts.iter().any(|(_, _, t)| !t.is_empty()) {
+            text_rows.push(texts);
+        }
+    }
+
+    // Only use the grid when it captures every image and is worth gridding —
+    // a lone image row with no headers is identical to the flat case, so let
+    // the caller produce that.
+    let total = el.select(img_sel).filter_map(ar5iv_image_item).count();
+    let gridded: usize = rows.iter().map(|r| r.len()).sum();
+    if rows.is_empty() || gridded != total || (rows.len() < 2 && text_rows.is_empty()) {
+        return None;
+    }
+
+    let lead = if lead == usize::MAX { 0 } else { lead };
+    let header_rows: Vec<Vec<HeaderCell>> = text_rows
+        .into_iter()
+        .map(|cells| {
+            cells
+                .into_iter()
+                .filter(|(c, _, _)| *c >= lead)
+                .map(|(_, span, text)| HeaderCell {
+                    text,
+                    col_span: span,
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|r: &Vec<HeaderCell>| r.iter().any(|c| !c.text.is_empty()))
+        .collect();
+
+    Some(FigureGrid { rows, header_rows })
 }
 
 /// Emit a figure as a `Block::Figure` carrying its image grid plus the
@@ -784,7 +868,7 @@ fn emit_figure(el: ElementRef, out: &mut Vec<Block>) {
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
 
-    let rows = figure_image_rows(el);
+    let FigureGrid { rows, header_rows } = figure_image_rows(el);
 
     if rows.is_empty() {
         // No raster image (TikZ-rendered, or LaTeXML couldn't emit one) —
@@ -807,8 +891,10 @@ fn emit_figure(el: ElementRef, out: &mut Vec<Block>) {
         rows,
         alt: caption.unwrap_or_default(),
         figure_id: 0,
+        // `@{\hspace}` column-group gaps aren't reliably recoverable from
+        // LaTeXML HTML; left empty (still Pandoc-only).
         column_gaps_after: Vec::new(),
-        header_rows: Vec::new(),
+        header_rows,
     });
     out.push(Block::Blank);
 }
@@ -1143,6 +1229,47 @@ mod figure_tests {
         assert_eq!(rows[0].len(), 2);
     }
 
+    /// A labelled subfigure grid (Ava-256 style): a text-only `<tr>` of
+    /// column labels above image rows, with a leading empty row-label
+    /// column.  emit_figure must capture the labels as `header_rows` and
+    /// trim the leading column so each label sits over its image column.
+    #[test]
+    fn labeled_subfigure_grid_recovers_header_row() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure id="S1.F5" class="ltx_figure">
+                   <table class="ltx_tabular">
+                     <tr class="ltx_tr">
+                       <td class="ltx_td"></td>
+                       <td class="ltx_td ltx_align_center">250</td>
+                       <td class="ltx_td ltx_align_center">500</td>
+                     </tr>
+                     <tr class="ltx_tr">
+                       <td class="ltx_td"></td>
+                       <td class="ltx_td"><img src="/html/9/assets/a.png" class="ltx_graphics"></td>
+                       <td class="ltx_td"><img src="/html/9/assets/b.png" class="ltx_graphics"></td>
+                     </tr>
+                     <tr class="ltx_tr">
+                       <td class="ltx_td"></td>
+                       <td class="ltx_td"><img src="/html/9/assets/c.png" class="ltx_graphics"></td>
+                       <td class="ltx_td"><img src="/html/9/assets/d.png" class="ltx_graphics"></td>
+                     </tr>
+                   </table>
+                   <figcaption>Figure 5: Training data scaling.</figcaption>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let figs = figures(&blocks);
+        let Block::Figure { rows, header_rows, .. } = figs[0] else { unreachable!() };
+        assert_eq!(rows.len(), 2, "rows: {rows:?}");
+        assert_eq!(rows[0].len(), 2);
+        assert_eq!(header_rows.len(), 1, "headers: {header_rows:?}");
+        let labels: Vec<&str> = header_rows[0].iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(labels, vec!["250", "500"]);
+        assert!(header_rows[0].iter().all(|c| c.col_span == 1));
+    }
+
     /// LaTeXML lays a multi-panel figure out as a `<table>` grid: each `<tr>`
     /// is a stack row, each image-bearing cell a side-by-side sibling.
     /// emit_figure must recover that 2D structure instead of flattening it.
@@ -1282,6 +1409,7 @@ mod table_tests {
     use super::to_blocks;
     use doc_model::Block;
 
+
     fn doc(body: &str) -> String {
         format!(r#"<html><body><article class="ltx_document">{body}</article></body></html>"#)
     }
@@ -1372,6 +1500,43 @@ mod table_tests {
         let matrices = blocks.iter().filter(|b| matches!(b, Block::Matrix { .. })).count();
         let rules = blocks.iter().filter(|b| matches!(b, Block::Rule)).count();
         assert_eq!((matrices, rules), (1, 0), "blocks: {blocks:?}");
+    }
+
+    /// The table caption must be a `Block::Line("[Table N: …]")` immediately
+    /// before the Matrix — that exact shape is what `placement::identify_groups`
+    /// captures into the table group, so the caption travels with the table
+    /// when it's lifted to its PDF-anchored position.  A bare bold
+    /// `StyledLine` (the old form) was left stranded at the parse site and
+    /// vanished from above the moved table.
+    #[test]
+    fn table_caption_emits_as_placement_capturable_line() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure class="ltx_table" id="S4.T1">
+                   <figcaption class="ltx_caption">
+                     <span class="ltx_tag ltx_tag_table">Table 1: </span>Maximum path lengths.
+                   </figcaption>
+                   <table class="ltx_tabular">
+                     <tbody class="ltx_tbody">
+                       <tr><td class="ltx_td">a</td><td class="ltx_td">b</td></tr>
+                     </tbody>
+                   </table>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        // The caption is a Block::Line that placement keys on (`[Table`), and
+        // it sits immediately before the first Matrix.
+        let cap_idx = blocks
+            .iter()
+            .position(|b| matches!(b, Block::Line(s) if s.starts_with("[Table")))
+            .expect("a [Table …] caption line");
+        let Block::Line(text) = &blocks[cap_idx] else { unreachable!() };
+        assert_eq!(text, "[Table 1: Maximum path lengths.]");
+        assert!(
+            matches!(blocks.get(cap_idx + 1), Some(Block::Matrix { .. })),
+            "caption must sit directly before the Matrix: {blocks:?}"
+        );
     }
 
     /// A `rowspan` header cell (e.g. Table 2's "Model") covers its column in
