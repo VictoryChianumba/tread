@@ -30,6 +30,34 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-06-11 — ar5iv tables: recover booktabs rules, vertical rules, rowspan
+- **Commit:** `e1db8ae`
+- **What:** the ar5iv (primary) parser now emits real booktabs tables.
+  `emit_table` recovers (a) horizontal rules from LaTeXML cell border
+  classes (`ltx_border_t{t}`/`_b{b}`) — splitting rows into `Matrix`
+  segments separated by `Block::Rule` so mid/bottom rules render; (b)
+  vertical rules from `ltx_border_l`/`_r` into `Matrix.vertical_rules`; and
+  (c) `rowspan`, by reserving the covered column in later rows with an empty
+  placeholder so multi-row header sub-labels stay under their parent group.
+- **Why:** since ar5iv became the primary parser (`cef6df5`, 2026-05-19),
+  `emit_table` flattened every `<thead>`/`<tbody>` table into one
+  rule-less `Matrix` with empty `vertical_rules`, so the renderer could
+  only draw its synthetic top rule — no midrule, bottomrule, `│`, and (with
+  unhandled `rowspan`) misaligned stacked headers. The pandoc fallback
+  already did all three; this closes the table half of that parity gap. The
+  renderer (`doc-model/table.rs`) was already correct — it just never
+  received the structure.
+- **Key files:** `crates/arxiv-render/src/ar5iv_parse.rs::emit_table`. No
+  change to `doc-model/table.rs`. Cost is parse-only (a few extra DOM class
+  reads on already-fetched HTML) — no network/byte increase.
+- **Tests:** +3 ar5iv unit tests (booktabs mid/bottom/vertical rules +
+  alignment; borderless single-Matrix; rowspan offset). Verified the
+  rowspan + rule logic against the real 1706.03762 HTML (Tables 2 & 3).
+  arxiv-render 68 / doc-model 15 / tread 175 pass.
+- **Caveat:** `\cmidrule` partial rules promote to full-width (border
+  detected per-row, not per-column span) — fine for the common case;
+  refine if needed.
+
 ### 2026-06-11 — Figures: fix caption double-indent under the reading measure
 - **Commit:** `140b531`
 - **What:** figure captions no longer run off the right edge when the

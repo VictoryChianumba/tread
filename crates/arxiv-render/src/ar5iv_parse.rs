@@ -516,24 +516,81 @@ fn emit_table(el: ElementRef, out: &mut Vec<Block>) {
         return;
     };
 
-    let mut rows: Vec<Vec<(String, usize)>> = Vec::new();
-    // Per-raw-column alignment, captured from single-span DATA (`td`)
-    // cells — first explicit `ltx_align_*` class per column wins.  Header
-    // (`th`) cells are skipped because LaTeXML centres them regardless of
-    // the column spec, which would mislabel the column's true alignment.
+    // Per-row capture.  LaTeXML encodes a `tabular`'s rules as cell border
+    // classes, not separate rule rows: `\toprule`/`\midrule`/`\bottomrule`
+    // become `ltx_border_t{t}` / `ltx_border_b{b}` (horizontal) on the
+    // adjacent cells, and a column spec `|` becomes `ltx_border_l`/`_r`
+    // (vertical).  We recover both so the renderer can draw a real
+    // booktabs-style table instead of a bare grid.
+    struct RowInfo {
+        cells: Vec<(String, usize)>,
+        top_border: bool,
+        bottom_border: bool,
+    }
+    let mut row_infos: Vec<RowInfo> = Vec::new();
+    // Per-raw-column alignment, captured from single-span DATA cells — first
+    // explicit `ltx_align_*` class per column wins.  Header cells (tagged
+    // `ltx_th`) are skipped because LaTeXML centres them regardless of the
+    // column spec, which would mislabel the column's true alignment.
     let mut alignments: Vec<Alignment> = Vec::new();
+    // Raw vertical-rule positions (before blank-column collapse); the
+    // renderer maps them through `translate_rules_to_active`.  `p` means a
+    // `│` immediately before raw column `p` (so `0` = left edge, `ncols` =
+    // right edge).
+    let mut vrules: Vec<usize> = Vec::new();
+    // Per-raw-column count of how many further rows are still covered by a
+    // `rowspan` cell from above.  LaTeXML uses `rowspan` for multi-line
+    // column headers and `\multirow` (e.g. Table 2's "Model", Table 3's
+    // single-line headers); without honouring it the cells in the row below
+    // a spanning header slide left into its column and the sub-labels
+    // misalign.
+    let mut row_cover: Vec<u32> = Vec::new();
     let row_sel = Selector::parse("tr").unwrap();
     let cell_sel = Selector::parse("td, th").unwrap();
     for tr in table.select(&row_sel) {
-        let mut row: Vec<(String, usize)> = Vec::new();
+        let mut cells: Vec<(String, usize)> = Vec::new();
+        let mut top_border = false;
+        let mut bottom_border = false;
         let mut col = 0usize;
         for cell in tr.select(&cell_sel) {
+            // Step over columns a rowspan from a previous row still covers,
+            // inserting one empty placeholder so this cell lands in its true
+            // column.
+            let skip_start = col;
+            while col < row_cover.len() && row_cover[col] > 0 {
+                col += 1;
+            }
+            if col > skip_start {
+                cells.push((String::new(), col - skip_start));
+            }
             let span = cell
                 .value()
                 .attr("colspan")
                 .and_then(|s| s.parse::<usize>().ok())
                 .unwrap_or(1);
-            if span == 1 && cell.value().name() == "td" {
+            let rowspan = cell
+                .value()
+                .attr("rowspan")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(1);
+            let classes: Vec<&str> = cell.value().classes().collect();
+            // Horizontal rules: a top/bottom border on any cell puts a rule
+            // above/below this whole row.
+            if classes.contains(&"ltx_border_t") || classes.contains(&"ltx_border_tt") {
+                top_border = true;
+            }
+            if classes.contains(&"ltx_border_b") || classes.contains(&"ltx_border_bb") {
+                bottom_border = true;
+            }
+            // Vertical rules: a left border sits before this cell's first
+            // column; a right border after its last spanned column.
+            if classes.contains(&"ltx_border_l") {
+                vrules.push(col);
+            }
+            if classes.contains(&"ltx_border_r") {
+                vrules.push(col + span);
+            }
+            if span == 1 && !classes.contains(&"ltx_th") {
                 if col >= alignments.len() {
                     alignments.resize(col + 1, Alignment::Left);
                 }
@@ -550,21 +607,82 @@ fn emit_table(el: ElementRef, out: &mut Vec<Block>) {
                 .into_iter()
                 .map(|s| s.text)
                 .collect();
-            row.push((text.trim().to_string(), span));
+            cells.push((text.trim().to_string(), span));
+            // Record rowspan coverage for the columns this cell occupies; the
+            // full count is stored, then aged by one at the end of every row
+            // (including this one), so a `rowspan="2"` covers exactly the one
+            // row below.
+            if rowspan > 1 {
+                if row_cover.len() < col + span {
+                    row_cover.resize(col + span, 0);
+                }
+                for c in row_cover[col..col + span].iter_mut() {
+                    *c = rowspan;
+                }
+            }
             col += span;
         }
-        if !row.is_empty() {
-            rows.push(row);
+        // Age the rowspan coverage by one row.
+        for c in row_cover.iter_mut() {
+            *c = c.saturating_sub(1);
+        }
+        if !cells.is_empty() {
+            row_infos.push(RowInfo {
+                cells,
+                top_border,
+                bottom_border,
+            });
         }
     }
-    if !rows.is_empty() {
+    if row_infos.is_empty() {
+        return;
+    }
+    vrules.sort_unstable();
+    vrules.dedup();
+
+    // Split the rows into Matrix segments wherever a horizontal rule falls
+    // between two rows — this row's bottom border OR the next row's top
+    // border (LaTeXML often sets both for one `\midrule`) — emitting a
+    // `Block::Rule` at each split, plus a trailing rule after the last row
+    // when it carries a bottom border (`\bottomrule`).  The renderer always
+    // draws the top rule itself, so row 0's top border (`\toprule`) needs no
+    // Block here.
+    let n = row_infos.len();
+    let mut seg_start = 0usize;
+    for i in 0..n {
+        let rule_after = if i + 1 < n {
+            row_infos[i].bottom_border || row_infos[i + 1].top_border
+        } else {
+            row_infos[i].bottom_border
+        };
+        if rule_after {
+            let rows: Vec<Vec<(String, usize)>> = row_infos[seg_start..=i]
+                .iter()
+                .map(|r| r.cells.clone())
+                .collect();
+            out.push(Block::Matrix {
+                rows,
+                vertical_rules: vrules.clone(),
+                alignments: alignments.clone(),
+            });
+            out.push(Block::Rule);
+            seg_start = i + 1;
+        }
+    }
+    // Rows after the final rule (a table with no `\bottomrule`) still need a
+    // Matrix so they render.
+    if seg_start < n {
+        let rows: Vec<Vec<(String, usize)>> = row_infos[seg_start..]
+            .iter()
+            .map(|r| r.cells.clone())
+            .collect();
         out.push(Block::Matrix {
             rows,
-            vertical_rules: Vec::new(),
+            vertical_rules: vrules,
             alignments,
         });
-        out.push(Block::Blank);
     }
+    out.push(Block::Blank);
 }
 
 /// Emit a figure as a `Block::Figure` carrying its image grid plus the
@@ -992,6 +1110,158 @@ mod figure_tests {
             blocks.iter().any(|b| matches!(b, Block::StyledLine(spans)
                 if spans.iter().any(|s| s.text.contains("TikZ-only float")))),
             "caption should survive as a StyledLine"
+        );
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::to_blocks;
+    use doc_model::Block;
+
+    fn doc(body: &str) -> String {
+        format!(r#"<html><body><article class="ltx_document">{body}</article></body></html>"#)
+    }
+
+    /// LaTeXML encodes booktabs rules as cell border classes:
+    /// `\toprule`/`\midrule`/`\bottomrule` → `ltx_border_tt`/`_t`/`_bb`, and a
+    /// `|` column spec → `ltx_border_r`.  emit_table must recover these as a
+    /// `Matrix + Rule + Matrix + Rule` sequence (the renderer draws the top
+    /// rule itself) with `vertical_rules` populated — not the old single
+    /// rule-less Matrix.
+    #[test]
+    fn booktabs_table_recovers_mid_bottom_and_vertical_rules() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure class="ltx_table" id="S1.T1">
+                   <table class="ltx_tabular">
+                     <thead class="ltx_thead">
+                       <tr>
+                         <td class="ltx_td ltx_th ltx_th_column ltx_border_tt ltx_border_r">H1</td>
+                         <td class="ltx_td ltx_th ltx_th_column ltx_border_tt">H2</td>
+                       </tr>
+                     </thead>
+                     <tbody class="ltx_tbody">
+                       <tr>
+                         <td class="ltx_td ltx_align_left ltx_border_t ltx_border_r">a</td>
+                         <td class="ltx_td ltx_align_right ltx_border_t">1</td>
+                       </tr>
+                       <tr>
+                         <td class="ltx_td ltx_align_left ltx_border_bb ltx_border_r">b</td>
+                         <td class="ltx_td ltx_align_right ltx_border_bb">2</td>
+                       </tr>
+                     </tbody>
+                   </table>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+
+        // Sequence (ignoring the trailing Blank): Matrix(header) + Rule +
+        // Matrix(data) + Rule.
+        let kinds: Vec<&'static str> = blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Matrix { .. } => Some("M"),
+                Block::Rule => Some("R"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kinds, vec!["M", "R", "M", "R"], "blocks: {blocks:?}");
+
+        let matrices: Vec<&Block> = blocks
+            .iter()
+            .filter(|b| matches!(b, Block::Matrix { .. }))
+            .collect();
+        let Block::Matrix { rows: hrows, vertical_rules, alignments } = matrices[0] else {
+            unreachable!()
+        };
+        // Header segment holds the single header row; vertical rule sits after
+        // raw column 0 (the `ltx_border_r` on the first column).
+        assert_eq!(hrows.len(), 1);
+        assert_eq!(vertical_rules, &vec![1]);
+        // Data-cell alignment is recovered (col 1 is right-aligned); header
+        // cells are skipped so they don't mislabel it.
+        assert_eq!(alignments.get(1).copied(), Some(doc_model::Alignment::Right));
+
+        let Block::Matrix { rows: drows, .. } = matrices[1] else { unreachable!() };
+        assert_eq!(drows.len(), 2, "two data rows in the body segment");
+    }
+
+    /// A table whose cells carry no border classes (no booktabs rules) must
+    /// still render: one Matrix, no interior/bottom Rule blocks.  The renderer
+    /// supplies the top rule regardless.
+    #[test]
+    fn borderless_table_emits_single_matrix_no_rules() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure class="ltx_table" id="S1.T1">
+                   <table class="ltx_tabular">
+                     <tbody class="ltx_tbody">
+                       <tr><td class="ltx_td">a</td><td class="ltx_td">b</td></tr>
+                       <tr><td class="ltx_td">c</td><td class="ltx_td">d</td></tr>
+                     </tbody>
+                   </table>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let matrices = blocks.iter().filter(|b| matches!(b, Block::Matrix { .. })).count();
+        let rules = blocks.iter().filter(|b| matches!(b, Block::Rule)).count();
+        assert_eq!((matrices, rules), (1, 0), "blocks: {blocks:?}");
+    }
+
+    /// A `rowspan` header cell (e.g. Table 2's "Model") covers its column in
+    /// the row below, so the second header row must be offset by an empty
+    /// placeholder — otherwise its sub-labels slide left under the wrong
+    /// columns.
+    #[test]
+    fn rowspan_header_offsets_the_row_below() {
+        let html = doc(
+            r#"<section class="ltx_section" id="S1">
+                 <figure class="ltx_table" id="S1.T1">
+                   <table class="ltx_tabular">
+                     <thead class="ltx_thead">
+                       <tr>
+                         <th rowspan="2" class="ltx_td ltx_th ltx_border_tt">Model</th>
+                         <td colspan="2" class="ltx_td ltx_th ltx_border_tt">BLEU</td>
+                       </tr>
+                       <tr>
+                         <td class="ltx_td ltx_th">EN-DE</td>
+                         <td class="ltx_td ltx_th">EN-FR</td>
+                       </tr>
+                     </thead>
+                     <tbody class="ltx_tbody">
+                       <tr>
+                         <td class="ltx_td ltx_border_t ltx_border_bb">ByteNet</td>
+                         <td class="ltx_td ltx_border_t ltx_border_bb">23.7</td>
+                         <td class="ltx_td ltx_border_t ltx_border_bb">39.2</td>
+                       </tr>
+                     </tbody>
+                   </table>
+                 </figure>
+               </section>"#,
+        );
+        let blocks = to_blocks(&html);
+        let first_matrix = blocks
+            .iter()
+            .find(|b| matches!(b, Block::Matrix { .. }))
+            .expect("a header Matrix");
+        let Block::Matrix { rows, .. } = first_matrix else { unreachable!() };
+        // Both header rows live in the first segment (no rule between them).
+        assert_eq!(rows.len(), 2, "rows: {rows:?}");
+        // Row 0: Model (1 col) + BLEU (spans 2).
+        assert_eq!(rows[0], vec![("Model".to_string(), 1), ("BLEU".to_string(), 2)]);
+        // Row 1: an empty placeholder under "Model", then the two sub-labels —
+        // so EN-DE/EN-FR sit under BLEU, not under Model.
+        assert_eq!(
+            rows[1],
+            vec![
+                (String::new(), 1),
+                ("EN-DE".to_string(), 1),
+                ("EN-FR".to_string(), 1),
+            ],
+            "second header row must be offset past the rowspan column",
         );
     }
 }
