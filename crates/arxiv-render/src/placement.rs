@@ -107,6 +107,14 @@ pub fn lift_tables(blocks: Vec<Block>, anchors: &[TableAnchor]) -> Vec<Block> {
         out.push(block.clone());
         if let Some(groups_here) = to_insert.remove(&i) {
             for g in groups_here {
+                // Breathing room above the caption: a lifted group's first
+                // block is its caption, which would otherwise land flush
+                // against the target block.  The group keeps its own trailing
+                // blank, and the source position keeps the blank that sat
+                // above the caption (it's outside the group), so this neither
+                // double-spaces nor strands the source paragraph; redundant
+                // blanks collapse in `normalize_blank_rhythm`.
+                out.push(Block::Blank);
                 out.extend(g);
             }
         }
@@ -332,10 +340,12 @@ mod tests {
             anchor_preview: "in different ways measuring the change in".to_string(),
         }];
         let out = lift_tables(blocks, &anchors);
-        // Group should now sit after block 0 (the anchor paragraph).
+        // Group sits after block 0 (the anchor paragraph), preceded by a
+        // breathing-room blank so the caption isn't flush against it.
         assert!(matches!(&out[0], Block::Line(s) if s.starts_with("Anchor paragraph")));
-        assert!(matches!(&out[1], Block::Line(s) if s.starts_with("[Table:")));
-        assert!(matches!(&out[2], Block::Matrix { .. }));
+        assert!(matches!(&out[1], Block::Blank));
+        assert!(matches!(&out[2], Block::Line(s) if s.starts_with("[Table:")));
+        assert!(matches!(&out[3], Block::Matrix { .. }));
     }
 
     #[test]
@@ -357,5 +367,34 @@ mod tests {
         // Group remains in its original position.
         assert!(matches!(&out[1], Block::Line(s) if s.starts_with("[Table:")));
         assert!(matches!(&out[2], Block::Matrix { .. }));
+    }
+
+    /// A blank directly above the caption is pulled into the group, so when
+    /// the table is lifted the caption keeps its breathing room above it
+    /// (lands as blank → caption → matrix after the anchor paragraph) instead
+    /// of flush against the block it's inserted after.
+    #[test]
+    fn lift_carries_caption_blank_so_caption_keeps_space_above() {
+        let blocks = vec![
+            line(
+                "Anchor paragraph contains: in different ways measuring the change in performance.",
+            ),
+            line("Source-position paragraph."),
+            Block::Blank,
+            line("[Table: caption]"),
+            matrix(),
+            Block::Blank,
+            line("After-table paragraph."),
+        ];
+        let anchors = vec![TableAnchor {
+            table_number: 1,
+            anchor_fingerprint: 0,
+            anchor_preview: "in different ways measuring the change in".to_string(),
+        }];
+        let out = lift_tables(blocks, &anchors);
+        assert!(matches!(&out[0], Block::Line(s) if s.starts_with("Anchor paragraph")));
+        assert!(matches!(&out[1], Block::Blank), "caption keeps a blank above: {out:?}");
+        assert!(matches!(&out[2], Block::Line(s) if s.starts_with("[Table:")));
+        assert!(matches!(&out[3], Block::Matrix { .. }));
     }
 }

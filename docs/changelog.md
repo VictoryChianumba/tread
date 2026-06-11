@@ -30,6 +30,24 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-06-11 — Tables: breathing room above a lifted table's caption
+- **Commit:** `cb55c69`
+- **What:** when `lift_tables` moves a table group to its PDF-anchored
+  position, it now inserts a `Block::Blank` before the group so the caption
+  isn't flush against the block it's spliced after.
+- **Why:** a lifted group's first block is its caption; without a leading
+  blank it landed directly under the preceding paragraph. The blank is
+  added at lift time rather than by extending `identify_groups` to capture
+  a preceding blank — that would steal the source paragraph's trailing
+  blank (leaving it flush against the next block) and broke
+  `identify_simple_group`. Inserting at splice time keeps the source's
+  blank intact; `normalize_blank_rhythm` collapses any redundancy. Tables
+  that aren't moved already keep their parse-time blank above the caption.
+- **Key files:** `crates/arxiv-render/src/placement.rs` (rebuild loop).
+- **Tests:** +1 (`lift_carries_caption_blank_so_caption_keeps_space_above`);
+  updated `lift_moves_group_after_anchor` for the new blank. arxiv-render
+  74 / doc-model 16 / tread 175 pass.
+
 ### 2026-06-11 — ar5iv tables: render the caption (and wrap it)
 - **Commit:** `03a210e`
 - **What:** ar5iv table captions now appear above their table and wrap to
