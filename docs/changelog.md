@@ -30,6 +30,33 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-06-11 — Images: keep figures in-pane inside a tmux split
+- **Commit:** `862d2ef`
+- **What:** inline (and preview) figures now render inside the reader's own
+  tmux pane instead of leaking into an adjacent pane. Placement coordinates
+  gain the pane's `#{pane_left}`/`#{pane_top}` offset when running under
+  tmux.
+- **Why:** the Kitty placement cursor-move (`\x1b[r;cH`) is forwarded to the
+  host terminal *inside* the tmux passthrough envelope, which bypasses
+  tmux's pane translation — so the host positions in absolute window
+  coordinates while the reader only knows pane-local ones. In a non-origin
+  pane (e.g. the right half of a vertical split) the image landed in the
+  wrong pane. (This is the same defect that earlier read as "figures don't
+  render in a narrow split" — they rendered, just off-pane.)
+- **Key files:** `crates/kitty-graphics/src/transmit.rs` (`pane_offset` /
+  `query_pane_offset` / `invalidate_pane_offset`, applied in both
+  `BatchEmitter` placement paths); `crates/tread/src/runtime.rs` invalidates
+  the cached offset on resize/focus change. The `tmux display-message`
+  subprocess targets `$TMUX_PANE` (our own pane, not the focused one) and is
+  cached — at most one call per resize. A single full-window pane yields
+  offset `(0, 0)`, so non-split behaviour is unchanged.
+- **Tests:** +1 `parse_pane_offset` unit test (left/right, stacked,
+  malformed). kitty-graphics 37 pass. Verified in a real iTerm2+tmux
+  left/right split.
+- **Caveat:** the offset omits tmux's status-line height, so a *vertical*
+  (stacked) split can still be off by the status rows; left/right
+  (`pane_top == 0`) is exact.
+
 ### 2026-06-11 — ar5iv figures: recover stacked multi-panel layout
 - **Commit:** `dc2bbf3`
 - **What:** `emit_figure` now recovers a figure's 2D image grid

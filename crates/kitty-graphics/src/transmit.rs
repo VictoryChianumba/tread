@@ -16,12 +16,83 @@
 //! doesn't paint over the image area on the same frame.
 
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// True when running inside tmux.  Read once per call (cheap — `getenv`
 /// is constant-time on every modern libc) so a re-attach mid-session
 /// (which sets/unsets `$TMUX`) doesn't need a process restart.
 fn in_tmux() -> bool {
     std::env::var_os("TMUX").is_some()
+}
+
+/// Cached `(col, row)` cell offset added to every image placement so a
+/// tmux pane that isn't at the window origin (e.g. the right half of a
+/// vertical split) lands its images inside its own region.
+///
+/// The placement cursor-move (`\x1b[r;cH`) is forwarded to the host
+/// terminal *inside* the tmux passthrough envelope, which bypasses tmux's
+/// pane translation — so the host positions in absolute window coordinates
+/// while the reader only knows pane-local ones.  We bridge the gap with the
+/// pane's `#{pane_left}` / `#{pane_top}`.  In a single full-window pane both
+/// are 0, so non-split behaviour is unchanged.  Packed as `col << 16 | row`.
+static PANE_OFFSET: AtomicU32 = AtomicU32::new(0);
+static PANE_OFFSET_VALID: AtomicBool = AtomicBool::new(false);
+
+/// Pane offset to add to a placement's `(row, col)`, cached after the first
+/// query.  `(0, 0)` outside tmux.  The `tmux display-message` subprocess
+/// runs at most once per `invalidate_pane_offset` (i.e. once per resize).
+fn pane_offset() -> (u16, u16) {
+    if !in_tmux() {
+        return (0, 0);
+    }
+    if PANE_OFFSET_VALID.load(Ordering::Relaxed) {
+        let p = PANE_OFFSET.load(Ordering::Relaxed);
+        return ((p >> 16) as u16, (p & 0xffff) as u16);
+    }
+    let (col, row) = query_pane_offset();
+    PANE_OFFSET.store(((col as u32) << 16) | row as u32, Ordering::Relaxed);
+    PANE_OFFSET_VALID.store(true, Ordering::Relaxed);
+    (col, row)
+}
+
+/// Ask tmux for the current pane's top-left offset within the window.
+/// Returns `(pane_left, pane_top)`, or `(0, 0)` if tmux isn't reachable or
+/// the reply doesn't parse.  Note: this does not add tmux's own status-line
+/// height, so a *vertical* (stacked) split can still be off by the status
+/// rows — the common left/right split (where `pane_top == 0`) is exact.
+fn query_pane_offset() -> (u16, u16) {
+    // Target our OWN pane via `$TMUX_PANE`, not the client's active pane —
+    // the reader's pane may not be focused (e.g. the user is typing in an
+    // adjacent pane) when a placement fires, and an untargeted
+    // `display-message` would report the focused pane's offset instead.
+    let mut cmd = std::process::Command::new("tmux");
+    cmd.arg("display-message");
+    if let Some(pane) = std::env::var_os("TMUX_PANE") {
+        cmd.arg("-t").arg(pane);
+    }
+    cmd.args(["-p", "#{pane_left},#{pane_top}"]);
+    let Ok(out) = cmd.output() else {
+        return (0, 0);
+    };
+    if !out.status.success() {
+        return (0, 0);
+    }
+    parse_pane_offset(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse a `#{pane_left},#{pane_top}` reply into `(col, row)`.  Tolerant:
+/// a malformed or partial reply yields `0` for the missing axis.
+fn parse_pane_offset(reply: &str) -> (u16, u16) {
+    let mut parts = reply.trim().split(',');
+    let col = parts.next().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+    let row = parts.next().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+    (col, row)
+}
+
+/// Drop the cached tmux pane offset so the next placement re-queries it.
+/// Call on terminal resize — a split / pane-move changes the offset.
+pub fn invalidate_pane_offset() {
+    PANE_OFFSET_VALID.store(false, Ordering::Relaxed);
 }
 
 /// Wrap `payload` (an APC graphics escape including its `\x1b\\`
@@ -96,9 +167,13 @@ impl BatchEmitter {
         abs_col: u16,
     ) -> io::Result<()> {
         let b64 = base64_encode(png_bytes);
+        let (off_col, off_row) = pane_offset();
+        let abs_row = abs_row.saturating_add(off_row);
+        let abs_col = abs_col.saturating_add(off_col);
         let mut apc: Vec<u8> = Vec::with_capacity(96 + b64.len() + 16);
         // Cursor positioning first — bundled into the same payload so tmux
-        // passthrough forwards it to iTerm2 in lockstep with the APC.
+        // passthrough forwards it to iTerm2 in lockstep with the APC.  The
+        // pane offset above keeps a non-origin split pane's image in-pane.
         write!(apc, "\x1b[{abs_row};{abs_col}H")?;
         write!(apc, "\x1b_Ga=T,t=d,f=100,i={id},c={cols},r={rows},C=1,q=2;")?;
         apc.extend_from_slice(b64.as_bytes());
@@ -114,6 +189,9 @@ impl BatchEmitter {
         abs_row: u16,
         abs_col: u16,
     ) -> io::Result<()> {
+        let (off_col, off_row) = pane_offset();
+        let abs_row = abs_row.saturating_add(off_row);
+        let abs_col = abs_col.saturating_add(off_col);
         let mut apc: Vec<u8> = Vec::with_capacity(64);
         write!(apc, "\x1b[{abs_row};{abs_col}H")?;
         write!(apc, "\x1b_Ga=p,i={id},c={cols},r={rows},C=1,q=2\x1b\\")?;
@@ -259,6 +337,20 @@ mod tests {
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
         assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn parse_pane_offset_reads_left_top() {
+        // Right pane of a left/right split: offset column, same top row.
+        assert_eq!(parse_pane_offset("95,0"), (95, 0));
+        // Lower pane of a stacked split.
+        assert_eq!(parse_pane_offset("0,30\n"), (0, 30));
+        // Origin pane.
+        assert_eq!(parse_pane_offset("0,0"), (0, 0));
+        // Malformed / partial replies degrade to zeros, never panic.
+        assert_eq!(parse_pane_offset(""), (0, 0));
+        assert_eq!(parse_pane_offset("12"), (12, 0));
+        assert_eq!(parse_pane_offset("x,y"), (0, 0));
     }
 
     #[test]

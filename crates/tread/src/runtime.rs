@@ -332,6 +332,10 @@ impl ReaderRuntime {
 
     if needs_image_clear {
       images::clear_all(&mut self.img_state);
+      // A resize / focus change can move this tmux pane within the window,
+      // shifting the offset images must be placed at — drop the cached value
+      // so the next placement re-queries it.
+      kitty_graphics::transmit::invalidate_pane_offset();
       update.dirty.mark(ReaderEvent::Resize);
     }
     update
