@@ -10,9 +10,7 @@ use ratatui::{
 };
 use ui_theme::Theme;
 
-use crate::state::{
-    Mode, Reader, TOC_WIDTH, reader_vertical_margin,
-};
+use crate::state::{Mode, Reader, reader_vertical_margin};
 
 const PREVIEW_HORIZONTAL_MARGIN: u16 = 7;
 
@@ -138,7 +136,10 @@ pub fn split_layout(
     let (toc_area, right) = if reader.toc_visible {
         let h = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(TOC_WIDTH as u16), Constraint::Min(1)])
+            .constraints([
+                Constraint::Length(reader.toc_width() as u16),
+                Constraint::Min(1),
+            ])
             .split(below_header);
         (Some(h[0]), h[1])
     } else {

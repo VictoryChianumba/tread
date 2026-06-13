@@ -26,7 +26,10 @@ pub use figures::{
   PREVIEW_COLUMN_GAP_CELLS, PartPlacement, PreviewGeometry,
 };
 
-pub const TOC_WIDTH: usize = 28;
+/// Default width of the `\` table-of-contents side panel, in cells.
+/// Adjustable at runtime via `:set tocwidth=N` (`set_toc_width`), which
+/// persists to `block_reader.json`.
+pub(crate) const DEFAULT_TOC_WIDTH: usize = 28;
 /// Default share of the split given to the figure-preview pane, as a
 /// percentage (the reader text pane gets the complement).  Adjustable at
 /// runtime via `:set preview=N` (`set_preview_pane_percent`).
@@ -66,6 +69,7 @@ fn build_lines_for(
     prose_width: usize,
     height: usize,
     text_only: bool,
+    relaxed_spacing: bool,
 ) -> Vec<VisualLine> {
     let mut lines = build_visual_lines(blocks, cw, prose_width, height);
     if text_only {
@@ -76,7 +80,50 @@ fn build_lines_for(
             )
         });
     }
+    if relaxed_spacing {
+        lines = relax_paragraph_spacing(lines);
+    }
     lines
+}
+
+/// Double the single blank gap between prose-like blocks for a more open
+/// reading rhythm (`:set spacing=relaxed`).  Runs *after*
+/// `build_visual_lines` has already normalised runs of blanks to exactly
+/// one, so each existing `Blank` becomes two — except figure-internal
+/// separators (a blank flanked by `Image`/`ImageRow` rows), which stay
+/// single so multi-panel figures don't grow gaps inside them.  The
+/// inserted blank mirrors its neighbour's `block_idx`; like every blank
+/// it carries no addressable bytes (`block_byte_start == block_byte_end
+/// == 0`), so highlights / cursor logic skip it.
+fn relax_paragraph_spacing(lines: Vec<VisualLine>) -> Vec<VisualLine> {
+    let is_image = |vl: &VisualLine| {
+        matches!(
+            vl.kind,
+            VisualLineKind::Image { .. } | VisualLineKind::ImageRow { .. }
+        )
+    };
+    let mut out: Vec<VisualLine> = Vec::with_capacity(lines.len() + lines.len() / 8);
+    for (i, vl) in lines.iter().enumerate() {
+        let is_blank = matches!(vl.kind, VisualLineKind::Blank);
+        out.push(vl.clone());
+        if is_blank {
+            // Keep figure-panel separators tight: only widen a gap whose
+            // neighbours are both non-image content.
+            let prev_img = i.checked_sub(1).is_some_and(|p| is_image(&lines[p]));
+            let next_img = lines.get(i + 1).is_some_and(is_image);
+            if !prev_img && !next_img {
+                out.push(VisualLine {
+                    block_idx: vl.block_idx,
+                    line_in_block: vl.line_in_block,
+                    text: String::new(),
+                    kind: VisualLineKind::Blank,
+                    block_byte_start: 0,
+                    block_byte_end: 0,
+                });
+            }
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +154,7 @@ impl LayoutCache {
         prose_width: usize,
         height: usize,
         text_only: bool,
+        relaxed_spacing: bool,
         external_bibitems: &HashMap<String, String>,
     ) -> Self {
         let _s = crate::bench::Span::new(match reason {
@@ -116,7 +164,8 @@ impl LayoutCache {
             LayoutRebuildReason::TextOnlyToggle => "layout_build_text_only",
             LayoutRebuildReason::TocToggle => "layout_build_toc_toggle",
         });
-        let visual_lines = build_lines_for(blocks, content_width, prose_width, height, text_only);
+        let visual_lines =
+            build_lines_for(blocks, content_width, prose_width, height, text_only, relaxed_spacing);
         let sections = build_sections(&visual_lines);
         let (label_lines, mut bib_entries, bib_entry_lines, figure_labels) =
             build_link_indexes(blocks, &visual_lines);
@@ -308,6 +357,31 @@ pub struct Reader {
     sections: Vec<(usize, u8, String)>,
     layout_cache: LayoutCache,
     pub toc_visible: bool,
+    /// Width of the `\` TOC side panel, in cells.  Defaults to
+    /// [`DEFAULT_TOC_WIDTH`]; hydrated from config in `init` and changed
+    /// at runtime via `:set tocwidth=N` (`set_toc_width`).  Private so
+    /// writes go through the setter, which reflows; read via
+    /// `Reader::toc_width()`.
+    toc_width: usize,
+    /// Section indices (into `sections`) whose children are folded away
+    /// in the TOC sidebar and `:contents` view.  In-memory only — fold
+    /// state is a transient browsing convenience, not persisted.  The
+    /// single source of truth for "which sections are visible" is
+    /// `Reader::visible_sections`.  A section index is stable across
+    /// resize (same headers, same order), so storing raw indices is safe
+    /// within a session.
+    collapsed: std::collections::HashSet<usize>,
+    /// Focus/reading mode: when true the renderer dims every line outside
+    /// the cursor's paragraph.  Pure render flag — no reflow.  Hydrated
+    /// from config in `init`, toggled by `z` / `:set focus=on|off`.  Read
+    /// via `Reader::focus_mode()`.
+    focus_mode: bool,
+    /// Relaxed paragraph spacing: when true the layout doubles the single
+    /// blank between prose blocks for a more open feel.  Changes line
+    /// geometry, so the setter reflows.  Hydrated from config in `init`,
+    /// toggled via `:set spacing=relaxed|normal`.  Read via
+    /// `Reader::relaxed_spacing()`.
+    relaxed_spacing: bool,
     pub help_visible: bool,
     pub help_query: String,
     pub help_selected: usize,
@@ -542,7 +616,13 @@ impl Reader {
         let figure_preview_active = false;
         let text_only = false;
         let current_figure: Option<usize> = None;
-        let cw = content_width_for(width, false, false, DEFAULT_PREVIEW_PANE_PERCENT);
+        let cw = content_width_for(
+            width,
+            false,
+            DEFAULT_TOC_WIDTH,
+            false,
+            DEFAULT_PREVIEW_PANE_PERCENT,
+        );
         let prose_width = if DEFAULT_MAX_MEASURE > 0 {
             DEFAULT_MAX_MEASURE.min(cw)
         } else {
@@ -557,6 +637,7 @@ impl Reader {
             prose_width,
             ch,
             text_only,
+            false,
             &source_bibitems,
         );
         let figure_index = FigureIndex::build(&blocks);
@@ -572,6 +653,10 @@ impl Reader {
             figure_labels: layout_cache.figure_labels.clone(),
             source_bibitems,
             toc_visible: false,
+            toc_width: DEFAULT_TOC_WIDTH,
+            collapsed: std::collections::HashSet::new(),
+            focus_mode: false,
+            relaxed_spacing: false,
             help_visible: false,
             help_query: String::new(),
             help_selected: 0,
@@ -673,6 +758,13 @@ impl Reader {
         // Apply the persisted preview-pane split (no reflow here — the
         // preview pane isn't visible yet at init).
         reader.set_preview_pane_percent(cfg.preview_pane_percent);
+        // Reading-comfort + TOC settings.  Focus mode is a pure render
+        // flag; relaxed spacing and TOC width only reflow if the relevant
+        // surface is active (neither the panel nor a wider gap is visible
+        // at init, so these are cheap field writes here).
+        reader.set_focus_mode(cfg.focus_mode);
+        reader.set_relaxed_spacing(cfg.relaxed_spacing);
+        reader.set_toc_width(cfg.toc_width);
 
         if let Some(ref key) = progress_key {
             let map = crate::progress::load();
@@ -855,6 +947,7 @@ impl Reader {
             self.prose_width(),
             self.content_height(),
             self.text_only,
+            self.relaxed_spacing,
             &self.source_bibitems,
         );
         self.visual_lines = self.layout_cache.visual_lines.clone();
@@ -967,6 +1060,7 @@ impl Reader {
         content_width_for(
             self.width,
             self.toc_visible,
+            self.toc_width,
             self.preview_layout_active(),
             self.preview_pane_percent,
         )
@@ -1070,6 +1164,106 @@ impl Reader {
         }
         let anchor = ReflowAnchor::capture(self);
         self.preview_pane_percent = percent;
+        self.rebuild_layout(LayoutRebuildReason::Resize);
+        if let Some(anchor) = anchor
+            && anchor.restore(self)
+        {
+            return;
+        }
+        self.clamp_position();
+    }
+
+    /// Current TOC side-panel width, in cells.  Read by the renderer
+    /// (`split_layout`) and the content-width math.  Changed via
+    /// `:set tocwidth=N` (`set_toc_width`).
+    pub fn toc_width(&self) -> usize {
+        self.toc_width
+    }
+
+    /// Set the TOC side-panel width and reflow.  `:set tocwidth=N` routes
+    /// here.  Only reflows when the panel is actually visible (otherwise
+    /// the content width is unchanged); preserves on-screen position
+    /// across the reflow, mirroring `set_max_measure`.
+    pub fn set_toc_width(&mut self, width: usize) {
+        if self.toc_width == width {
+            return;
+        }
+        if !self.toc_visible {
+            self.toc_width = width;
+            return;
+        }
+        let anchor = ReflowAnchor::capture(self);
+        self.toc_width = width;
+        self.rebuild_layout(LayoutRebuildReason::TocToggle);
+        if let Some(anchor) = anchor
+            && anchor.restore(self)
+        {
+            return;
+        }
+        self.clamp_position();
+    }
+
+    /// Whether focus/reading mode is on (renderer dims lines outside the
+    /// cursor's paragraph).  Read by `render::content`.
+    pub fn focus_mode(&self) -> bool {
+        self.focus_mode
+    }
+
+    /// Set focus mode.  Pure render flag — no reflow needed.
+    pub fn set_focus_mode(&mut self, value: bool) {
+        self.focus_mode = value;
+    }
+
+    /// Toggle focus mode (`z` in normal mode) and persist the new value
+    /// as the global default for next session.
+    pub fn toggle_focus_mode(&mut self) {
+        self.focus_mode = !self.focus_mode;
+        let mut cfg = crate::config::load();
+        cfg.focus_mode = self.focus_mode;
+        crate::config::save(&cfg);
+    }
+
+    /// Inclusive visual-line range of the cursor's current paragraph —
+    /// the contiguous run of non-blank lines containing `current_line`.
+    /// When the cursor sits on a blank separator the range is just that
+    /// line (so focus mode dims everything else).  Drives the focus-mode
+    /// dim in `render::content`, mirroring the voice paragraph range.
+    pub fn focus_para_range(&self) -> (usize, usize) {
+        let len = self.visual_lines.len();
+        if len == 0 {
+            return (0, 0);
+        }
+        let cur = self.current_line().min(len - 1);
+        let is_blank = |i: usize| matches!(self.visual_lines[i].kind, VisualLineKind::Blank);
+        if is_blank(cur) {
+            return (cur, cur);
+        }
+        let mut start = cur;
+        while start > 0 && !is_blank(start - 1) {
+            start -= 1;
+        }
+        let mut end = cur;
+        while end + 1 < len && !is_blank(end + 1) {
+            end += 1;
+        }
+        (start, end)
+    }
+
+    /// Whether relaxed paragraph spacing is on.  Read by `content_width`-
+    /// adjacent layout code via `rebuild_layout`.
+    pub fn relaxed_spacing(&self) -> bool {
+        self.relaxed_spacing
+    }
+
+    /// Set relaxed paragraph spacing and reflow (it changes line
+    /// geometry).  `:set spacing=relaxed|normal` routes here.  Preserves
+    /// on-screen position across the reflow, mirroring `set_max_measure`.
+    pub fn set_relaxed_spacing(&mut self, value: bool) {
+        if self.relaxed_spacing == value {
+            return;
+        }
+        let anchor = ReflowAnchor::capture(self);
+        self.relaxed_spacing = value;
         self.rebuild_layout(LayoutRebuildReason::Resize);
         if let Some(anchor) = anchor
             && anchor.restore(self)
@@ -1319,6 +1513,59 @@ impl Reader {
         self.clamp_position();
     }
 
+    // ── TOC collapse / expand ─────────────────────────────────────────
+
+    /// Whether section `idx` has at least one child (a following section
+    /// of deeper level before the next same-or-shallower one).  Only
+    /// sections with children are foldable.
+    pub fn section_has_children(&self, idx: usize) -> bool {
+        let secs = &self.sections;
+        let Some((_, level, _)) = secs.get(idx) else {
+            return false;
+        };
+        secs.get(idx + 1).is_some_and(|(_, next, _)| next > level)
+    }
+
+    /// Whether section `idx` is currently collapsed (its subtree folded).
+    pub fn section_collapsed(&self, idx: usize) -> bool {
+        self.collapsed.contains(&idx)
+    }
+
+    /// Toggle the fold state of section `idx`.  No-op on a leaf (a
+    /// section with no children can't be folded).
+    pub fn toggle_section_collapse(&mut self, idx: usize) {
+        if !self.section_has_children(idx) {
+            return;
+        }
+        if !self.collapsed.remove(&idx) {
+            self.collapsed.insert(idx);
+        }
+    }
+
+    /// Section indices visible in the TOC given the current fold state:
+    /// every section except those nested under a collapsed ancestor.
+    /// The single source of truth shared by the `\` sidebar and the
+    /// `:contents` view, and by `contents_move`'s skip-over-hidden walk.
+    pub fn visible_sections(&self) -> Vec<usize> {
+        let mut out = Vec::with_capacity(self.sections.len());
+        // While `skip_above` is set, drop sections deeper than its level
+        // (the folded subtree); a section at or above the level ends it.
+        let mut skip_above: Option<u8> = None;
+        for (i, (_, level, _)) in self.sections.iter().enumerate() {
+            if let Some(threshold) = skip_above {
+                if *level > threshold {
+                    continue;
+                }
+                skip_above = None;
+            }
+            out.push(i);
+            if self.collapsed.contains(&i) && self.section_has_children(i) {
+                skip_above = Some(*level);
+            }
+        }
+        out
+    }
+
     // ── Full-screen contents view (`:contents`) ───────────────────────
 
     /// Whether the full-screen contents view is open.
@@ -1339,6 +1586,11 @@ impl Reader {
         }
         self.contents_selected = self.current_section_idx().unwrap_or(0);
         self.contents_visible = true;
+        // The current section can be hidden if an ancestor is folded;
+        // snap the selection to the nearest visible row.
+        if !self.visible_sections().contains(&self.contents_selected) {
+            self.contents_move(0);
+        }
     }
 
     /// Close the contents view without moving.
@@ -1346,22 +1598,46 @@ impl Reader {
         self.contents_visible = false;
     }
 
-    /// Move the contents selection by `delta` rows (clamped).
+    /// Move the contents selection by `delta` visible rows, skipping
+    /// sections folded under a collapsed ancestor.  Clamps at the ends of
+    /// the visible list.
     pub fn contents_move(&mut self, delta: i32) {
-        let n = self.sections().len();
-        if n == 0 {
+        let visible = self.visible_sections();
+        if visible.is_empty() {
             return;
         }
-        let next = (self.contents_selected as i32 + delta).clamp(0, n as i32 - 1);
-        self.contents_selected = next as usize;
+        // Position of the current selection within the visible list (or
+        // the nearest visible row if it's hidden).
+        let pos = visible
+            .iter()
+            .position(|&i| i == self.contents_selected)
+            .unwrap_or_else(|| {
+                visible
+                    .iter()
+                    .position(|&i| i >= self.contents_selected)
+                    .unwrap_or(visible.len() - 1)
+            });
+        let next = (pos as i32 + delta).clamp(0, visible.len() as i32 - 1) as usize;
+        self.contents_selected = visible[next];
     }
 
-    /// Jump the selection to the first / last section.
+    /// Jump the selection to the first / last visible section.
     pub fn contents_jump_edge(&mut self, last: bool) {
-        if last {
-            self.contents_selected = self.sections().len().saturating_sub(1);
-        } else {
-            self.contents_selected = 0;
+        let visible = self.visible_sections();
+        if let Some(&idx) = if last { visible.last() } else { visible.first() } {
+            self.contents_selected = idx;
+        }
+    }
+
+    /// Toggle the fold state of the section under the contents-view
+    /// selection.  When a collapse hides the current selection (it was a
+    /// child of the just-folded section), retarget to the fold parent so
+    /// the cursor stays on a visible row.
+    pub fn contents_toggle_fold(&mut self) {
+        let idx = self.contents_selected;
+        self.toggle_section_collapse(idx);
+        if !self.visible_sections().contains(&self.contents_selected) {
+            self.contents_selected = idx;
         }
     }
 
@@ -1501,12 +1777,13 @@ impl Reader {
 fn content_width_for(
     terminal_width: usize,
     toc_visible: bool,
+    toc_width: usize,
     preview_visible: bool,
     preview_pane_percent: usize,
 ) -> usize {
     let content_width = if toc_visible {
         // +1 for the border column.
-        terminal_width.saturating_sub(TOC_WIDTH + 1)
+        terminal_width.saturating_sub(toc_width + 1)
     } else {
         terminal_width
     };
@@ -2306,6 +2583,160 @@ mod tests {
             Some(&"new entry".to_string())
         );
         assert!(!reader.bib_entries.contains_key("smith"));
+    }
+
+    fn header(level: u8, text: &str) -> Block {
+        Block::Header {
+            level,
+            text: text.to_string(),
+            number: None,
+        }
+    }
+
+    /// Doc with a small section tree: 1 One / 1.1 / 1.2 / 2 Two.
+    fn sectioned_doc() -> Vec<Block> {
+        vec![
+            header(1, "One"),
+            Block::Line("intro".to_string()),
+            header(2, "One A"),
+            Block::Line("a body".to_string()),
+            header(2, "One B"),
+            Block::Line("b body".to_string()),
+            header(1, "Two"),
+            Block::Line("two body".to_string()),
+        ]
+    }
+
+    #[test]
+    fn visible_sections_hides_collapsed_children() {
+        let mut reader = Reader::new(sectioned_doc(), 80, 24);
+        // sections: 0=One(1) 1=One A(2) 2=One B(2) 3=Two(1)
+        assert_eq!(reader.sections().len(), 4);
+        assert_eq!(reader.visible_sections(), vec![0, 1, 2, 3]);
+        assert!(reader.section_has_children(0));
+        assert!(!reader.section_has_children(1)); // leaf subsection
+        assert!(!reader.section_has_children(3)); // last section
+
+        reader.toggle_section_collapse(0);
+        // One's subsections fold away; One and Two remain.
+        assert_eq!(reader.visible_sections(), vec![0, 3]);
+        assert!(reader.section_collapsed(0));
+
+        reader.toggle_section_collapse(0);
+        assert_eq!(reader.visible_sections(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn toggle_collapse_is_noop_on_leaf() {
+        let mut reader = Reader::new(sectioned_doc(), 80, 24);
+        reader.toggle_section_collapse(1); // a childless subsection
+        assert!(!reader.section_collapsed(1));
+        assert_eq!(reader.visible_sections(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn contents_move_skips_folded_sections() {
+        let mut reader = Reader::new(sectioned_doc(), 80, 24);
+        reader.open_contents();
+        // Seeded at section 0 (cursor starts at top).
+        assert_eq!(reader.contents_selected(), 0);
+        reader.toggle_section_collapse(0); // fold One's children
+        // From One, the next *visible* section is Two (skip 1, 2).
+        reader.contents_move(1);
+        assert_eq!(reader.contents_selected(), 3);
+        reader.contents_move(-1);
+        assert_eq!(reader.contents_selected(), 0);
+    }
+
+    #[test]
+    fn focus_para_range_covers_contiguous_nonblank_run() {
+        // alpha[0] beta[1] blank[2] gamma[3]
+        let blocks = vec![
+            Block::Line("alpha".to_string()),
+            Block::Line("beta".to_string()),
+            Block::Blank,
+            Block::Line("gamma".to_string()),
+        ];
+        let mut reader = Reader::new(blocks, 80, 24);
+        reader.jump_to_line(0);
+        assert_eq!(reader.focus_para_range(), (0, 1));
+        reader.jump_to_line(3);
+        assert_eq!(reader.focus_para_range(), (3, 3));
+        // On the blank separator the range collapses to that line.
+        reader.jump_to_line(2);
+        assert_eq!(reader.focus_para_range(), (2, 2));
+    }
+
+    #[test]
+    fn relaxed_spacing_doubles_prose_gaps_but_spares_figure_separators() {
+        let blocks = vec![
+            Block::Line("alpha".to_string()),
+            Block::Blank,
+            Block::Line("beta".to_string()),
+        ];
+        let mut reader = Reader::new(blocks, 80, 24);
+        let tight_blanks = reader
+            .visual_lines()
+            .iter()
+            .filter(|v| matches!(v.kind, VisualLineKind::Blank))
+            .count();
+        assert_eq!(tight_blanks, 1);
+        reader.set_relaxed_spacing(true);
+        let relaxed_blanks = reader
+            .visual_lines()
+            .iter()
+            .filter(|v| matches!(v.kind, VisualLineKind::Blank))
+            .count();
+        assert_eq!(relaxed_blanks, 2, "the prose gap should double");
+
+        // A blank flanked by image rows (figure-panel separator) is left
+        // single so multi-panel figures don't grow interior gaps.
+        let lines = vec![
+            VisualLine {
+                block_idx: 0,
+                line_in_block: 0,
+                text: String::new(),
+                kind: VisualLineKind::ImageRow { items: vec![(1, 10)], rows: 1, is_first: true },
+                block_byte_start: 0,
+                block_byte_end: 0,
+            },
+            VisualLine {
+                block_idx: 0,
+                line_in_block: 1,
+                text: String::new(),
+                kind: VisualLineKind::Blank,
+                block_byte_start: 0,
+                block_byte_end: 0,
+            },
+            VisualLine {
+                block_idx: 0,
+                line_in_block: 2,
+                text: String::new(),
+                kind: VisualLineKind::ImageRow { items: vec![(1, 10)], rows: 1, is_first: false },
+                block_byte_start: 0,
+                block_byte_end: 0,
+            },
+        ];
+        let out = relax_paragraph_spacing(lines);
+        let blanks = out
+            .iter()
+            .filter(|v| matches!(v.kind, VisualLineKind::Blank))
+            .count();
+        assert_eq!(blanks, 1, "figure-panel separator stays single");
+    }
+
+    #[test]
+    fn toc_width_change_reflows_only_when_panel_open() {
+        let mut reader = Reader::new(vec![Block::Line("hi".to_string())], 100, 24);
+        // Panel closed: width recorded, content width unchanged.
+        reader.set_toc_width(40);
+        assert_eq!(reader.toc_width(), 40);
+        assert_eq!(reader.content_width(), 100);
+        // Panel open: content width subtracts the new width + border.
+        reader.toggle_toc();
+        assert_eq!(reader.content_width(), 100 - (40 + 1));
+        reader.set_toc_width(20);
+        assert_eq!(reader.content_width(), 100 - (20 + 1));
     }
 
     #[test]

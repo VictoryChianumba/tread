@@ -30,7 +30,12 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
-### 2026-06-11 — Rebaseline layout goldens for caption wrapping
+### 2026-06-12 — Reading-comfort affordances + TOC collapse/resize
+- **Commit:** `5d4cd7a`
+- **What:** three reading-UI-overhaul leftovers. (1) **Focus mode** (`Z` / `:set focus=on`): the renderer dims every line outside the cursor's paragraph, reusing the voice-playback dim path; range computed once per draw via `Reader::focus_para_range` (contiguous non-blank run around `current_line`). (2) **Relaxed paragraph spacing** (`:set spacing=relaxed`): `relax_paragraph_spacing` post-processes the built visual lines to double single blanks between prose blocks, skipping blanks flanked by `Image`/`ImageRow` rows so multi-panel figures keep tight interior gaps. (3) **TOC collapse + resize**: a runtime `toc_width` replaces the `TOC_WIDTH` const at the two layout sites (`:set tocwidth=N`); an in-memory `collapsed` set plus a `visible_sections()` SSOT drives folding in both the `\` sidebar and `:contents` (fold via `Tab`/`h`/`l`; `▾`/`▸` glyphs).
+- **Why:** focus/dimming is a pure render flag (no reflow); relaxed spacing is contained entirely in tread's `build_lines_for` so doc-model's `build_visual_lines` signature — and every golden/parity caller — stays untouched; TOC fold state is transient browsing UI so it's session-only (not persisted), while the three `:set` tunables persist in `block_reader.json` following the existing `width`/`preview` pattern.
+- **Key files:** `state/mod.rs` (fields, setters, `focus_para_range`, `relax_paragraph_spacing`, `visible_sections`, `contents_*` fold), `render/content.rs` (focus dim), `render/toc.rs` + `render/overlays.rs` (fold glyphs over visible sections), `keys.rs` (`Z`, contents fold keys), `commands.rs` (`:set focus|spacing|tocwidth`), `config.rs` (3 persisted fields).
+- **Tests:** +6 unit tests in `state::tests` (visible-sections folding, leaf no-op, contents-move skip-hidden, focus range, relaxed-spacing doubling + figure-separator sparing, toc-width reflow gating). 181 pass (was 175).
 - **Commit:** `ca332e2`
 - **What:** bumped the `EXPECTED_VISUAL_LINES` golden constants now that
   bracketed `[Table …]` / `[Figure …]` captions wrap to the reading

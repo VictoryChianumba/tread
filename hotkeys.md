@@ -39,6 +39,7 @@ Small word: alphanumeric + `_`. BIG word: any non-whitespace run.
 | `M` | Middle of visible screen |
 | `L` | Bottom of visible screen |
 | `z` | Center the cursor's line |
+| `Z` | Toggle focus mode — dim every line outside the cursor's paragraph. Sticky; also `:set focus=on/off`. |
 
 ### Paragraph / section / sentence
 
@@ -190,6 +191,9 @@ Press `:` to open the command bar. Type, then `Enter` to execute or `Esc` to can
 | `:set theme=<id>` | — | Change theme (see [Themes](#themes) below) |
 | `:set width=<n>` | — | Cap the body-text reading column at `<n>` cells (centred); `0` / `off` flows edge-to-edge. Default `72`. Persists. |
 | `:set preview=<n>` | — | Give the figure-preview pane `<n>`% of the width (`20`–`70`); the reader text gets the rest. Default `40`. Persists. |
+| `:set focus=<on\|off>` | — | Focus/reading mode: dim every line outside the cursor's paragraph. Same as the `Z` toggle. Persists. |
+| `:set spacing=<relaxed\|normal>` | — | `relaxed` doubles the blank gap between prose blocks for a more open rhythm; `normal` is the default tight rhythm. Persists. |
+| `:set tocwidth=<n>` | — | Width of the `\` TOC side panel in cells (`16`–`60`). Default `28`. Persists. |
 | `:marks` | — | Popup listing all set marks with their lines and snippets |
 | `:delmarks <letter>` | `:dm` | Delete one or more marks |
 | `:highlights` | `:hl` | Popup listing all highlights in this paper |
@@ -200,7 +204,7 @@ Press `:` to open the command bar. Type, then `Enter` to execute or `Esc` to can
 | `:back` | `:bk` | Same as `Ctrl+O` |
 | `:help` | `:h` | Open help overlay |
 | `:toc` | `:tree` | Toggle the TOC side panel (passive; follows reading position) |
-| `:contents` | `:cont` | Open the full-screen contents view — `j`/`k` browse, `Enter` jumps to a section, `Esc` closes |
+| `:contents` | `:cont` | Open the full-screen contents view — `j`/`k` browse, `Tab` (or `h`/`l`) fold/unfold a section's subtree, `Enter` jumps, `Esc` closes. Fold state is shared with the `\` sidebar. |
 | `:reload` | `:e` | Re-fetch source and re-parse the paper in place. Preserves cursor, scroll, bookmarks, highlights. |
 | `:placement` | — | Diagnostic popup showing each parsed Matrix table's block index and caption |
 

@@ -244,8 +244,76 @@ fn cmd_set(reader: &mut Reader, args: &[&str]) -> ReaderAction {
     "theme" => set_theme(value),
     "width" => set_width(reader, value),
     "preview" => set_preview(reader, value),
+    "focus" => set_focus(reader, value),
+    "spacing" => set_spacing(reader, value),
+    "tocwidth" => set_tocwidth(reader, value),
     other => ReaderAction::Error(format!("set: unknown option: {other}")),
   }
+}
+
+/// Parse an on/off-style flag value.  Accepts the obvious synonyms so
+/// `:set focus=on`, `=true`, `=1`, `=yes` all enable.
+fn parse_flag(value: &str) -> Option<bool> {
+  match value.to_ascii_lowercase().as_str() {
+    "on" | "true" | "1" | "yes" => Some(true),
+    "off" | "false" | "0" | "no" => Some(false),
+    _ => None,
+  }
+}
+
+/// `:set focus=on|off` — toggle focus/reading mode (dim everything
+/// outside the cursor's paragraph).  Pure render flag; persists.
+fn set_focus(reader: &mut Reader, value: &str) -> ReaderAction {
+  let Some(on) = parse_flag(value) else {
+    return ReaderAction::Error(format!("set focus: expected on/off, got: {value}"));
+  };
+  reader.set_focus_mode(on);
+  let mut cfg = config::load();
+  cfg.focus_mode = on;
+  config::save(&cfg);
+  ReaderAction::Continue
+}
+
+/// `:set spacing=relaxed|normal` — relaxed doubles the blank gap between
+/// prose blocks for a more open rhythm.  Reflows; persists.
+fn set_spacing(reader: &mut Reader, value: &str) -> ReaderAction {
+  let relaxed = match value.to_ascii_lowercase().as_str() {
+    "relaxed" | "open" | "loose" => true,
+    "normal" | "tight" | "compact" => false,
+    _ => {
+      return ReaderAction::Error(format!(
+        "set spacing: expected relaxed/normal, got: {value}"
+      ));
+    }
+  };
+  reader.set_relaxed_spacing(relaxed);
+  let mut cfg = config::load();
+  cfg.relaxed_spacing = relaxed;
+  config::save(&cfg);
+  ReaderAction::Continue
+}
+
+/// `:set tocwidth=N` — width of the `\` TOC side panel in cells (clamped
+/// to a sane range).  Reflows when the panel is open; persists.
+fn set_tocwidth(reader: &mut Reader, value: &str) -> ReaderAction {
+  const MIN_W: usize = 16;
+  const MAX_W: usize = 60;
+  let w = match value.parse::<usize>() {
+    Ok(n) => n,
+    Err(_) => {
+      return ReaderAction::Error(format!(
+        "set tocwidth: expected a number {MIN_W}-{MAX_W}, got: {value}"
+      ));
+    }
+  };
+  if !(MIN_W..=MAX_W).contains(&w) {
+    return ReaderAction::Error(format!("set tocwidth: width must be {MIN_W}-{MAX_W}"));
+  }
+  reader.set_toc_width(w);
+  let mut cfg = config::load();
+  cfg.toc_width = w;
+  config::save(&cfg);
+  ReaderAction::Continue
 }
 
 /// `:set width=N` — cap the body-text reading measure at N cells (0,

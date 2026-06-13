@@ -139,7 +139,7 @@ pub(super) fn draw_contents(frame: &mut Frame, area: Rect, reader: &Reader, t: &
             Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Span::styled(
-            " j/k move · Enter jump · Esc close ",
+            " j/k move · Tab/h/l fold · Enter jump · Esc close ",
             Style::default().fg(t.text_dim),
         ))
         .borders(Borders::ALL)
@@ -154,22 +154,29 @@ pub(super) fn draw_contents(frame: &mut Frame, area: Rect, reader: &Reader, t: &
     frame.render_widget(block, outer);
 
     let sections = reader.sections();
-    let total = sections.len();
     let rows = inner.height as usize;
     let inner_w = inner.width as usize;
     let selected = reader.contents_selected();
     let current = reader.current_section_idx();
 
+    // Honour fold state: only visible sections are listed.  `visible`
+    // holds full-section indices; the selection / scroll math runs over
+    // positions within it.
+    let visible = reader.visible_sections();
+    let total = visible.len();
+    let sel_pos = visible.iter().position(|&i| i == selected).unwrap_or(0);
+
     // Keep the selection vertically centred, clamped to the list bounds.
     let max_scroll = total.saturating_sub(rows);
-    let scroll = selected.saturating_sub(rows / 2).min(max_scroll);
+    let scroll = sel_pos.saturating_sub(rows / 2).min(max_scroll);
 
     let lines: Vec<Line> = (0..rows)
         .map(|row| {
-            let idx = scroll + row;
-            if idx >= total {
+            let vis_idx = scroll + row;
+            if vis_idx >= total {
                 return Line::raw("");
             }
+            let idx = visible[vis_idx];
             let (_, level, title) = &sections[idx];
             let indent = match level {
                 1 => 0usize,
@@ -178,7 +185,18 @@ pub(super) fn draw_contents(frame: &mut Frame, area: Rect, reader: &Reader, t: &
             };
             let is_selected = idx == selected;
             let is_current = current == Some(idx);
-            let marker = if is_current { "▸ " } else { "  " };
+            // Fold glyph in the marker slot: ▾ open, ▸ collapsed, blank
+            // for a leaf.  "Current" / "selected" are conveyed by colour
+            // and the selection bar.
+            let marker = if reader.section_has_children(idx) {
+                if reader.section_collapsed(idx) {
+                    "▸ "
+                } else {
+                    "▾ "
+                }
+            } else {
+                "  "
+            };
             let avail = inner_w.saturating_sub(indent + 2);
             let mut label = format!("{marker}{}{}", " ".repeat(indent), toc_trunc(title, avail));
             // Pad to full width so the selection bar spans the row.
@@ -276,7 +294,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
             ("Ctrl+d / Ctrl+u", "half-page down / up"),
             ("gg / G", "top / bottom"),
             ("H / M / L", "top / middle / bottom of screen"),
-            ("z", "center cursor"),
+            ("z / Z", "center cursor / focus mode"),
             ("} / {", "next / previous paragraph"),
             (") / (", "next / previous sentence"),
             ("w / W", "word forward (small / BIG)"),
@@ -318,7 +336,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
             &[
                 ("i", "toggle figure preview"),
                 ("]f / [f", "next / previous figure"),
-                ("\\  :contents", "TOC sidebar · contents view"),
+                ("\\  :contents", "TOC sidebar · contents (Tab folds)"),
                 ("v / V", "enter char / line visual mode"),
                 ("y", "yank selection"),
                 ("yy", "yank current line"),
@@ -343,7 +361,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
                 (":goto <N|text>", "jump to section"),
                 (":abstract", "jump to abstract"),
                 (":references", "jump to references"),
-                (":set <opt>=<v>", "theme · width · preview pane %"),
+                (":set <opt>=<v>", "theme·width·preview·focus·spacing·tocwidth"),
                 (":marks  :highlights", "inspect marks / highlights"),
                 (":about  :url  :cite", "metadata / copy URL / copy BibTeX"),
                 (":open  :reload  :q", "open / reload / quit"),

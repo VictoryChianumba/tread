@@ -20,6 +20,20 @@ fn handle_contents(reader: &mut Reader, code: KeyCode) -> bool {
     KeyCode::Char('k') | KeyCode::Up => reader.contents_move(-1),
     KeyCode::Char('g') | KeyCode::Home => reader.contents_jump_edge(false),
     KeyCode::Char('G') | KeyCode::End => reader.contents_jump_edge(true),
+    // Fold the selected section's subtree.  `Tab` toggles; `h`/`l`
+    // mirror vim tree navigation (collapse / expand) by toggling when
+    // the state would change.
+    KeyCode::Tab => reader.contents_toggle_fold(),
+    KeyCode::Char('h') => {
+      if !reader.section_collapsed(reader.contents_selected()) {
+        reader.contents_toggle_fold();
+      }
+    }
+    KeyCode::Char('l') => {
+      if reader.section_collapsed(reader.contents_selected()) {
+        reader.contents_toggle_fold();
+      }
+    }
     KeyCode::Enter => reader.contents_jump_selected(),
     KeyCode::Esc | KeyCode::Char('q') => reader.close_contents(),
     _ => {}
@@ -333,6 +347,12 @@ pub(crate) fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifie
     KeyCode::Char('\\') => {
       reader.clear_count();
       reader.toggle_toc();
+    }
+    // Focus/reading mode (dim everything but the current paragraph).
+    // `Z` sits next to `z` (center cursor); mnemonic "zen".
+    KeyCode::Char('Z') => {
+      reader.clear_count();
+      reader.toggle_focus_mode();
     }
     KeyCode::Char('o') if mods.contains(KeyModifiers::CONTROL) => {
       reader.clear_count();
