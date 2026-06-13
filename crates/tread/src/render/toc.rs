@@ -47,19 +47,23 @@ pub(super) fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme
     let cur_sec = reader.current_section_idx();
     let ancestors = ancestor_path(reader.sections(), cur_sec);
 
-    // Scroll to keep current section vertically centered in the panel.
-    let toc_scroll = cur_sec
-        .map(|idx| idx.saturating_sub(panel_h / 2))
-        .unwrap_or(0);
+    // Honour the fold state: render only sections not hidden under a
+    // collapsed ancestor.  `visible` holds full-section indices.
+    let visible = reader.visible_sections();
+    let total = visible.len();
 
-    let total = reader.sections().len();
+    // Scroll to keep the current section vertically centered in the
+    // panel — measured by its position within the *visible* list.
+    let cur_pos = cur_sec.and_then(|c| visible.iter().position(|&i| i == c));
+    let toc_scroll = cur_pos.map(|p| p.saturating_sub(panel_h / 2)).unwrap_or(0);
 
     let lines: Vec<Line> = (0..panel_h)
         .map(|row| {
-            let sec_idx = toc_scroll + row;
-            if sec_idx >= total {
+            let vis_idx = toc_scroll + row;
+            if vis_idx >= total {
                 return Line::raw("");
             }
+            let sec_idx = visible[vis_idx];
             let (_, level, text) = &reader.sections()[sec_idx];
             let indent = match level {
                 1 => 0usize,
@@ -67,10 +71,18 @@ pub(super) fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme
                 _ => 4usize,
             };
             let is_current = cur_sec == Some(sec_idx);
-            // A reserved 2-col marker keeps every row's indent aligned;
-            // only the current section fills it (so it reads as "you are
-            // here" without shifting the others).
-            let marker = if is_current { "▸ " } else { "  " };
+            // The 2-col marker slot carries the fold glyph: ▾ open, ▸
+            // collapsed, blank for a childless leaf.  "You are here" is
+            // conveyed by the accent colour below, not the marker.
+            let marker = if reader.section_has_children(sec_idx) {
+                if reader.section_collapsed(sec_idx) {
+                    "▸ "
+                } else {
+                    "▾ "
+                }
+            } else {
+                "  "
+            };
             let avail = inner_w.saturating_sub(indent + 2);
             let label = format!(" {marker}{}{}", " ".repeat(indent), toc_trunc(text, avail));
             let style = if is_current {

@@ -43,6 +43,10 @@ pub(super) fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &T
     let voice_word = crate::state::voice_control::active_voice_word(reader);
     let voice_active = crate::state::voice_control::voice_rendering_active(reader);
 
+    // Focus mode: dim everything outside the cursor's paragraph.  The
+    // range is computed once per draw (like the voice paragraph range).
+    let focus_range = reader.focus_mode().then(|| reader.focus_para_range());
+
     // Left pad that centres the narrow prose column within the full
     // content width.  Zero when the reading measure is off or wider than
     // the area.  Only text-column lines get it; tables / figures / math /
@@ -131,6 +135,13 @@ pub(super) fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &T
             // Dim non-paragraph lines during voice playback so the active
             // paragraph reads as the focused region.
             if voice_active && crate::state::voice_control::voice_line_dimmed(reader, vl_idx) {
+                line = line.style(Style::default().fg(t.text_dim));
+            }
+            // Focus mode applies the same dim around the *cursor's*
+            // paragraph (independent of voice; both can be active).
+            if let Some((lo, hi)) = focus_range
+                && (vl_idx < lo || vl_idx > hi)
+            {
                 line = line.style(Style::default().fg(t.text_dim));
             }
             line

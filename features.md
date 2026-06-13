@@ -32,8 +32,8 @@ Given an arXiv ID or URL, the reader:
 
 - **Per-paper persistence** — reading position, named marks, and highlights all save automatically to `~/.config/trench/` keyed by arXiv ID. Re-launch and you're back where you were.
 - **Section-jump navigation** — `[` / `]` to walk section headers; `:goto 3.2` or `:goto Introduction` to jump by number or name.
-- **Toggleable TOC panel** — `\` opens/closes a side pane listing every section header; the current section is marked with a `▸` and its ancestor sections (the breadcrumb to where you are) are brightened, so you keep your place even deep in a subsection.
-- **Full-screen contents view** — `:contents` opens a browsable overview of the whole section tree; `j`/`k` move a selection, `Enter` jumps to that section (and `Ctrl+O` rewinds), `Esc` closes. Distinct from the passive `\` sidebar.
+- **Toggleable TOC panel** — `\` opens/closes a side pane listing every section header; the current section is shown in the accent colour and its ancestor sections (the breadcrumb to where you are) are brightened, so you keep your place even deep in a subsection. A `▾` / `▸` glyph marks foldable sections (see below). `:set tocwidth=<n>` resizes the panel (16–60 cells, default 28) and persists.
+- **Full-screen contents view + collapsible tree** — `:contents` opens a browsable overview of the whole section tree; `j`/`k` move a selection, `Tab` (or `h`/`l`) folds/unfolds a section's subtree, `Enter` jumps to that section (and `Ctrl+O` rewinds), `Esc` closes. Fold state is shared with the passive `\` sidebar, so collapsing a section there hides its subsections everywhere.
 - **Back-navigation stack** — every jump (search, section, mark, sentence) pushes onto a history; `Ctrl+O` rewinds.
 - **Header bar** — title and authors pinned above the content area when paper metadata is available.
 - **Help overlay** — `?` for a compact keybinding reference.
@@ -48,7 +48,8 @@ Given an arXiv ID or URL, the reader:
 - **Themes** — 16 built-in themes (Dark, Light, AMOLED, Solarized, Gruvbox, Nord, Tokyo Night, Catppuccin Mocha, Powder family). `:set theme=<id>` switches at runtime; `:set theme=trench` syncs with the trench feed UI's theme.
 - **Reading measure** — body prose wraps to a comfortable column (default 72 cells) centred on wide terminals, while tables, figures and display math break out to the full width so they're never clipped. `:set width=<n>` adjusts the prose column; `:set width=0` (or `off`) disables the cap. Persists across sessions.
 - **Section headings** — every heading gets a blank line above it for breathing room while scrolling. Numbered sections show their number (`2  Background`, `2.1  …`); numbering is consistent across both parser paths and feeds the TOC and `:goto 3.2`. The paper title, Abstract, and References stay unnumbered.
-- **Paragraph rhythm** — spacing between blocks is normalised at layout time to exactly one blank line, regardless of how many the source parser emitted; leading and trailing blank lines are trimmed. The rhythm reads the same on every paper and on both parser paths.
+- **Paragraph rhythm** — spacing between blocks is normalised at layout time to exactly one blank line, regardless of how many the source parser emitted; leading and trailing blank lines are trimmed. The rhythm reads the same on every paper and on both parser paths. `:set spacing=relaxed` doubles that gap for a more open, e-reader feel (figure-panel separators stay tight); `:set spacing=normal` restores it. Persists.
+- **Focus mode** — `Z` (or `:set focus=on`) dims every line outside the paragraph the cursor is in, so the eye rests on what you're reading; moving the cursor moves the lit region. Sticky across sessions. Composes with voice playback's own paragraph dimming.
 - **Inline code & block quotes** — inline `code` spans get a subtle background "pill" so they stand out from prose instead of blending in. Block quotes lead with a coloured left rule bar (`▌`) and dimmed italic text rather than a bare indent.
 
 ## Voice / TTS

@@ -53,6 +53,22 @@ pub struct ReaderConfig {
     /// this field load as `false`.
     #[serde(default)]
     pub figure_preview_default: bool,
+    /// Focus/reading mode: dim every line outside the cursor's paragraph
+    /// so the eye rests on what's being read.  Set via `:set focus=on/off`
+    /// (or the `z` toggle).  `#[serde(default)]` → off for older configs.
+    #[serde(default)]
+    pub focus_mode: bool,
+    /// Relaxed paragraph spacing: double the blank gap between blocks for
+    /// a more open, e-reader feel.  Set via `:set spacing=relaxed/normal`.
+    /// `#[serde(default)]` → off (tight rhythm) for older configs.
+    #[serde(default)]
+    pub relaxed_spacing: bool,
+    /// Width of the `\` table-of-contents side panel, in cells.  Set via
+    /// `:set tocwidth=N`.  Both a missing file and a missing field resolve
+    /// to `DEFAULT_TOC_WIDTH` so older configs keep the original 28-col
+    /// panel.
+    #[serde(default = "default_toc_width")]
+    pub toc_width: usize,
 }
 
 /// Voice / TTS configuration, persisted alongside the reader's other
@@ -99,6 +115,10 @@ fn default_preview_pane_percent() -> usize {
     crate::state::DEFAULT_PREVIEW_PANE_PERCENT
 }
 
+fn default_toc_width() -> usize {
+    crate::state::DEFAULT_TOC_WIDTH
+}
+
 impl Default for ReaderConfig {
     // Manual (not derived) so a missing config file resolves `max_measure`
     // to DEFAULT_MAX_MEASURE rather than usize's 0 (which would read as
@@ -110,6 +130,9 @@ impl Default for ReaderConfig {
             figure_preview_default: false,
             max_measure: default_max_measure(),
             preview_pane_percent: default_preview_pane_percent(),
+            focus_mode: false,
+            relaxed_spacing: false,
+            toc_width: default_toc_width(),
         }
     }
 }
@@ -168,10 +191,9 @@ mod tests {
     fn config_round_trip() {
         let c = ReaderConfig {
             theme_override: Some("light".to_string()),
-            voice: None,
-            figure_preview_default: false,
             max_measure: 72,
             preview_pane_percent: 40,
+            ..ReaderConfig::default()
         };
         let json = serde_json::to_string(&c).unwrap();
         let back: ReaderConfig = serde_json::from_str(&json).unwrap();
@@ -195,7 +217,6 @@ mod tests {
     #[test]
     fn voice_round_trip() {
         let c = ReaderConfig {
-            theme_override: None,
             voice: Some(VoiceConfig {
                 voice_id: "abc123".to_string(),
                 tts_provider: "elevenlabs".to_string(),
@@ -204,9 +225,9 @@ mod tests {
                 piper_model: String::new(),
                 playback_speed: 1.25,
             }),
-            figure_preview_default: false,
             max_measure: 72,
             preview_pane_percent: 40,
+            ..ReaderConfig::default()
         };
         let json = serde_json::to_string(&c).unwrap();
         let back: ReaderConfig = serde_json::from_str(&json).unwrap();
@@ -236,11 +257,10 @@ mod tests {
     #[test]
     fn figure_preview_default_round_trips() {
         let c = ReaderConfig {
-            theme_override: None,
-            voice: None,
             figure_preview_default: true,
             max_measure: 72,
             preview_pane_percent: 40,
+            ..ReaderConfig::default()
         };
         let json = serde_json::to_string(&c).unwrap();
         let back: ReaderConfig = serde_json::from_str(&json).unwrap();
