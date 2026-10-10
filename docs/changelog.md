@@ -30,6 +30,12 @@ rely on them for anyone reading a fresh checkout. Mirrors the
 
 ---
 
+### 2026-10-11 — pdf-extract 0.7 → 0.12 (lopdf security advisory)
+- **What:** bumped `pdf-extract` to 0.12, which pulls `lopdf` 0.42; refreshed `rustls` and `h2` in the lockfile. No source changes — `extract_text_from_mem` kept its signature.
+- **Why:** `lopdf` 0.34 carries RUSTSEC-2026-0187 (stack overflow on deeply nested PDF objects — reachable from any PDF the reader opens), and `rustls`/`h2` carry RUSTSEC-2026-0285/-0258. one-research's CI runs `cargo audit`, which fails on all three via this crate.
+- **Key files:** `crates/tread/Cargo.toml`, `Cargo.lock`.
+- **Tests:** no test covers PDF extraction, so verified by hand: extracting the three PDFs in one-research's `test-data/pdf/` gives identical character and word counts under 0.7.12 and 0.12.1. Workspace tests unchanged and passing; `cargo audit` reports 0 vulnerabilities (unmaintained-crate warnings remain).
+
 ### 2026-06-12 — Reading-comfort affordances + TOC collapse/resize
 - **Commit:** `5d4cd7a`
 - **What:** three reading-UI-overhaul leftovers. (1) **Focus mode** (`Z` / `:set focus=on`): the renderer dims every line outside the cursor's paragraph, reusing the voice-playback dim path; range computed once per draw via `Reader::focus_para_range` (contiguous non-blank run around `current_line`). (2) **Relaxed paragraph spacing** (`:set spacing=relaxed`): `relax_paragraph_spacing` post-processes the built visual lines to double single blanks between prose blocks, skipping blanks flanked by `Image`/`ImageRow` rows so multi-panel figures keep tight interior gaps. (3) **TOC collapse + resize**: a runtime `toc_width` replaces the `TOC_WIDTH` const at the two layout sites (`:set tocwidth=N`); an in-memory `collapsed` set plus a `visible_sections()` SSOT drives folding in both the `\` sidebar and `:contents` (fold via `Tab`/`h`/`l`; `▾`/`▸` glyphs).
